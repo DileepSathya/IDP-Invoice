@@ -798,6 +798,17 @@ td {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
 }
 
+.json-editor-additional-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem 0.65rem;
+  margin-bottom: 0.75rem;
+}
+
+.json-editor-additional-card {
+  display: block;
+}
+
 .json-editor-line-items-table-wrap {
   border: 1px solid rgba(55, 65, 81, 0.8);
   border-radius: 0.7rem;
@@ -835,6 +846,12 @@ td {
   color: #e5e7eb;
   font-size: 0.78rem;
   padding: 0.45rem 0.5rem;
+}
+
+.json-editor-readonly-label-input {
+  color: #cbd5e1;
+  cursor: default;
+  font-weight: 500;
 }
 
 .json-editor-empty-cell {

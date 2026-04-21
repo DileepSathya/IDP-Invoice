@@ -685,14 +685,6 @@ export const Dashboard: React.FC = () => {
     );
   };
 
-  const addAdditionalFieldRow = () => {
-    setJsonEditorAdditionalFields((prev) => [...prev, { key: "", value: "" }]);
-  };
-
-  const removeAdditionalFieldRow = (index: number) => {
-    setJsonEditorAdditionalFields((prev) => prev.filter((_, idx) => idx !== index));
-  };
-
   const handleRequestSave = () => {
     setError(null);
     setSaveConfirmOpen(true);
@@ -1443,30 +1435,19 @@ export const Dashboard: React.FC = () => {
 
               <div className="json-editor-section-header">
                 <h4>Additional Fields</h4>
-                <button type="button" onClick={addAdditionalFieldRow}>+ Add field</button>
               </div>
-              <div className="json-editor-additional">
+              <div className="json-editor-additional-grid">
                 {jsonEditorAdditionalFields.map((row, idx) => (
-                  <div key={`af-${idx}`} className="json-editor-additional-row">
-                    <input
-                      placeholder="key"
-                      value={row.key}
-                      onChange={(e) => updateAdditionalField(idx, "key", e.target.value)}
-                    />
+                  <div key={`af-${idx}`} className="json-editor-additional-card">
+                    <label className="json-editor-label">
+                      {FormatAdditionalFieldLabel(row.key)}
                     <input
                       placeholder="value"
                       value={row.value}
+                      readOnly={row.key === "deblurred_applied"}
                       onChange={(e) => updateAdditionalField(idx, "value", e.target.value)}
                     />
-                    <button
-                      type="button"
-                      className="json-editor-delete-icon-btn"
-                      onClick={() => removeAdditionalFieldRow(idx)}
-                      aria-label="Delete additional field"
-                      title="Delete additional field"
-                    >
-                      🗑
-                    </button>
+                    </label>
                   </div>
                 ))}
               </div>
@@ -1852,5 +1833,31 @@ function GroupInvoicesById(items: InvoiceSummary[]): { id: string; rows: Invoice
     map.get(item.id)!.push(item);
   }
   return order.map((id) => ({ id, rows: map.get(id)! }));
+}
+
+function FormatAdditionalFieldLabel(key: string): string {
+  const normalized = String(key || "").trim();
+  if (!normalized) return "Additional Field";
+
+  const acronyms: Record<string, string> = {
+    gstin: "GSTIN",
+    uin: "UIN",
+    ifsc: "IFSC",
+    hsn: "HSN",
+    cin: "CIN",
+    cgst: "CGST",
+    sgst: "SGST",
+    id: "ID",
+  };
+
+  return normalized
+    .split("_")
+    .filter(Boolean)
+    .map((part) => {
+      const lower = part.toLowerCase();
+      if (acronyms[lower]) return acronyms[lower];
+      return lower.charAt(0).toUpperCase() + lower.slice(1);
+    })
+    .join(" ");
 }
 
