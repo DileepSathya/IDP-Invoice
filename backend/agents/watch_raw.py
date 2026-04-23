@@ -210,9 +210,7 @@ def _worker(q: "queue.Queue[Path]") -> None:
 
             try:
                 from backend.agents.database import (
-                    collect_and_persist_business_telemetry_overview,
                     get_invoices_collection,
-                    log_application_event,
                     store_invoice_result,
                 )
 
@@ -238,15 +236,6 @@ def _worker(q: "queue.Queue[Path]") -> None:
                 logger.info(
                     "[Raw folder watcher → MongoDB] Storing OCR text and Gemini extraction in the "
                     "database (collection configured by MONGO_INVOICES_COLLECTION).",
-                )
-                log_application_event(
-                    event_type="watch_raw_upload_received",
-                    payload={
-                        "source": "watch_raw",
-                        "filename": path.name,
-                        "uploaded_file_path": str(uploaded_path),
-                        "success": True,
-                    },
                 )
                 inserted_id = store_invoice_result(
                     file_path=r.file_path,
@@ -281,39 +270,12 @@ def _worker(q: "queue.Queue[Path]") -> None:
                         inserted_id,
                         e,
                     )
-                log_application_event(
-                    event_type="watch_raw_upload_completed",
-                    payload={
-                        "source": "watch_raw",
-                        "invoice_id": inserted_id,
-                        "invoice_number": str(invoice_number or ""),
-                        "file_status": file_status,
-                        "uploaded_file_path": str(uploaded_path),
-                        "success": True,
-                    },
-                )
-                collect_and_persist_business_telemetry_overview(source="watch_raw")
             except Exception as e:
                 logger.exception(
                     "[Raw folder watcher → MongoDB] Failed to store invoice for %s: %s",
                     path,
                     e,
                 )
-                try:
-                    from backend.agents.database import log_application_event
-
-                    log_application_event(
-                        event_type="watch_raw_upload_failed",
-                        payload={
-                            "source": "watch_raw",
-                            "filename": path.name,
-                            "uploaded_file_path": str(uploaded_path),
-                            "success": False,
-                            "error_message": str(e),
-                        },
-                    )
-                except Exception:
-                    pass
 
             logger.info(
                 "[Raw folder watcher] Pipeline finished successfully. Source file: %s | "

@@ -17,11 +17,7 @@ from pydantic import BaseModel
 
 from backend.agents.rag_chatbot import answer_question
 from backend.agents.database import (
-    ensure_telemetry_collections,
-    get_business_snapshot_telemetry_collection,
-    get_hybrid_telemetry_collection,
     get_invoices_collection,
-    log_application_event,
     store_invoice_result,
 )
 from backend.agents.ocr import ALLOWED_EXTS, process_file
@@ -151,32 +147,6 @@ def _collect_telemetry_overview_counts() -> TelemetryOverviewResponse:
         hitl_processed=hitl_processed,
         system_processed=system_processed,
         human_approved_files=human_approved_files,
-    )
-
-
-def _persist_telemetry_overview_snapshot(overview: TelemetryOverviewResponse) -> None:
-    now = datetime.utcnow()
-    snapshot_date = now.strftime("%Y-%m-%d")
-    payload = overview.model_dump()
-    payload["generated_at"] = now
-    payload["snapshot_date"] = snapshot_date
-    payload["period"] = "daily"
-
-    business_coll = get_business_snapshot_telemetry_collection()
-    business_coll.update_one(
-        {"snapshot_date": snapshot_date, "period": "daily"},
-        {"$set": payload},
-        upsert=True,
-    )
-
-    hybrid_coll = get_hybrid_telemetry_collection()
-    hybrid_coll.insert_one(
-        {
-            "ts": now,
-            "category": "business_overview",
-            "source": "api",
-            "metrics": overview.model_dump(),
-        }
     )
 
 
@@ -572,10 +542,6 @@ async def _app_lifespan(app: FastAPI):
     # Uvicorn may replace root log handlers after import; re-attach logs/idp.log here so
     # post-OCR lines (uploads path, MongoDB insert) are always recorded.
     configure_logging()
-    try:
-        ensure_telemetry_collections()
-    except Exception as e:
-        logger.warning("Failed to ensure telemetry collections at startup: %s", e)
     yield
 
 
@@ -641,11 +607,6 @@ def health() -> dict[str, str]:
 @app.get("/telemetry/overview", response_model=TelemetryOverviewResponse)
 def telemetry_overview(persist_snapshot: bool = Query(default=True)) -> TelemetryOverviewResponse:
     overview = _collect_telemetry_overview_counts()
-    if persist_snapshot:
-        try:
-            _persist_telemetry_overview_snapshot(overview)
-        except Exception as e:
-            logger.warning("Failed to persist telemetry overview snapshot: %s", e)
     return overview
 
 
@@ -932,11 +893,6 @@ def human_approve_invoice(invoice_id: str) -> InvoiceSummary:
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to approve HITL: {e}") from e
 
-    try:
-        _persist_telemetry_overview_snapshot(_collect_telemetry_overview_counts())
-    except Exception as e:
-        logger.warning("Failed to persist telemetry snapshot after human approval: %s", e)
-
     doc = coll.find_one({"_id": oid}) or doc
     return _invoice_summary_row_from_doc(doc, line_item_index=None)
 
@@ -1018,11 +974,6 @@ def update_invoice_json_editor(invoice_id: str, payload: InvoiceJsonEditorUpdate
         len(changes),
         changes,
     )
-    try:
-        _persist_telemetry_overview_snapshot(_collect_telemetry_overview_counts())
-    except Exception as e:
-        logger.warning("Failed to persist telemetry snapshot after invoice JSON editor update: %s", e)
-
     doc = coll.find_one({"_id": oid})
     if not doc:
         raise HTTPException(status_code=404, detail="Invoice not found after update.")
@@ -1060,30 +1011,9 @@ async def upload_invoice(file: UploadFile = File(...)) -> InvoiceSummary:
         target_path,
         len(content),
     )
-    log_application_event(
-        event_type="invoice_upload_received",
-        payload={
-            "source": "api",
-            "filename": file.filename or "",
-            "uploaded_file_path": str(target_path),
-            "uploaded_bytes": len(content),
-            "success": True,
-        },
-    )
-
     try:
         ocr_result = process_file(str(target_path))
     except Exception as e:
-        log_application_event(
-            event_type="invoice_upload_failed",
-            payload={
-                "source": "api",
-                "filename": file.filename or "",
-                "uploaded_file_path": str(target_path),
-                "success": False,
-                "error_message": f"OCR/Gemini failed: {e}",
-            },
-        )
         raise HTTPException(status_code=500, detail=f"OCR/Gemini failed: {e}") from e
 
     gemini_json_norm: dict[str, Any] = dict(ocr_result.gemini_json or {})
@@ -1121,22 +1051,6 @@ async def upload_invoice(file: UploadFile = File(...)) -> InvoiceSummary:
         _sync_hitl_and_status(coll, ObjectId(inserted_id), gemini_json_norm)
     except Exception as e:
         logger.warning("Failed to sync HITL/status immediately after upload insert: %s", e)
-    log_application_event(
-        event_type="invoice_upload_completed",
-        payload={
-            "source": "api",
-            "invoice_id": inserted_id,
-            "invoice_number": str(invoice_number or ""),
-            "file_status": file_status,
-            "uploaded_file_path": str(target_path),
-            "success": True,
-        },
-    )
-    try:
-        _persist_telemetry_overview_snapshot(_collect_telemetry_overview_counts())
-    except Exception as e:
-        logger.warning("Failed to persist telemetry snapshot after upload: %s", e)
-
     logger.info(
         "[HTTP API → POST /upload] Completed. New invoice id=%s | file_status=%s",
         inserted_id,
