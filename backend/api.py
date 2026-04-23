@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, List, Optional
+from uuid import uuid4
 
 from bson import ObjectId
 from dotenv import load_dotenv
@@ -18,6 +19,7 @@ from pydantic import BaseModel
 from backend.agents.rag_chatbot import answer_question
 from backend.agents.database import (
     get_invoices_collection,
+    record_pipeline_telemetry,
     store_invoice_result,
 )
 from backend.agents.ocr import ALLOWED_EXTS, process_file
@@ -1003,8 +1005,13 @@ async def upload_invoice(file: UploadFile = File(...)) -> InvoiceSummary:
     
     UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
     target_path = UPLOADS_DIR / timestamped_filename
+    run_id = str(uuid4())
+    file_received_time = datetime.utcnow()
+    file_size = 0
+    file_type = ext.lstrip(".")
 
     content = await file.read()
+    file_size = len(content)
     target_path.write_bytes(content)
     logger.info(
         "[HTTP API → POST /upload] Saved uploaded bytes to disk: %s (%s bytes).",
@@ -1014,6 +1021,31 @@ async def upload_invoice(file: UploadFile = File(...)) -> InvoiceSummary:
     try:
         ocr_result = process_file(str(target_path))
     except Exception as e:
+        record_pipeline_telemetry(
+            {
+                "run_id": run_id,
+                "source": "api",
+                "file_id": None,
+                "file_name": target_path.name,
+                "file_size": file_size,
+                "file_type": file_type,
+                "file_received_time": file_received_time,
+                "preprocessing_start_time": None,
+                "preprocessing_end_time": None,
+                "ocr_start_time": None,
+                "ocr_end_time": None,
+                "gemini_start_time": None,
+                "gemini_end_time": None,
+                "db_insert_time": None,
+                "preprocessing_latency": None,
+                "ocr_latency": None,
+                "gemini_latency": None,
+                "total_pipeline_latency": (datetime.utcnow() - file_received_time).total_seconds(),
+                "status": "error",
+                "error_stage": "ocr",
+                "error_message": str(e),
+            }
+        )
         raise HTTPException(status_code=500, detail=f"OCR/Gemini failed: {e}") from e
 
     gemini_json_norm: dict[str, Any] = dict(ocr_result.gemini_json or {})
@@ -1036,15 +1068,43 @@ async def upload_invoice(file: UploadFile = File(...)) -> InvoiceSummary:
     logger.info(
         "[HTTP API → POST /upload] Persisting result to MongoDB via store_invoice_result.",
     )
-    inserted_id = store_invoice_result(
-        file_path=ocr_result.file_path,
-        uploaded_file_path=str(target_path),
-        ocr_text=ocr_result.ocr_text,
-        gemini_model=os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash",
-        gemini_json=gemini_json_norm,
-        gemini_raw_text=ocr_result.gemini_raw_text,
-        file_status=file_status,
-    )
+    try:
+        inserted_id = store_invoice_result(
+            file_path=ocr_result.file_path,
+            uploaded_file_path=str(target_path),
+            ocr_text=ocr_result.ocr_text,
+            gemini_model=os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash",
+            gemini_json=gemini_json_norm,
+            gemini_raw_text=ocr_result.gemini_raw_text,
+            file_status=file_status,
+        )
+    except Exception as e:
+        record_pipeline_telemetry(
+            {
+                "run_id": run_id,
+                "source": "api",
+                "file_id": None,
+                "file_name": target_path.name,
+                "file_size": file_size,
+                "file_type": file_type,
+                "file_received_time": file_received_time,
+                "preprocessing_start_time": ocr_result.preprocessing_start_time,
+                "preprocessing_end_time": ocr_result.preprocessing_end_time,
+                "ocr_start_time": ocr_result.ocr_start_time,
+                "ocr_end_time": ocr_result.ocr_end_time,
+                "gemini_start_time": ocr_result.gemini_start_time,
+                "gemini_end_time": ocr_result.gemini_end_time,
+                "db_insert_time": None,
+                "preprocessing_latency": ocr_result.preprocessing_latency,
+                "ocr_latency": ocr_result.ocr_latency,
+                "gemini_latency": ocr_result.gemini_latency,
+                "total_pipeline_latency": (datetime.utcnow() - file_received_time).total_seconds(),
+                "status": "error",
+                "error_stage": "db",
+                "error_message": str(e),
+            }
+        )
+        raise
     # Immediately sync HITL lifecycle fields on new upload to avoid telemetry drift.
     try:
         coll = get_invoices_collection()
@@ -1055,6 +1115,32 @@ async def upload_invoice(file: UploadFile = File(...)) -> InvoiceSummary:
         "[HTTP API → POST /upload] Completed. New invoice id=%s | file_status=%s",
         inserted_id,
         file_status,
+    )
+    db_insert_time = datetime.utcnow()
+    record_pipeline_telemetry(
+        {
+            "run_id": run_id,
+            "source": "api",
+            "file_id": inserted_id,
+            "file_name": target_path.name,
+            "file_size": file_size,
+            "file_type": file_type,
+            "file_received_time": file_received_time,
+            "preprocessing_start_time": ocr_result.preprocessing_start_time,
+            "preprocessing_end_time": ocr_result.preprocessing_end_time,
+            "ocr_start_time": ocr_result.ocr_start_time,
+            "ocr_end_time": ocr_result.ocr_end_time,
+            "gemini_start_time": ocr_result.gemini_start_time,
+            "gemini_end_time": ocr_result.gemini_end_time,
+            "db_insert_time": db_insert_time,
+            "preprocessing_latency": ocr_result.preprocessing_latency,
+            "ocr_latency": ocr_result.ocr_latency,
+            "gemini_latency": ocr_result.gemini_latency,
+            "total_pipeline_latency": (db_insert_time - file_received_time).total_seconds(),
+            "status": "success",
+            "error_stage": None,
+            "error_message": None,
+        }
     )
 
     status_value = None

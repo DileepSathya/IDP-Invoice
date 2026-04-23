@@ -9,6 +9,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
+from uuid import uuid4
 
 from bson import ObjectId
 from dotenv import load_dotenv
@@ -211,6 +212,7 @@ def _worker(q: "queue.Queue[Path]") -> None:
             try:
                 from backend.agents.database import (
                     get_invoices_collection,
+                    record_pipeline_telemetry,
                     store_invoice_result,
                 )
 
@@ -250,6 +252,42 @@ def _worker(q: "queue.Queue[Path]") -> None:
                     "[Raw folder watcher → MongoDB] Insert completed. Document id: %s",
                     inserted_id,
                 )
+                db_insert_time = datetime.utcnow()
+                file_received_time = datetime.utcnow()
+                try:
+                    file_received_time = datetime.utcfromtimestamp(path.stat().st_ctime)
+                except Exception:
+                    pass
+                file_size = 0
+                try:
+                    file_size = int(path.stat().st_size)
+                except Exception:
+                    pass
+                record_pipeline_telemetry(
+                    {
+                        "run_id": str(uuid4()),
+                        "source": "watch_raw",
+                        "file_id": inserted_id,
+                        "file_name": path.name,
+                        "file_size": file_size,
+                        "file_type": path.suffix.lower().lstrip("."),
+                        "file_received_time": file_received_time,
+                        "preprocessing_start_time": r.preprocessing_start_time,
+                        "preprocessing_end_time": r.preprocessing_end_time,
+                        "ocr_start_time": r.ocr_start_time,
+                        "ocr_end_time": r.ocr_end_time,
+                        "gemini_start_time": r.gemini_start_time,
+                        "gemini_end_time": r.gemini_end_time,
+                        "db_insert_time": db_insert_time,
+                        "preprocessing_latency": r.preprocessing_latency,
+                        "ocr_latency": r.ocr_latency,
+                        "gemini_latency": r.gemini_latency,
+                        "total_pipeline_latency": (db_insert_time - file_received_time).total_seconds(),
+                        "status": "success",
+                        "error_stage": None,
+                        "error_message": None,
+                    }
+                )
                 # Sync HITL lifecycle fields immediately so telemetry snapshots are accurate.
                 try:
                     coll = get_invoices_collection()
@@ -276,6 +314,46 @@ def _worker(q: "queue.Queue[Path]") -> None:
                     path,
                     e,
                 )
+                try:
+                    from backend.agents.database import record_pipeline_telemetry
+
+                    file_received_time = datetime.utcnow()
+                    try:
+                        file_received_time = datetime.utcfromtimestamp(path.stat().st_ctime)
+                    except Exception:
+                        pass
+                    file_size = 0
+                    try:
+                        file_size = int(path.stat().st_size)
+                    except Exception:
+                        pass
+                    record_pipeline_telemetry(
+                        {
+                            "run_id": str(uuid4()),
+                            "source": "watch_raw",
+                            "file_id": None,
+                            "file_name": path.name,
+                            "file_size": file_size,
+                            "file_type": path.suffix.lower().lstrip("."),
+                            "file_received_time": file_received_time,
+                            "preprocessing_start_time": None,
+                            "preprocessing_end_time": None,
+                            "ocr_start_time": None,
+                            "ocr_end_time": None,
+                            "gemini_start_time": None,
+                            "gemini_end_time": None,
+                            "db_insert_time": None,
+                            "preprocessing_latency": None,
+                            "ocr_latency": None,
+                            "gemini_latency": None,
+                            "total_pipeline_latency": (datetime.utcnow() - file_received_time).total_seconds(),
+                            "status": "error",
+                            "error_stage": "db",
+                            "error_message": str(e),
+                        }
+                    )
+                except Exception:
+                    pass
 
             logger.info(
                 "[Raw folder watcher] Pipeline finished successfully. Source file: %s | "
