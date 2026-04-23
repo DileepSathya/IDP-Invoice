@@ -35,6 +35,10 @@ class OcrResult:
     preprocessing_latency: Optional[float]
     ocr_latency: Optional[float]
     gemini_latency: Optional[float]
+    gemini_prompt_tokens: Optional[int]
+    gemini_output_tokens: Optional[int]
+    gemini_total_tokens: Optional[int]
+    gemini_model: Optional[str]
 
 
 _PADDLE_OCR = None
@@ -234,7 +238,9 @@ def _extract_text_from_docx(docx_path: str) -> str:
     return text.strip()
 
 
-def _gemini_extract_invoice_json(ocr_text: str) -> tuple[str, Optional[Any]]:
+def _gemini_extract_invoice_json(
+    ocr_text: str,
+) -> tuple[str, Optional[Any], Optional[int], Optional[int], Optional[int], Optional[str]]:
     load_dotenv()
 
     logger.info("[Gemini] Start extraction")
@@ -242,7 +248,7 @@ def _gemini_extract_invoice_json(ocr_text: str) -> tuple[str, Optional[Any]]:
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if not api_key:
         logger.warning("[Gemini] API key missing → skipping extraction")
-        return "", None
+        return "", None, None, None, None, None
 
     model_name = os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"
 
@@ -299,6 +305,10 @@ OCR TEXT:
         logger.info("[Gemini] Calling API...")
         response = model.generate_content(prompt)
         raw = (response.text or "").strip()
+        usage = getattr(response, "usage_metadata", None)
+        prompt_tokens = getattr(usage, "prompt_token_count", None) if usage is not None else None
+        output_tokens = getattr(usage, "candidates_token_count", None) if usage is not None else None
+        total_tokens = getattr(usage, "total_token_count", None) if usage is not None else None
         logger.info("[Gemini] Response received ✅ (chars=%s)", len(raw))
     except Exception as e:
         logger.error("[Gemini] API call failed ❌: %s", e)
@@ -314,13 +324,13 @@ OCR TEXT:
     try:
         parsed = json.loads(cleaned)
         logger.info("[Gemini] JSON parsed successfully ✅")
-        return raw, parsed
+        return raw, parsed, prompt_tokens, output_tokens, total_tokens, model_name
     except Exception:
         logger.warning(
             "[Gemini] Invalid JSON → returning raw output (chars=%s)",
             len(raw),
         )
-        return raw, None
+        return raw, None, prompt_tokens, output_tokens, total_tokens, model_name
 
 
 def process_file(file_path: str) -> OcrResult:
@@ -368,7 +378,14 @@ def process_file(file_path: str) -> OcrResult:
         "[OCR pipeline] Step 2/2 — Structured data extraction (Gemini) from OCR text.",
     )
     gemini_start_time = datetime.utcnow()
-    gemini_raw, gemini_json = _gemini_extract_invoice_json(ocr_text)
+    (
+        gemini_raw,
+        gemini_json,
+        gemini_prompt_tokens,
+        gemini_output_tokens,
+        gemini_total_tokens,
+        gemini_model,
+    ) = _gemini_extract_invoice_json(ocr_text)
     gemini_end_time = datetime.utcnow()
     if isinstance(gemini_json, dict):
         additional_fields = gemini_json.get("additional_fields")
@@ -398,6 +415,10 @@ def process_file(file_path: str) -> OcrResult:
             else None
         ),
         gemini_latency=(gemini_end_time - gemini_start_time).total_seconds(),
+        gemini_prompt_tokens=gemini_prompt_tokens,
+        gemini_output_tokens=gemini_output_tokens,
+        gemini_total_tokens=gemini_total_tokens,
+        gemini_model=gemini_model,
     )
 
     logger.info(

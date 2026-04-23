@@ -5,7 +5,6 @@ import os
 from datetime import datetime, timedelta
 from dataclasses import asdict, is_dataclass
 from typing import Any, Optional
-from pymongo.errors import OperationFailure
 from pymongo.errors import ServerSelectionTimeoutError
 
 from dotenv import load_dotenv
@@ -176,6 +175,18 @@ def record_pipeline_telemetry(run_doc: dict[str, Any]) -> Optional[str]:
         failure = runs_coll.count_documents({"status": "error"})
         one_min_ago = now - timedelta(minutes=1)
         processed_per_min = runs_coll.count_documents({"created_at": {"$gte": one_min_ago}})
+        gemini_tokens_per_minute = runs_coll.aggregate(
+            [
+                {"$match": {"created_at": {"$gte": one_min_ago}, "gemini_total_tokens": {"$type": "number"}}},
+                {"$group": {"_id": None, "tokens": {"$sum": "$gemini_total_tokens"}}},
+            ]
+        )
+        gemini_tokens_per_minute_row = next(gemini_tokens_per_minute, None)
+        gemini_tokens_per_minute_value = (
+            float(gemini_tokens_per_minute_row["tokens"])
+            if gemini_tokens_per_minute_row and gemini_tokens_per_minute_row.get("tokens") is not None
+            else 0.0
+        )
 
         latency_cursor = runs_coll.aggregate(
             [
@@ -185,6 +196,29 @@ def record_pipeline_telemetry(run_doc: dict[str, Any]) -> Optional[str]:
         )
         latency_row = next(latency_cursor, None)
         avg_pipeline_latency = float(latency_row["avg_latency"]) if latency_row and latency_row.get("avg_latency") is not None else 0.0
+        gemini_tokens_cursor = runs_coll.aggregate(
+            [
+                {"$match": {"gemini_total_tokens": {"$type": "number"}}},
+                {
+                    "$group": {
+                        "_id": None,
+                        "tokens_total": {"$sum": "$gemini_total_tokens"},
+                        "tokens_avg": {"$avg": "$gemini_total_tokens"},
+                    }
+                },
+            ]
+        )
+        gemini_tokens_row = next(gemini_tokens_cursor, None)
+        gemini_tokens_total = (
+            float(gemini_tokens_row["tokens_total"])
+            if gemini_tokens_row and gemini_tokens_row.get("tokens_total") is not None
+            else 0.0
+        )
+        avg_tokens_per_invoice = (
+            float(gemini_tokens_row["tokens_avg"])
+            if gemini_tokens_row and gemini_tokens_row.get("tokens_avg") is not None
+            else 0.0
+        )
 
         success_rate = (success / total) if total else 0.0
         total_invoices_stored = invoices_coll.count_documents({})
@@ -199,6 +233,9 @@ def record_pipeline_telemetry(run_doc: dict[str, Any]) -> Optional[str]:
                 "pipeline_failure_count": int(failure),
                 "pipeline_success_rate": float(success_rate),
                 "total_invoices_stored": int(total_invoices_stored),
+                "gemini_tokens_total": float(gemini_tokens_total),
+                "gemini_tokens_per_minute": float(gemini_tokens_per_minute_value),
+                "avg_tokens_per_invoice": float(avg_tokens_per_invoice),
             }
         )
         return str(inserted.inserted_id)
