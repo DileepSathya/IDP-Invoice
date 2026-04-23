@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import datetime, timedelta
 from dataclasses import asdict, is_dataclass
 from typing import Any, Optional
-from pymongo.errors import CollectionInvalid, OperationFailure
+from pymongo.errors import OperationFailure
 from pymongo.errors import ServerSelectionTimeoutError
 
 from dotenv import load_dotenv
@@ -77,212 +78,24 @@ def get_invoices_collection() -> Collection:
     return coll
 
 
-def _ensure_timeseries_collection(
-    *,
-    db: Database,
-    coll_name: str,
-    time_field: str,
-    meta_field: Optional[str] = None,
-    granularity: str = "seconds",
-) -> Collection:
-    existing_names = set(db.list_collection_names())
-    if coll_name not in existing_names:
-        opts: dict[str, Any] = {
-            "timeField": time_field,
-            "granularity": granularity,
-        }
-        if meta_field:
-            opts["metaField"] = meta_field
-        try:
-            db.create_collection(coll_name, timeseries=opts)
-        except (CollectionInvalid, OperationFailure):
-            # If another process created it concurrently, continue safely.
-            pass
-    return db[coll_name]
-
-
-def get_application_event_telemetry_collection() -> Collection:
+def get_pipeline_runs_collection() -> Collection:
     load_dotenv()
-    coll_name = os.environ.get("MONGO_TELEMETRY_APP_EVENTS_COLLECTION", "telemetry_app_events")
+    coll_name = os.environ.get("MONGO_PIPELINE_RUNS_COLLECTION", "pipeline_runs")
     coll = get_db()[coll_name]
-    try:
-        coll.create_index("ts")
-        coll.create_index([("event_type", 1), ("ts", -1)])
-        coll.create_index([("invoice_id", 1), ("ts", -1)])
-    except OperationFailure as e:
-        # Keep telemetry inserts working even if existing index options differ.
-        logger.warning("[MongoDB] telemetry_app_events index ensure skipped: %s", e)
+    coll.create_index([("created_at", -1)])
+    coll.create_index([("run_id", 1)], unique=True)
+    coll.create_index([("status", 1), ("created_at", -1)])
+    coll.create_index([("error_stage", 1), ("created_at", -1)])
+    coll.create_index([("file_id", 1)])
     return coll
 
 
-def get_operational_metrics_telemetry_collection() -> Collection:
+def get_pipeline_metrics_collection() -> Collection:
     load_dotenv()
-    db = get_db()
-    coll_name = os.environ.get("MONGO_TELEMETRY_OPS_METRICS_COLLECTION", "telemetry_ops_metrics")
-    coll = _ensure_timeseries_collection(
-        db=db,
-        coll_name=coll_name,
-        time_field="ts",
-        meta_field="meta",
-        granularity="seconds",
-    )
-    coll.create_index([("metric_name", 1), ("ts", -1)])
-    coll.create_index([("meta.component", 1), ("ts", -1)])
-    return coll
-
-
-def get_business_snapshot_telemetry_collection() -> Collection:
-    load_dotenv()
-    coll_name = os.environ.get("MONGO_TELEMETRY_BUSINESS_SNAPSHOT_COLLECTION", "telemetry_business_snapshots")
-    coll = get_db()[coll_name]
-    coll.create_index([("snapshot_date", -1), ("period", 1)], unique=True)
-    coll.create_index([("generated_at", -1)])
-    return coll
-
-
-def get_hybrid_telemetry_collection() -> Collection:
-    load_dotenv()
-    coll_name = os.environ.get("MONGO_TELEMETRY_HYBRID_COLLECTION", "telemetry_hybrid")
+    coll_name = os.environ.get("MONGO_PIPELINE_METRICS_COLLECTION", "pipeline_metrics_timeseries")
     coll = get_db()[coll_name]
     coll.create_index([("ts", -1)])
-    coll.create_index([("category", 1), ("ts", -1)])
-    coll.create_index([("invoice_id", 1), ("ts", -1)])
     return coll
-
-
-def ensure_telemetry_collections() -> None:
-    """
-    Ensure all telemetry collections ("tables") exist with indexes:
-      1) Application Event Telemetry
-      2) Operational Metrics Telemetry (time-series)
-      3) Business Snapshot Telemetry
-      4) Hybrid Telemetry
-    """
-    get_application_event_telemetry_collection()
-    get_operational_metrics_telemetry_collection()
-    get_business_snapshot_telemetry_collection()
-    get_hybrid_telemetry_collection()
-    logger.info("[MongoDB] Telemetry collections ensured (app_events, ops_metrics, business_snapshots, hybrid).")
-
-
-def log_application_event(
-    *,
-    event_type: str,
-    payload: Optional[dict[str, Any]] = None,
-) -> Optional[str]:
-    """
-    Insert one application telemetry event document.
-    Returns inserted_id as string (or None on best-effort failure).
-    """
-    try:
-        from datetime import datetime
-
-        coll = get_application_event_telemetry_collection()
-        doc: dict[str, Any] = {
-            "ts": datetime.utcnow(),
-            "event_type": str(event_type).strip() or "unknown_event",
-        }
-        if isinstance(payload, dict):
-            doc.update(payload)
-        r = coll.insert_one(doc)
-        return str(r.inserted_id)
-    except Exception as e:
-        logger.warning("[MongoDB] Failed to write application telemetry event %r: %s", event_type, e)
-        return None
-
-
-def collect_and_persist_business_telemetry_overview(*, source: str = "system") -> Optional[dict[str, Any]]:
-    """
-    Compute business telemetry overview from invoices and persist into:
-      - telemetry_business_snapshots (daily upsert)
-      - telemetry_hybrid (event-like append)
-    """
-    try:
-        from datetime import datetime
-
-        invoices = get_invoices_collection()
-
-        def _to_bool(value: Any) -> bool:
-            if isinstance(value, bool):
-                return value
-            if value is None:
-                return False
-            if isinstance(value, (int, float)):
-                return bool(value)
-            text = str(value).strip().lower()
-            return text in {"1", "true", "yes", "y", "hit", "hitl"}
-
-        total_uploaded_files = 0
-        healthy_files = 0
-        error_files = 0
-        hitl_flagged_files = 0
-        hitl_process_pending = 0
-        hitl_processed = 0
-        system_processed = 0
-        human_approved_files = 0
-
-        for doc in invoices.find({}):
-            total_uploaded_files += 1
-            file_status = str(doc.get("file_status") or "").strip().lower()
-            if file_status == "healthy file":
-                healthy_files += 1
-            elif file_status == "error":
-                error_files += 1
-
-            gemini_json = (doc.get("gemini") or {}).get("json") or {}
-            if not isinstance(gemini_json, dict):
-                gemini_json = {}
-            additional_fields = gemini_json.get("additional_fields") or {}
-            if not isinstance(additional_fields, dict):
-                additional_fields = {}
-
-            hitl = _to_bool(additional_fields.get("HITL", additional_fields.get("HIT")))
-            ever_hitl_true = _to_bool(additional_fields.get("ever_hitl_true"))
-            if hitl:
-                hitl_flagged_files += 1
-                hitl_process_pending += 1
-            elif ever_hitl_true:
-                hitl_processed += 1
-            else:
-                system_processed += 1
-
-            if _to_bool(additional_fields.get("human_approved")):
-                human_approved_files += 1
-
-        now = datetime.utcnow()
-        snapshot_date = now.strftime("%Y-%m-%d")
-        overview: dict[str, Any] = {
-            "generated_at": now.isoformat() + "Z",
-            "total_uploaded_files": total_uploaded_files,
-            "healthy_files": healthy_files,
-            "error_files": error_files,
-            "hitl_flagged_files": hitl_flagged_files,
-            "hitl_process_pending": hitl_process_pending,
-            "hitl_processed": hitl_processed,
-            "system_processed": system_processed,
-            "human_approved_files": human_approved_files,
-        }
-
-        business_coll = get_business_snapshot_telemetry_collection()
-        business_coll.update_one(
-            {"snapshot_date": snapshot_date, "period": "daily"},
-            {"$set": {**overview, "generated_at": now, "snapshot_date": snapshot_date, "period": "daily"}},
-            upsert=True,
-        )
-
-        hybrid_coll = get_hybrid_telemetry_collection()
-        hybrid_coll.insert_one(
-            {
-                "ts": now,
-                "category": "business_overview",
-                "source": source,
-                "metrics": overview,
-            }
-        )
-        return overview
-    except Exception as e:
-        logger.warning("[MongoDB] Failed to persist business telemetry overview: %s", e)
-        return None
 
 
 def store_invoice_result(
@@ -342,4 +155,54 @@ def store_ocr_result(result: Any) -> str:
         gemini_json=d.get("gemini_json"),
         gemini_raw_text=d["gemini_raw_text"],
     )
+
+
+def record_pipeline_telemetry(run_doc: dict[str, Any]) -> Optional[str]:
+    """
+    Persist one pipeline run record and append an aggregate metrics snapshot.
+    """
+    try:
+        runs_coll = get_pipeline_runs_collection()
+        metrics_coll = get_pipeline_metrics_collection()
+        invoices_coll = get_invoices_collection()
+
+        doc = dict(run_doc)
+        now = datetime.utcnow()
+        doc.setdefault("created_at", now)
+        inserted = runs_coll.insert_one(doc)
+
+        total = runs_coll.count_documents({})
+        success = runs_coll.count_documents({"status": "success"})
+        failure = runs_coll.count_documents({"status": "error"})
+        one_min_ago = now - timedelta(minutes=1)
+        processed_per_min = runs_coll.count_documents({"created_at": {"$gte": one_min_ago}})
+
+        latency_cursor = runs_coll.aggregate(
+            [
+                {"$match": {"total_pipeline_latency": {"$type": "number"}}},
+                {"$group": {"_id": None, "avg_latency": {"$avg": "$total_pipeline_latency"}}},
+            ]
+        )
+        latency_row = next(latency_cursor, None)
+        avg_pipeline_latency = float(latency_row["avg_latency"]) if latency_row and latency_row.get("avg_latency") is not None else 0.0
+
+        success_rate = (success / total) if total else 0.0
+        total_invoices_stored = invoices_coll.count_documents({})
+
+        metrics_coll.insert_one(
+            {
+                "ts": now,
+                "invoices_processed_total": int(total),
+                "invoices_processed_per_minute": float(processed_per_min),
+                "pipeline_latency_seconds": float(avg_pipeline_latency),
+                "pipeline_success_count": int(success),
+                "pipeline_failure_count": int(failure),
+                "pipeline_success_rate": float(success_rate),
+                "total_invoices_stored": int(total_invoices_stored),
+            }
+        )
+        return str(inserted.inserted_id)
+    except Exception as e:
+        logger.warning("[MongoDB] Failed to persist pipeline telemetry: %s", e)
+        return None
 

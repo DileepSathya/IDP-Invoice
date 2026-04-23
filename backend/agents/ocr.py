@@ -4,6 +4,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -25,6 +26,15 @@ class OcrResult:
     ocr_text: str
     gemini_raw_text: str
     gemini_json: Optional[dict[str, Any]]
+    preprocessing_start_time: Optional[datetime]
+    preprocessing_end_time: Optional[datetime]
+    ocr_start_time: Optional[datetime]
+    ocr_end_time: Optional[datetime]
+    gemini_start_time: Optional[datetime]
+    gemini_end_time: Optional[datetime]
+    preprocessing_latency: Optional[float]
+    ocr_latency: Optional[float]
+    gemini_latency: Optional[float]
 
 
 _PADDLE_OCR = None
@@ -43,7 +53,9 @@ def _get_ocr():
     return _PADDLE_OCR
 
 
-def _extract_text_from_image(image_path: str) -> tuple[str, bool]:
+def _extract_text_from_image(
+    image_path: str,
+) -> tuple[str, bool, datetime, datetime, datetime, datetime]:
     """
     OCR for raster images (.png/.jpg/.jpeg).
 
@@ -62,13 +74,16 @@ def _extract_text_from_image(image_path: str) -> tuple[str, bool]:
     logger.info("[OCR pipeline] Starting OCR for image: %s", image_path)
 
     # Step 1: Preprocess
+    preprocess_start_time = datetime.utcnow()
     try:
         decision = preprocess_image_for_ocr(image_path)
+        preprocess_end_time = datetime.utcnow()
         logger.info(
             "[OCR pipeline → image] Preprocess completed successfully ✅ (%s candidate(s))",
             len(decision),
         )
     except Exception as e:
+        preprocess_end_time = datetime.utcnow()
         logger.error("[OCR pipeline → image] Preprocess failed ❌: %s", e)
         raise
 
@@ -90,6 +105,7 @@ def _extract_text_from_image(image_path: str) -> tuple[str, bool]:
     last_error: Optional[Exception] = None
 
     # Step 2: OCR on candidates
+    ocr_start_time = datetime.utcnow()
     for i, candidate_path in enumerate(decision, start=1):
         try:
             logger.info(
@@ -140,19 +156,34 @@ def _extract_text_from_image(image_path: str) -> tuple[str, bool]:
                 )
 
     # Step 4: Final result
+    ocr_end_time = datetime.utcnow()
     if best_text:
         logger.info(
             "[OCR pipeline] OCR completed successfully 🎉 (best text length: %s)",
             len(best_text),
         )
-        return best_text, deblurred_applied
+        return (
+            best_text,
+            deblurred_applied,
+            preprocess_start_time,
+            preprocess_end_time,
+            ocr_start_time,
+            ocr_end_time,
+        )
 
     if last_error is not None:
         logger.error("[OCR pipeline] OCR failed completely ❌")
         raise last_error
 
     logger.warning("[OCR pipeline] No text extracted ⚠️")
-    return "", deblurred_applied
+    return (
+        "",
+        deblurred_applied,
+        preprocess_start_time,
+        preprocess_end_time,
+        ocr_start_time,
+        ocr_end_time,
+    )
 
 
 def _extract_text_from_pdf(pdf_path: str) -> str:
@@ -306,12 +337,27 @@ def process_file(file_path: str) -> OcrResult:
 
     # For raster images, the next logs are from preprocess_2 (OpenCV) before any PaddleOCR line.
     if ext in {".jpeg", ".jpg", ".png"}:
-        ocr_text, deblurred_applied = _extract_text_from_image(str(p))
+        (
+            ocr_text,
+            deblurred_applied,
+            preprocessing_start_time,
+            preprocessing_end_time,
+            ocr_start_time,
+            ocr_end_time,
+        ) = _extract_text_from_image(str(p))
     elif ext == ".pdf":
+        preprocessing_start_time = None
+        preprocessing_end_time = None
+        ocr_start_time = datetime.utcnow()
         ocr_text = _extract_text_from_pdf(str(p))
+        ocr_end_time = datetime.utcnow()
         deblurred_applied = False
     else:  # .docx
+        preprocessing_start_time = None
+        preprocessing_end_time = None
+        ocr_start_time = datetime.utcnow()
         ocr_text = _extract_text_from_docx(str(p))
+        ocr_end_time = datetime.utcnow()
         deblurred_applied = False
 
     logger.info(
@@ -321,7 +367,9 @@ def process_file(file_path: str) -> OcrResult:
     logger.info(
         "[OCR pipeline] Step 2/2 — Structured data extraction (Gemini) from OCR text.",
     )
+    gemini_start_time = datetime.utcnow()
     gemini_raw, gemini_json = _gemini_extract_invoice_json(ocr_text)
+    gemini_end_time = datetime.utcnow()
     if isinstance(gemini_json, dict):
         additional_fields = gemini_json.get("additional_fields")
         if not isinstance(additional_fields, dict):
@@ -333,6 +381,23 @@ def process_file(file_path: str) -> OcrResult:
         ocr_text=ocr_text,
         gemini_raw_text=gemini_raw,
         gemini_json=gemini_json,
+        preprocessing_start_time=preprocessing_start_time,
+        preprocessing_end_time=preprocessing_end_time,
+        ocr_start_time=ocr_start_time,
+        ocr_end_time=ocr_end_time,
+        gemini_start_time=gemini_start_time,
+        gemini_end_time=gemini_end_time,
+        preprocessing_latency=(
+            (preprocessing_end_time - preprocessing_start_time).total_seconds()
+            if preprocessing_start_time and preprocessing_end_time
+            else None
+        ),
+        ocr_latency=(
+            (ocr_end_time - ocr_start_time).total_seconds()
+            if ocr_start_time and ocr_end_time
+            else None
+        ),
+        gemini_latency=(gemini_end_time - gemini_start_time).total_seconds(),
     )
 
     logger.info(
