@@ -126,12 +126,17 @@ def _collect_telemetry_overview_counts() -> TelemetryOverviewResponse:
             additional_fields = {}
 
         hitl = _to_bool(additional_fields.get("HITL", additional_fields.get("HIT")))
-        ever_hitl_true = _to_bool(additional_fields.get("ever_hitl_true"))
+        status_raw = additional_fields.get("status")
+        try:
+            status_value = int(status_raw) if status_raw is not None else None
+        except Exception:
+            status_value = None
 
         if hitl:
             hitl_flagged_files += 1
+        if status_value == 1:
             hitl_process_pending += 1
-        elif ever_hitl_true:
+        elif status_value == 2:
             hitl_processed += 1
         else:
             system_processed += 1
@@ -484,16 +489,22 @@ def _calculate_hitl_flag(gemini_json: dict[str, Any]) -> bool:
     return mismatch or deblurred_applied
 
 
-def _calculate_status_from_hitl(*, hitl_value: bool, ever_hitl_true: bool) -> int:
+def _calculate_status_from_hitl(*, hitl_value: bool, human_processed: bool) -> int:
     # 0: System processed, 1: HITL process pending, 2: HITL processed
+    if human_processed:
+        return 2
     if hitl_value:
         return 1
-    if ever_hitl_true:
-        return 2
     return 0
 
 
-def _sync_hitl_and_status(coll: Any, oid: ObjectId, gemini_json: dict[str, Any]) -> tuple[bool, int]:
+def _sync_hitl_and_status(
+    coll: Any,
+    oid: ObjectId,
+    gemini_json: dict[str, Any],
+    *,
+    mark_human_processed: bool = False,
+) -> tuple[bool, int]:
     additional_fields = gemini_json.get("additional_fields") or {}
     if not isinstance(additional_fields, dict):
         additional_fields = {}
@@ -503,9 +514,14 @@ def _sync_hitl_and_status(coll: Any, oid: ObjectId, gemini_json: dict[str, Any])
     existing_hitl = additional_fields.get("HITL", additional_fields.get("HIT"))
     existing_hitl_bool = _to_bool(existing_hitl)
 
-    existing_ever_hitl_true = _to_bool(additional_fields.get("ever_hitl_true"))
-    ever_hitl_true = bool(existing_ever_hitl_true or hitl_value)
-    status_value = _calculate_status_from_hitl(hitl_value=hitl_value, ever_hitl_true=ever_hitl_true)
+    existing_human_processed = _to_bool(
+        additional_fields.get("human_processed") or additional_fields.get("ever_hitl_true")
+    )
+    human_processed = bool(existing_human_processed or mark_human_processed)
+    status_value = _calculate_status_from_hitl(
+        hitl_value=hitl_value,
+        human_processed=human_processed,
+    )
 
     existing_status_raw = additional_fields.get("status")
     try:
@@ -516,8 +532,10 @@ def _sync_hitl_and_status(coll: Any, oid: ObjectId, gemini_json: dict[str, Any])
     update_doc: dict[str, Any] = {}
     if existing_hitl is None or existing_hitl_bool != hitl_value:
         update_doc["gemini.json.additional_fields.HITL"] = hitl_value
-    if existing_ever_hitl_true != ever_hitl_true:
-        update_doc["gemini.json.additional_fields.ever_hitl_true"] = ever_hitl_true
+    if existing_human_processed != human_processed:
+        update_doc["gemini.json.additional_fields.human_processed"] = human_processed
+        # Keep legacy key in sync for compatibility with old records/views.
+        update_doc["gemini.json.additional_fields.ever_hitl_true"] = human_processed
     if existing_status != status_value:
         update_doc["gemini.json.additional_fields.status"] = status_value
 
@@ -880,7 +898,7 @@ def human_approve_invoice(invoice_id: str) -> InvoiceSummary:
     additional_fields["human_approved"] = True
     gemini_json["additional_fields"] = additional_fields
 
-    hitl_value, _ = _sync_hitl_and_status(coll, oid, gemini_json)
+    hitl_value, _ = _sync_hitl_and_status(coll, oid, gemini_json, mark_human_processed=True)
 
     try:
         coll.update_one(
@@ -950,7 +968,7 @@ def update_invoice_json_editor(invoice_id: str, payload: InvoiceJsonEditorUpdate
     coll.update_one({"_id": oid}, {"$set": {"gemini.json": gemini_json}})
 
     # Ensure HITL lifecycle flags are updated after manual JSON edits.
-    _sync_hitl_and_status(coll, oid, gemini_json)
+    _sync_hitl_and_status(coll, oid, gemini_json, mark_human_processed=True)
 
     additional_fields = gemini_json.get("additional_fields") or {}
     comment = ""
@@ -1325,7 +1343,7 @@ def update_invoice(invoice_id: str, payload: InvoiceUpdate) -> InvoiceSummary:
     # Sync HITL/status after any edits.
     gemini_json = (doc.get("gemini") or {}).get("json") or {}
     if isinstance(gemini_json, dict):
-        _sync_hitl_and_status(coll, oid, gemini_json)
+        _sync_hitl_and_status(coll, oid, gemini_json, mark_human_processed=True)
 
     return _invoice_summary_row_from_doc(doc, line_item_index=line_item_index)
 
@@ -1378,7 +1396,7 @@ def add_invoice_line_item(invoice_id: str, payload: LineItemCreate) -> InvoiceSu
     # Sync HITL/status after any line-item add.
     gemini_json = (doc.get("gemini") or {}).get("json") or {}
     if isinstance(gemini_json, dict):
-        _sync_hitl_and_status(coll, oid, gemini_json)
+        _sync_hitl_and_status(coll, oid, gemini_json, mark_human_processed=True)
 
     gemini_json = (doc.get("gemini") or {}).get("json") or {}
     line_items = gemini_json.get("line_items") or []
@@ -1434,7 +1452,7 @@ def delete_invoice_line_item(invoice_id: str, line_item_index: int) -> InvoiceLi
     # Sync HITL/status after any line-item deletion.
     gemini_json = (doc.get("gemini") or {}).get("json") or {}
     if isinstance(gemini_json, dict):
-        _sync_hitl_and_status(coll, oid, gemini_json)
+        _sync_hitl_and_status(coll, oid, gemini_json, mark_human_processed=True)
 
     gemini_json = (doc.get("gemini") or {}).get("json") or {}
     invoice_total_amount = (

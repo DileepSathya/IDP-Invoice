@@ -78,13 +78,12 @@ def _calculate_summary_total_amount(gemini_json: dict) -> float | None:
     return _to_float(gemini_json.get("total_amount") or gemini_json.get("grand_total") or gemini_json.get("amount"))
 
 
-def _calculate_hitl_status(gemini_json: dict) -> tuple[bool, bool, int]:
+def _calculate_hitl_status(gemini_json: dict) -> tuple[bool, int]:
     additional_fields = gemini_json.get("additional_fields") or {}
     if not isinstance(additional_fields, dict):
         additional_fields = {}
         gemini_json["additional_fields"] = additional_fields
 
-    human_approved = _to_bool(additional_fields.get("human_approved"))
     deblurred_applied = _to_bool(additional_fields.get("deblurred_applied"))
     main_total = _to_float(gemini_json.get("total_amount") or gemini_json.get("grand_total") or gemini_json.get("amount"))
     summary_total = _to_float(additional_fields.get("summary_total_amount"))
@@ -101,10 +100,9 @@ def _calculate_hitl_status(gemini_json: dict) -> tuple[bool, bool, int]:
     else:
         mismatch = abs(main_total - summary_total) > 0.01
 
-    hitl = False if human_approved else (mismatch or deblurred_applied)
-    ever_hitl_true = _to_bool(additional_fields.get("ever_hitl_true")) or hitl
-    status = 1 if hitl else (2 if ever_hitl_true else 0)
-    return hitl, ever_hitl_true, status
+    hitl = mismatch or deblurred_applied
+    status = 1 if hitl else 0
+    return hitl, status
 
 
 def _is_allowed(path: Path) -> bool:
@@ -295,13 +293,14 @@ def _worker(q: "queue.Queue[Path]") -> None:
                 # Sync HITL lifecycle fields immediately so telemetry snapshots are accurate.
                 try:
                     coll = get_invoices_collection()
-                    hitl, ever_hitl_true, status = _calculate_hitl_status(gemini_json if isinstance(gemini_json, dict) else {})
+                    hitl, status = _calculate_hitl_status(gemini_json if isinstance(gemini_json, dict) else {})
                     coll.update_one(
                         {"_id": ObjectId(inserted_id)},
                         {
                             "$set": {
                                 "gemini.json.additional_fields.HITL": hitl,
-                                "gemini.json.additional_fields.ever_hitl_true": ever_hitl_true,
+                                "gemini.json.additional_fields.human_processed": False,
+                                "gemini.json.additional_fields.ever_hitl_true": False,
                                 "gemini.json.additional_fields.status": status,
                             }
                         },
