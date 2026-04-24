@@ -69,11 +69,43 @@ def get_invoices_collection() -> Collection:
 
     # "Ensure" collection by ensuring indexes; collection will exist after first write.
     coll.create_index("file_path")
+    coll.create_index([("tenant_id", 1), ("created_at", -1)])
     logger.debug(
         "[MongoDB] Using database %r, collection %r (indexes ensured on file_path).",
         db_name,
         coll_name,
     )
+    return coll
+
+
+def get_api_clients_collection() -> Collection:
+    load_dotenv()
+    coll_name = os.environ.get("MONGO_API_CLIENTS_COLLECTION", "api_clients")
+    coll = get_db()[coll_name]
+    coll.create_index([("key_hash", 1)], unique=True)
+    coll.create_index([("tenant_id", 1)], unique=True)
+    coll.create_index([("active", 1)])
+    return coll
+
+
+def get_jobs_collection() -> Collection:
+    load_dotenv()
+    coll_name = os.environ.get("MONGO_JOBS_COLLECTION", "invoice_jobs")
+    coll = get_db()[coll_name]
+    coll.create_index([("job_id", 1)], unique=True)
+    coll.create_index([("tenant_id", 1), ("created_at", -1)])
+    coll.create_index([("status", 1), ("created_at", -1)])
+    return coll
+
+
+def get_webhook_attempts_collection() -> Collection:
+    load_dotenv()
+    coll_name = os.environ.get("MONGO_WEBHOOK_ATTEMPTS_COLLECTION", "webhook_attempts")
+    coll = get_db()[coll_name]
+    coll.create_index([("job_id", 1), ("event", 1), ("attempt_no", 1)], unique=True)
+    coll.create_index([("tenant_id", 1), ("created_at", -1)])
+    coll.create_index([("webhook_id", 1)])
+    coll.create_index([("delivery_status", 1), ("created_at", -1)])
     return coll
 
 
@@ -122,6 +154,7 @@ def store_invoice_result(
         "uploaded_file_path": uploaded_file_path,
         "ocr_text": ocr_text,
         "file_status": file_status,
+        "created_at": datetime.utcnow(),
         "gemini": {
             "model": gemini_model,
             "raw_text": gemini_raw_text,
