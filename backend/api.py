@@ -3,22 +3,32 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import hmac
+import hashlib
+import threading
+import time
+import json
 from contextlib import asynccontextmanager
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, List, Optional
 from uuid import uuid4
+from urllib import request as urllib_request
+from urllib import error as urllib_error
 
 from bson import ObjectId
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from backend.agents.rag_chatbot import answer_question
 from backend.agents.database import (
+    get_api_clients_collection,
     get_invoices_collection,
+    get_jobs_collection,
+    get_webhook_attempts_collection,
     record_pipeline_telemetry,
     store_invoice_result,
 )
@@ -168,6 +178,515 @@ UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 ERROR_FILES_DIR = Path(os.environ.get("ERROR_FILES_DIR", "./invoices_data/error_files")).expanduser().resolve()
 ERROR_FILES_DIR.mkdir(parents=True, exist_ok=True)
+
+API_KEY_HEADER = "x-api-key"
+MAX_UPLOAD_BYTES = int(os.environ.get("API_MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
+RATE_LIMIT_PER_MIN = int(os.environ.get("API_RATE_LIMIT_PER_MIN", "60"))
+_RATE_LIMIT_STATE: dict[str, list[float]] = {}
+_RATE_LIMIT_LOCK = threading.Lock()
+WEBHOOK_DEFAULT_SECRET = os.environ.get("WEBHOOK_DEFAULT_SECRET", "").strip()
+WEBHOOK_TIMEOUT_SECONDS = int(os.environ.get("WEBHOOK_TIMEOUT_SECONDS", "10"))
+WEBHOOK_MAX_RETRIES = int(os.environ.get("WEBHOOK_MAX_RETRIES", "6"))
+WEBHOOK_RETRY_BACKOFF_SECONDS = [10, 30, 120, 600, 1800, 7200]
+WEBHOOK_ALLOWED_EVENTS = {"job.completed", "job.failed"}
+
+
+class ApiClientContext(BaseModel):
+    tenant_id: str
+    client_name: Optional[str] = None
+    key_hash: str
+
+
+class ApiUploadResponse(BaseModel):
+    job_id: str
+    status: str
+    request_id: Optional[str] = None
+    webhook_enabled: bool = False
+    callback_url: Optional[str] = None
+    callback_events: List[str] = Field(default_factory=list)
+
+
+class ApiJobStatusResponse(BaseModel):
+    job_id: str
+    status: str
+    tenant_id: str
+    invoice_id: Optional[str] = None
+    file_status: Optional[str] = None
+    error: Optional[str] = None
+    external_ref: Optional[str] = None
+    webhook_enabled: bool = False
+    callback_url: Optional[str] = None
+    callback_events: List[str] = Field(default_factory=list)
+    created_at: Optional[str] = None
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+
+
+class ApiInvoiceResponse(BaseModel):
+    invoice_id: str
+    tenant_id: str
+    file_status: Optional[str] = None
+    uploaded_file_path: Optional[str] = None
+    created_at: Optional[str] = None
+    gemini_json: dict[str, Any]
+
+
+class WebhookAttemptResponse(BaseModel):
+    webhook_id: str
+    event: str
+    attempt_no: int
+    delivery_status: str
+    response_status: Optional[int] = None
+    error_message: Optional[str] = None
+    latency_ms: Optional[int] = None
+    created_at: Optional[str] = None
+
+
+def _sha256_hex(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _iso(value: Any) -> Optional[str]:
+    if isinstance(value, datetime):
+        return value.isoformat() + "Z"
+    return None
+
+
+def _check_rate_limit(api_key_hash: str) -> None:
+    now = time.time()
+    threshold = now - 60.0
+    with _RATE_LIMIT_LOCK:
+        bucket = _RATE_LIMIT_STATE.setdefault(api_key_hash, [])
+        bucket[:] = [t for t in bucket if t >= threshold]
+        if len(bucket) >= RATE_LIMIT_PER_MIN:
+            raise HTTPException(status_code=429, detail="Rate limit exceeded for this API key.")
+        bucket.append(now)
+
+
+def _client_from_env(api_key: str) -> Optional[ApiClientContext]:
+    # Format: API_CLIENT_KEYS_JSON='{"my-raw-api-key-1":{"tenant_id":"acme","client_name":"ACME"}}'
+    raw = os.environ.get("API_CLIENT_KEYS_JSON")
+    if not raw:
+        return None
+    try:
+        mapping = __import__("json").loads(raw)
+    except Exception:
+        logger.warning("Failed to parse API_CLIENT_KEYS_JSON.")
+        return None
+    item = mapping.get(api_key)
+    if not isinstance(item, dict):
+        return None
+    tenant_id = str(item.get("tenant_id") or "").strip()
+    if not tenant_id:
+        return None
+    return ApiClientContext(
+        tenant_id=tenant_id,
+        client_name=str(item.get("client_name") or "").strip() or None,
+        key_hash=_sha256_hex(api_key),
+    )
+
+
+def _authenticate_api_key(request: Request) -> ApiClientContext:
+    api_key = request.headers.get(API_KEY_HEADER) or request.headers.get(API_KEY_HEADER.upper())
+    if not api_key:
+        raise HTTPException(status_code=401, detail="Missing API key.")
+
+    key_hash = _sha256_hex(api_key)
+    _check_rate_limit(key_hash)
+
+    # First try Mongo (recommended), then env fallback.
+    try:
+        clients = get_api_clients_collection()
+        row = clients.find_one({"key_hash": key_hash, "active": True})
+    except Exception:
+        row = None
+    if isinstance(row, dict):
+        tenant_id = str(row.get("tenant_id") or "").strip()
+        if not tenant_id:
+            raise HTTPException(status_code=401, detail="Invalid API key mapping.")
+        return ApiClientContext(
+            tenant_id=tenant_id,
+            client_name=str(row.get("client_name") or "").strip() or None,
+            key_hash=key_hash,
+        )
+
+    env_client = _client_from_env(api_key)
+    if env_client:
+        # Constant-time check to avoid timing leaks in env mode path.
+        if not hmac.compare_digest(env_client.key_hash, key_hash):
+            raise HTTPException(status_code=401, detail="Invalid API key.")
+        return env_client
+
+    raise HTTPException(status_code=401, detail="Invalid API key.")
+
+
+def _parse_callback_events(raw: Optional[str]) -> list[str]:
+    if not raw:
+        return ["job.completed", "job.failed"]
+    text = str(raw).strip()
+    if not text:
+        return ["job.completed", "job.failed"]
+    events: list[str] = []
+    if text.startswith("["):
+        try:
+            arr = json.loads(text)
+            if isinstance(arr, list):
+                events = [str(v).strip() for v in arr]
+        except Exception:
+            events = []
+    else:
+        events = [part.strip() for part in text.split(",")]
+    clean = [evt for evt in events if evt in WEBHOOK_ALLOWED_EVENTS]
+    return clean or ["job.completed", "job.failed"]
+
+
+def _build_webhook_signature(secret: str, timestamp: int, body_bytes: bytes) -> str:
+    signed_payload = f"{timestamp}.".encode("utf-8") + body_bytes
+    digest = hmac.new(secret.encode("utf-8"), signed_payload, hashlib.sha256).hexdigest()
+    return f"t={timestamp},v1={digest}"
+
+
+def _record_webhook_attempt(
+    *,
+    webhook_id: str,
+    job_id: str,
+    tenant_id: str,
+    event: str,
+    attempt_no: int,
+    callback_url: str,
+    request_id: Optional[str],
+    request_body: bytes,
+    response_status: Optional[int],
+    response_body: Optional[str],
+    latency_ms: int,
+    delivery_status: str,
+    error_message: Optional[str],
+    next_retry_in_seconds: Optional[int],
+) -> None:
+    try:
+        attempts = get_webhook_attempts_collection()
+        attempts.insert_one(
+            {
+                "webhook_id": webhook_id,
+                "job_id": job_id,
+                "tenant_id": tenant_id,
+                "event": event,
+                "attempt_no": attempt_no,
+                "callback_url": callback_url,
+                "request_id": request_id,
+                "request_body_sha256": hashlib.sha256(request_body).hexdigest(),
+                "response_status": response_status,
+                "response_body_snippet": (response_body or "")[:1000],
+                "latency_ms": latency_ms,
+                "delivery_status": delivery_status,
+                "error_message": error_message,
+                "next_retry_in_seconds": next_retry_in_seconds,
+                "created_at": datetime.utcnow(),
+            }
+        )
+    except Exception as e:
+        logger.warning("Failed to record webhook attempt for job_id=%s event=%s: %s", job_id, event, e)
+
+
+def _deliver_webhook_with_retries(
+    *,
+    event: str,
+    callback_url: str,
+    callback_secret: str,
+    payload: dict[str, Any],
+    job_id: str,
+    tenant_id: str,
+    request_id: Optional[str],
+) -> None:
+    webhook_id = str(uuid4())
+    body = json.dumps(payload, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+    max_attempts = max(1, WEBHOOK_MAX_RETRIES)
+    backoff = WEBHOOK_RETRY_BACKOFF_SECONDS
+    for attempt in range(1, max_attempts + 1):
+        ts = int(time.time())
+        signature = _build_webhook_signature(callback_secret, ts, body)
+        headers = {
+            "Content-Type": "application/json",
+            "X-Webhook-Id": webhook_id,
+            "X-Webhook-Event": event,
+            "X-Webhook-Timestamp": str(ts),
+            "X-Webhook-Signature": signature,
+        }
+        if request_id:
+            headers["X-Request-Id"] = request_id
+        req = urllib_request.Request(callback_url, data=body, headers=headers, method="POST")
+        start = time.perf_counter()
+        response_status: Optional[int] = None
+        response_body: Optional[str] = None
+        error_message: Optional[str] = None
+        should_retry = False
+        try:
+            with urllib_request.urlopen(req, timeout=WEBHOOK_TIMEOUT_SECONDS) as resp:
+                response_status = int(resp.status)
+                response_bytes = resp.read()
+                response_body = response_bytes.decode("utf-8", errors="replace")
+            if response_status < 200 or response_status >= 300:
+                should_retry = response_status in {408, 409, 425, 429} or response_status >= 500
+                if not should_retry:
+                    logger.warning(
+                        "Webhook permanently rejected request_id=%s job_id=%s event=%s status=%s",
+                        request_id,
+                        job_id,
+                        event,
+                        response_status,
+                    )
+        except urllib_error.HTTPError as e:
+            response_status = int(e.code)
+            try:
+                response_body = e.read().decode("utf-8", errors="replace")
+            except Exception:
+                response_body = None
+            should_retry = response_status in {408, 409, 425, 429} or response_status >= 500
+            error_message = f"http_error:{response_status}"
+        except Exception as e:
+            should_retry = True
+            error_message = str(e)
+        latency_ms = int((time.perf_counter() - start) * 1000)
+        is_success = response_status is not None and 200 <= response_status < 300
+        next_retry = None
+        if not is_success and should_retry and attempt < max_attempts:
+            backoff_idx = min(attempt - 1, len(backoff) - 1)
+            next_retry = backoff[backoff_idx]
+        _record_webhook_attempt(
+            webhook_id=webhook_id,
+            job_id=job_id,
+            tenant_id=tenant_id,
+            event=event,
+            attempt_no=attempt,
+            callback_url=callback_url,
+            request_id=request_id,
+            request_body=body,
+            response_status=response_status,
+            response_body=response_body,
+            latency_ms=latency_ms,
+            delivery_status="success" if is_success else ("retrying" if next_retry is not None else "failed"),
+            error_message=error_message,
+            next_retry_in_seconds=next_retry,
+        )
+        if is_success:
+            logger.info(
+                "webhook_delivered request_id=%s tenant_id=%s job_id=%s event=%s attempt=%s status=%s",
+                request_id,
+                tenant_id,
+                job_id,
+                event,
+                attempt,
+                response_status,
+            )
+            return
+        if not should_retry or attempt >= max_attempts:
+            logger.warning(
+                "webhook_delivery_failed request_id=%s tenant_id=%s job_id=%s event=%s attempt=%s status=%s error=%s",
+                request_id,
+                tenant_id,
+                job_id,
+                event,
+                attempt,
+                response_status,
+                error_message,
+            )
+            return
+        time.sleep(next_retry or 0)
+
+
+def _send_job_webhook_if_enabled(
+    *,
+    job_id: str,
+    tenant_id: str,
+    event: str,
+    request_id: Optional[str],
+    invoice_id: Optional[str],
+    file_status: Optional[str],
+    error_message: Optional[str],
+) -> None:
+    jobs = get_jobs_collection()
+    job = jobs.find_one({"job_id": job_id, "tenant_id": tenant_id})
+    if not isinstance(job, dict):
+        return
+    callback_url = str(job.get("callback_url") or "").strip()
+    if not callback_url:
+        return
+    callback_events = job.get("callback_events") or ["job.completed", "job.failed"]
+    if not isinstance(callback_events, list):
+        callback_events = ["job.completed", "job.failed"]
+    if event not in callback_events:
+        return
+    callback_secret = str(job.get("callback_secret") or "").strip()
+    if not callback_secret:
+        logger.warning("Skipping webhook (missing callback secret) for job_id=%s", job_id)
+        return
+    payload: dict[str, Any] = {
+        "event": event,
+        "occurred_at": datetime.utcnow().isoformat() + "Z",
+        "tenant_id": tenant_id,
+        "job": {
+            "job_id": job_id,
+            "status": str(job.get("status") or ""),
+            "external_ref": job.get("external_ref"),
+            "request_id": request_id,
+        },
+    }
+    if event == "job.completed":
+        payload["result"] = {"invoice_id": invoice_id, "file_status": file_status}
+    if event == "job.failed":
+        payload["error"] = {"code": "PIPELINE_ERROR", "message": error_message or "Unknown error"}
+    _deliver_webhook_with_retries(
+        event=event,
+        callback_url=callback_url,
+        callback_secret=callback_secret,
+        payload=payload,
+        job_id=job_id,
+        tenant_id=tenant_id,
+        request_id=request_id,
+    )
+
+
+def _process_job(
+    job_id: str,
+    tenant_id: str,
+    file_path: str,
+    request_id: Optional[str],
+) -> None:
+    jobs = get_jobs_collection()
+    invoices = get_invoices_collection()
+    file_received_time = datetime.utcnow()
+    file_ext = Path(file_path).suffix.lower().lstrip(".")
+    file_size = 0
+    try:
+        file_size = Path(file_path).stat().st_size
+    except Exception:
+        file_size = 0
+    started_at = datetime.utcnow()
+    jobs.update_one(
+        {"job_id": job_id, "tenant_id": tenant_id},
+        {"$set": {"status": "processing", "started_at": started_at}},
+    )
+    logger.info(
+        "job_started request_id=%s tenant_id=%s job_id=%s file_path=%s",
+        request_id,
+        tenant_id,
+        job_id,
+        file_path,
+    )
+    try:
+        ocr_result = process_file(file_path)
+        gemini_json_norm: dict[str, Any] = dict(ocr_result.gemini_json or {})
+        invoice_number = gemini_json_norm.get("invoice_number") or gemini_json_norm.get("invoice")
+        invoice_number_norm = str(invoice_number).strip() if invoice_number is not None else ""
+        file_status = "error" if not invoice_number_norm else "healthy file"
+        inserted_id = store_invoice_result(
+            file_path=ocr_result.file_path,
+            uploaded_file_path=file_path,
+            ocr_text=ocr_result.ocr_text,
+            gemini_model=ocr_result.gemini_model or (os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"),
+            gemini_json=gemini_json_norm,
+            gemini_raw_text=ocr_result.gemini_raw_text,
+            file_status=file_status,
+        )
+        invoices.update_one(
+            {"_id": ObjectId(inserted_id)},
+            {"$set": {"tenant_id": tenant_id, "job_id": job_id}},
+        )
+        completed_at = datetime.utcnow()
+        record_pipeline_telemetry(
+            {
+                "run_id": job_id,
+                "source": "api_v1",
+                "file_id": inserted_id,
+                "tenant_id": tenant_id,
+                "file_name": Path(file_path).name,
+                "file_size": file_size,
+                "file_type": file_ext,
+                "file_received_time": file_received_time,
+                "preprocessing_start_time": ocr_result.preprocessing_start_time,
+                "preprocessing_end_time": ocr_result.preprocessing_end_time,
+                "ocr_start_time": ocr_result.ocr_start_time,
+                "ocr_end_time": ocr_result.ocr_end_time,
+                "gemini_start_time": ocr_result.gemini_start_time,
+                "gemini_end_time": ocr_result.gemini_end_time,
+                "db_insert_time": completed_at,
+                "preprocessing_latency": ocr_result.preprocessing_latency,
+                "ocr_latency": ocr_result.ocr_latency,
+                "gemini_latency": ocr_result.gemini_latency,
+                "gemini_prompt_tokens": ocr_result.gemini_prompt_tokens,
+                "gemini_output_tokens": ocr_result.gemini_output_tokens,
+                "gemini_total_tokens": ocr_result.gemini_total_tokens,
+                "gemini_model": ocr_result.gemini_model,
+                "total_pipeline_latency": (completed_at - file_received_time).total_seconds(),
+                "status": "success",
+                "error_stage": None,
+                "error_message": None,
+            }
+        )
+        jobs.update_one(
+            {"job_id": job_id, "tenant_id": tenant_id},
+            {
+                "$set": {
+                    "status": "completed",
+                    "invoice_id": inserted_id,
+                    "file_status": file_status,
+                    "completed_at": completed_at,
+                }
+            },
+        )
+        logger.info(
+            "job_completed request_id=%s tenant_id=%s job_id=%s invoice_id=%s",
+            request_id,
+            tenant_id,
+            job_id,
+            inserted_id,
+        )
+        _send_job_webhook_if_enabled(
+            job_id=job_id,
+            tenant_id=tenant_id,
+            event="job.completed",
+            request_id=request_id,
+            invoice_id=inserted_id,
+            file_status=file_status,
+            error_message=None,
+        )
+    except Exception as e:
+        record_pipeline_telemetry(
+            {
+                "run_id": job_id,
+                "source": "api_v1",
+                "file_id": None,
+                "tenant_id": tenant_id,
+                "file_name": Path(file_path).name,
+                "file_size": file_size,
+                "file_type": file_ext,
+                "file_received_time": file_received_time,
+                "status": "error",
+                "error_stage": "pipeline",
+                "error_message": str(e),
+                "total_pipeline_latency": (datetime.utcnow() - file_received_time).total_seconds(),
+            }
+        )
+        jobs.update_one(
+            {"job_id": job_id, "tenant_id": tenant_id},
+            {"$set": {"status": "failed", "error": str(e), "completed_at": datetime.utcnow()}},
+        )
+        logger.exception(
+            "job_failed request_id=%s tenant_id=%s job_id=%s error=%s",
+            request_id,
+            tenant_id,
+            job_id,
+            e,
+        )
+        _send_job_webhook_if_enabled(
+            job_id=job_id,
+            tenant_id=tenant_id,
+            event="job.failed",
+            request_id=request_id,
+            invoice_id=None,
+            file_status=None,
+            error_message=str(e),
+        )
 
 
 class InvoiceSummary(BaseModel):
@@ -579,6 +1098,28 @@ app.add_middleware(
 app.mount("/raw", StaticFiles(directory=UPLOADS_DIR), name="raw")
 
 
+@app.middleware("http")
+async def add_observability_and_security_headers(request: Request, call_next):
+    request_id = request.headers.get("x-request-id") or str(uuid4())
+    request.state.request_id = request_id
+    start = time.perf_counter()
+    response = await call_next(request)
+    latency_ms = int((time.perf_counter() - start) * 1000)
+    response.headers["x-request-id"] = request_id
+    response.headers["x-content-type-options"] = "nosniff"
+    response.headers["x-frame-options"] = "DENY"
+    response.headers["cache-control"] = "no-store"
+    logger.info(
+        "api_request request_id=%s method=%s path=%s status=%s latency_ms=%s",
+        request_id,
+        request.method,
+        request.url.path,
+        response.status_code,
+        latency_ms,
+    )
+    return response
+
+
 SEARCH_FIELD_PATHS: dict[str, list[str]] = {
     "invoice_number": ["gemini.json.invoice_number", "gemini.json.invoice"],
     "hsn_value": [
@@ -622,6 +1163,184 @@ def _all_distinct_values(field: str) -> list[str]:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.post("/v1/files", response_model=ApiUploadResponse, status_code=202)
+async def v1_upload_file(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    external_ref: Optional[str] = Form(default=None),
+    callback_url: Optional[str] = Form(default=None),
+    callback_events: Optional[str] = Form(default=None),
+    callback_secret: Optional[str] = Form(default=None),
+    client: ApiClientContext = Depends(_authenticate_api_key),
+) -> ApiUploadResponse:
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in ALLOWED_EXTS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type: {ext}. Allowed: {sorted(ALLOWED_EXTS)}",
+        )
+
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large. Max allowed bytes: {MAX_UPLOAD_BYTES}",
+        )
+
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    filename_without_ext = Path(file.filename or "file").stem
+    tenant_safe = client.tenant_id.replace("/", "_").replace("\\", "_").strip()
+    tenant_dir = UPLOADS_DIR / "api" / tenant_safe
+    tenant_dir.mkdir(parents=True, exist_ok=True)
+    target_path = tenant_dir / f"{filename_without_ext}_{timestamp}_{uuid4().hex[:8]}{ext}"
+    target_path.write_bytes(content)
+
+    job_id = str(uuid4())
+    jobs = get_jobs_collection()
+    now = datetime.utcnow()
+    callback_url_value = str(callback_url or "").strip() or None
+    callback_secret_value = str(callback_secret or "").strip() or WEBHOOK_DEFAULT_SECRET or None
+    if callback_url_value and not callback_url_value.lower().startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="callback_url must start with http:// or https://")
+    if callback_url_value and not callback_secret_value:
+        raise HTTPException(
+            status_code=400,
+            detail="callback_secret is required when callback_url is provided (or set WEBHOOK_DEFAULT_SECRET).",
+        )
+    callback_events_value = _parse_callback_events(callback_events) if callback_url_value else []
+    jobs.insert_one(
+        {
+            "job_id": job_id,
+            "tenant_id": client.tenant_id,
+            "status": "queued",
+            "original_filename": file.filename,
+            "external_ref": str(external_ref).strip() if external_ref else None,
+            "uploaded_file_path": str(target_path),
+            "request_id": getattr(request.state, "request_id", None),
+            "callback_url": callback_url_value,
+            "callback_events": callback_events_value,
+            "callback_secret": callback_secret_value,
+            "created_at": now,
+            "started_at": None,
+            "completed_at": None,
+        }
+    )
+
+    background_tasks.add_task(
+        _process_job,
+        job_id,
+        client.tenant_id,
+        str(target_path),
+        getattr(request.state, "request_id", None),
+    )
+    return ApiUploadResponse(
+        job_id=job_id,
+        status="queued",
+        request_id=getattr(request.state, "request_id", None),
+        webhook_enabled=bool(callback_url_value),
+        callback_url=callback_url_value,
+        callback_events=callback_events_value,
+    )
+
+
+@app.get("/v1/jobs/{job_id}", response_model=ApiJobStatusResponse)
+def v1_get_job(job_id: str, client: ApiClientContext = Depends(_authenticate_api_key)) -> ApiJobStatusResponse:
+    jobs = get_jobs_collection()
+    doc = jobs.find_one({"job_id": job_id, "tenant_id": client.tenant_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    return ApiJobStatusResponse(
+        job_id=job_id,
+        status=str(doc.get("status") or "unknown"),
+        tenant_id=client.tenant_id,
+        invoice_id=str(doc.get("invoice_id")) if doc.get("invoice_id") else None,
+        file_status=doc.get("file_status"),
+        error=doc.get("error"),
+        external_ref=doc.get("external_ref"),
+        webhook_enabled=bool(doc.get("callback_url")),
+        callback_url=doc.get("callback_url"),
+        callback_events=doc.get("callback_events") or [],
+        created_at=_iso(doc.get("created_at")),
+        started_at=_iso(doc.get("started_at")),
+        completed_at=_iso(doc.get("completed_at")),
+    )
+
+
+@app.get("/v1/jobs/{job_id}/webhook-attempts", response_model=List[WebhookAttemptResponse])
+def v1_get_webhook_attempts(
+    job_id: str,
+    client: ApiClientContext = Depends(_authenticate_api_key),
+) -> List[WebhookAttemptResponse]:
+    attempts = get_webhook_attempts_collection()
+    docs = attempts.find(
+        {"job_id": job_id, "tenant_id": client.tenant_id},
+        sort=[("attempt_no", 1), ("created_at", 1)],
+    )
+    out: List[WebhookAttemptResponse] = []
+    for doc in docs:
+        out.append(
+            WebhookAttemptResponse(
+                webhook_id=str(doc.get("webhook_id") or ""),
+                event=str(doc.get("event") or ""),
+                attempt_no=int(doc.get("attempt_no") or 0),
+                delivery_status=str(doc.get("delivery_status") or "unknown"),
+                response_status=doc.get("response_status"),
+                error_message=doc.get("error_message"),
+                latency_ms=doc.get("latency_ms"),
+                created_at=_iso(doc.get("created_at")),
+            )
+        )
+    return out
+
+
+@app.get("/v1/invoices/{invoice_id}", response_model=ApiInvoiceResponse)
+def v1_get_invoice(invoice_id: str, client: ApiClientContext = Depends(_authenticate_api_key)) -> ApiInvoiceResponse:
+    coll = get_invoices_collection()
+    try:
+        oid = ObjectId(invoice_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid invoice id.")
+    doc = coll.find_one({"_id": oid, "tenant_id": client.tenant_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Invoice not found.")
+    gemini_json = (doc.get("gemini") or {}).get("json") or {}
+    if not isinstance(gemini_json, dict):
+        gemini_json = {}
+    return ApiInvoiceResponse(
+        invoice_id=str(doc.get("_id")),
+        tenant_id=client.tenant_id,
+        file_status=doc.get("file_status"),
+        uploaded_file_path=doc.get("uploaded_file_path"),
+        created_at=_iso(doc.get("created_at")),
+        gemini_json=gemini_json,
+    )
+
+
+@app.get("/v1/invoices", response_model=List[ApiInvoiceResponse])
+def v1_list_invoices(
+    limit: int = Query(default=50, ge=1, le=200),
+    client: ApiClientContext = Depends(_authenticate_api_key),
+) -> List[ApiInvoiceResponse]:
+    coll = get_invoices_collection()
+    out: List[ApiInvoiceResponse] = []
+    for doc in coll.find({"tenant_id": client.tenant_id}, sort=[("_id", -1)], limit=limit):
+        gemini_json = (doc.get("gemini") or {}).get("json") or {}
+        if not isinstance(gemini_json, dict):
+            gemini_json = {}
+        out.append(
+            ApiInvoiceResponse(
+                invoice_id=str(doc.get("_id")),
+                tenant_id=client.tenant_id,
+                file_status=doc.get("file_status"),
+                uploaded_file_path=doc.get("uploaded_file_path"),
+                created_at=_iso(doc.get("created_at")),
+                gemini_json=gemini_json,
+            )
+        )
+    return out
 
 
 @app.get("/telemetry/overview", response_model=TelemetryOverviewResponse)
