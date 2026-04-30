@@ -1,0 +1,60 @@
+{
+    "_id": {
+      "$oid": "69f3063d906243b48570de78"
+    },
+    "file_path": "D:\\IDP_2.0-INVOICE\\invoices_data\\uploads\\SD-1_20260430_130450.jpeg",
+    "uploaded_file_path": "D:\\IDP_2.0-INVOICE\\invoices_data\\uploads\\SD-1_20260430_130450.jpeg",
+    "ocr_text": "Tax Invoice\nKre38 Labs Pvt Ltd\nInvoice No.\npaeed\nNo.354.1st C Cross RoadKoramangla 8th Block\nKLKA2526-12078\n1-Dec-25\nKoramangala BengaluruBengaluru Urban\nKarnataka,560095\nGSTIN/UIN:29AAHCK0414C1ZZ\nState Name:Karnataka,Code:29\nCIN:U74999KA2018PTC111891\nBuyer (Bill to)\nMY HOME JEWEL FLAT OWNERS MAINTENANCE MUTUALIY AIDED CO-OP SOCIETY LIMITED\nSY NO 83 97.My Home Jewel,Madinaguda\nHyderabad,Rangareddy. Telangana\nGSTIN/UIN\n36AATAM7466Q1ZB\nState Name\nTelanganaCode:36\nSI\nDescription of\nHSN/SAC\nQuantity\nRate\nper\nAmount\nNo.\nServices\n1 Waltr A Monthly Subscription\n998319\n28 Nos\n499.00Nos\n13,972.00\nWater Level &Usage Monitor\n01/12/2025 to 31/12/2025\nLess:\nDiscount\n-4,319.00\n154.25*28=4319\nIGST@18%\n18%\n1,737.54\nRound Off\n0.46\nTotal\n28Nos\n11,391.00\nAmount Chargeable (in words)\nE.&O.E\nINR Eleven Thousand Three Hundred Ninety One Only\nTaxable\nIGST\nTotal\nValue\nRate\nAmount\nTax Amount\n9,653.00\n18%\n1.737.54\n1.737.54\nTotal:\n9,653.00\n1,737.54\n1,737.54\nTax Amount (in words) INR One Thousand Seven Hundred Thirty Seven and Fifty Four paise Only\nCompany's PAN\nAAHCK0414C\nDeclaration\n1.18% GST is applicable.\n2.2% TDS to be deducted as Technical Service under section\n194C of the lncome Tax Act.1961.\n3.We are a registered MSME under the Government of India,\nOur MSME Registration Number is UDYAM-KR-03-0237046.\n4.Late payments may attract interest charges or late payment\ncharges\n5.All issues will be addressed within 5 working days from the\nCompany's Bank Details\ndate of complaint.\nAc Holder's Name :Kre38 Labs Private Limited\n6.Any civil & electrical work, if required,to be done by the\nBank Name\nKotak Mahindra Bank\ncustomer,\nAc No.\nBranch&IFS CodeKoramangala &KKBK0oo8040\n8912212894\n7.Power Supply for the routers to be provided by the customer.\n8.Customers are required to pay the subscription amount in\nfor Kre38 Labs Pvt Ltd\nadvance,on a prepaid basis.\n9.The general terms &conditions of purchase at https://www.\nwaltr.in/terms-and-conditions.html apply to this Quotation/lnvoice.\nAuthorised Signatory\nPadon\nThis is a Computer Generated Invoice\n8/126\n3\n07356\ny+sniivanRow\nRaje\n0326",
+    "file_status": "healthy file",
+    "created_at": {
+      "$date": "2026-04-30T07:35:25.675Z"
+    },
+    "gemini": {
+      "model": "gemini-2.5-flash",
+      "raw_text": "```json\n{\n  \"invoice_number\": \"KLKA2526-12078\",\n  \"invoice_date\": \"01/12/2025\",\n  \"due_date\": null,\n  \"seller\": \"Kre38 Labs Pvt Ltd\",\n  \"buyer\": \"MY HOME JEWEL FLAT OWNERS MAINTENANCE MUTUALIY AIDED CO-OP SOCIETY LIMITED\",\n  \"address\": \"No.354, 1st C Cross Road, Koramangala 8th Block, Koramangala, Bengaluru, Bengaluru Urban, Karnataka, 560095\",\n  \"bank_name\": \"Kotak Mahindra Bank\",\n  \"bank_address\": \"Koramangala\",\n  \"account_number\": \"8912212894\",\n  \"account_holder_name\": \"Kre38 Labs Private Limited\",\n  \"ifsc_code\": \"KKBK0008040\",\n  \"total_amount\": 11391.00,\n  \"line_items\": [\n    {\n      \"hsn_number\": \"998319\",\n      \"service\": \"Waltr A Monthly Subscription Water Level &Usage Monitor\",\n      \"quantity\": 28,\n      \"price_per_unit\": 499.00,\n      \"amount\": 9653.00,\n      \"tax_rate\": \"18\",\n      \"tax_amount\": 1737.54,\n      \"amount_after_tax\": 11390.54\n    }\n  ],\n  \"additional_fields\": {\n    \"seller_gstin_uin\": \"29AAHCK0414C1ZZ\",\n    \"seller_state_name\": \"Karnataka, Code:29\",\n    \"seller_cin\": \"U74999KA2018PTC111891\",\n    \"buyer_address\": \"SY NO 83 97.My Home Jewel,Madinaguda Hyderabad,Rangareddy. Telangana\",\n    \"buyer_gstin_uin\": \"36AATAM7466Q1ZB\",\n    \"buyer_state_name\": \"Telangana Code:36\",\n    \"company_pan\": \"AAHCK0414C\",\n    \"discount_amount\": 4319.00,\n    \"round_off_amount\": 0.46,\n    \"amount_chargeable_in_words\": \"INR Eleven Thousand Three Hundred Ninety One Only\",\n    \"tax_amount_in_words\": \"INR One Thousand Seven Hundred Thirty Seven and Fifty Four paise Only\",\n    \"msme_registration_number\": \"UDYAM-KR-03-0237046\"\n  }\n}\n```",
+      "json": {
+        "invoice_number": "KLKA2526-12078",
+        "invoice_date": "01/12/2025",
+        "due_date": null,
+        "seller": "Kre38 Labs Pvt Ltd",
+        "buyer": "MY HOME JEWEL FLAT OWNERS MAINTENANCE MUTUALIY AIDED CO-OP SOCIETY LIMITED",
+        "address": "No.354, 1st C Cross Road, Koramangala 8th Block, Koramangala, Bengaluru, Bengaluru Urban, Karnataka, 560095",
+        "bank_name": "Kotak Mahindra Bank",
+        "bank_address": "Koramangala",
+        "account_number": "8912212894",
+        "account_holder_name": "Kre38 Labs Private Limited",
+        "ifsc_code": "KKBK0008040",
+        "total_amount": 11391,
+        "line_items": [
+          {
+            "hsn_number": "998319",
+            "service": "Waltr A Monthly Subscription Water Level &Usage Monitor",
+            "quantity": 28,
+            "price_per_unit": 499,
+            "amount": 9653,
+            "tax_rate": "18",
+            "tax_amount": 1737.54,
+            "amount_after_tax": 11390.54
+          }
+        ],
+        "additional_fields": {
+          "seller_gstin_uin": "29AAHCK0414C1ZZ",
+          "seller_state_name": "Karnataka, Code:29",
+          "seller_cin": "U74999KA2018PTC111891",
+          "buyer_address": "SY NO 83 97.My Home Jewel,Madinaguda Hyderabad,Rangareddy. Telangana",
+          "buyer_gstin_uin": "36AATAM7466Q1ZB",
+          "buyer_state_name": "Telangana Code:36",
+          "company_pan": "AAHCK0414C",
+          "discount_amount": 4319,
+          "round_off_amount": 0.46,
+          "amount_chargeable_in_words": "INR Eleven Thousand Three Hundred Ninety One Only",
+          "tax_amount_in_words": "INR One Thousand Seven Hundred Thirty Seven and Fifty Four paise Only",
+          "msme_registration_number": "UDYAM-KR-03-0237046",
+          "deblurred_applied": false,
+          "HITL": true,
+          "status": 1,
+          "summary_total_amount": "11390.54"
+        }
+      }
+    }
+  }

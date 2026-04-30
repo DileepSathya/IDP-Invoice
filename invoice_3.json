@@ -1,0 +1,80 @@
+{
+    "_id": {
+      "$oid": "69f340a1c7a80b896ff5b30a"
+    },
+    "file_path": "D:\\IDP_2.0-INVOICE\\invoices_data\\uploads\\SD-4_20260430_171400.jpeg",
+    "uploaded_file_path": "D:\\IDP_2.0-INVOICE\\invoices_data\\uploads\\SD-4_20260430_171400.jpeg",
+    "ocr_text": "ORIGINAL\nSURABHI INTEGRATED SERVICES\nSURABHI\nFlat No.104.H No.7-1-201 to 207.KVR Enclave,Adj.\nGurudwara,AmeerpetHyderabad-500016 Ph040-42037821\nINTEGRATED SERVICES\nEmail:info@surabhiintegrated.com |Website\n.www.surabhiintegrated.com\nTAX INVOICE\nGSTIN\n36ABBFS8580K1ZM\nBill for the month of\nPAN No\nABBFS8580K\nJanuary-2026\nPlace of Supply\n:HYDERABAD\nInvoice No\nSSS/25-26/00832\nInvoice Date\n31/01/2026\nName\nM/s.MY HOME JEWEL FLAT OWNERS\nMAINTENANCE MUTUALLY AIDED COOPERATIVE\nSOCIETYLTD\nAddress\nMADINAGUDA\nState\nTelangana\nState Code\n36\nGSTIN\n36AATAM7466Q1ZB\nSI.N\nDescription of\nHSN/\nQty\nUOM\nRate\nPeriod\nTaxable\nGST\n0\nGood/Service\nSAC\nValue\nSECURITY\n998522\n124\nDays\n39603.0\n1to31\n158,412.0\nSUPERVISOR\n0\nJanuary\n0\n2\nSECURITY\n998522\n1465\nDays\n27796.0\n1to31\n1.313.585\nGUARD\n0\nJanuary\n.00\nYou are advised to revise the noting in GST\nInvoice as under\nGST is payable by Registered Service\nRecipient on RCM basis vide Notification\nNo.29/2018-Central TaxRate\nTotal\n1471997.0\nInvoice Total\n1,471,997.00\nAmount In Words\nRupees Fourteen Lakh Seventy One Thousand Nine Hundred Ninety Seven Only\nRemarks\nCertified that the Particulars given above are true and correct\nFor\nSURABHI INTEGRATED SERVICES\nBank Details\nRATE\nAc Name:Surabhi Integrated Services\nBank Name:HDFC BANK\nBank A/cNo.:50200054972562\nIFSC CodeHDFC0000042\nSUA\nAuthorized Signatory\npaidon\n07326",
+    "file_status": "healthy file",
+    "created_at": {
+      "$date": "2026-04-30T11:44:33.796Z"
+    },
+    "gemini": {
+      "model": "gemini-2.5-flash",
+      "raw_text": "```json\n{\n  \"invoice_number\": \"SSS/25-26/00832\",\n  \"invoice_date\": \"31/01/2026\",\n  \"due_date\": null,\n  \"seller\": \"SURABHI INTEGRATED SERVICES\",\n  \"buyer\": \"M/s.MY HOME JEWEL FLAT OWNERS MAINTENANCE MUTUALLY AIDED COOPERATIVE SOCIETYLTD\",\n  \"address\": \"Flat No.104.H No.7-1-201 to 207.KVR Enclave,Adj. Gurudwara,AmeerpetHyderabad-500016\",\n  \"bank_name\": \"HDFC BANK\",\n  \"bank_address\": null,\n  \"account_number\": \"50200054972562\",\n  \"account_holder_name\": \"Surabhi Integrated Services\",\n  \"ifsc_code\": \"HDFC0000042\",\n  \"total_amount\": \"1471997.00\",\n  \"line_items\": [\n    {\n      \"hsn_number\": \"998522\",\n      \"service\": \"SECURITY SUPERVISOR\",\n      \"quantity\": \"124\",\n      \"price_per_unit\": \"1277.52\",\n      \"amount\": \"158412.0\",\n      \"tax_rate\": \"0\",\n      \"tax_amount\": \"0\",\n      \"amount_after_tax\": \"158412.0\",\n      \"additional_fields\": {\n        \"uom\": \"Days\",\n        \"period\": \"1to31 January\"\n      }\n    },\n    {\n      \"hsn_number\": \"998522\",\n      \"service\": \"SECURITY GUARD\",\n      \"quantity\": \"1465\",\n      \"price_per_unit\": \"896.65\",\n      \"amount\": \"1313585.00\",\n      \"tax_rate\": \"0\",\n      \"tax_amount\": \"0\",\n      \"amount_after_tax\": \"1313585.00\",\n      \"additional_fields\": {\n        \"uom\": \"Days\",\n        \"period\": \"1to31 January\"\n      }\n    }\n  ],\n  \"additional_fields\": {\n    \"seller_gstin\": \"36ABBFS8580K1ZM\",\n    \"seller_pan_no\": \"ABBFS8580K\",\n    \"seller_email\": \"info@surabhiintegrated.com\",\n    \"seller_website\": \"www.surabhiintegrated.com\",\n    \"seller_phone\": \"040-42037821\",\n    \"buyer_address\": \"MADINAGUDA\",\n    \"buyer_state\": \"Telangana\",\n    \"buyer_state_code\": \"36\",\n    \"buyer_gstin\": \"36AATAM7466Q1ZB\",\n    \"bill_for_the_month_of\": \"January-2026\",\n    \"place_of_supply\": \"HYDERABAD\",\n    \"invoice_total_in_words\": \"Rupees Fourteen Lakh Seventy One Thousand Nine Hundred Ninety Seven Only\",\n    \"rcm_note\": \"GST is payable by Registered Service Recipient on RCM basis vide Notification No.29/2018-Central TaxRate\",\n    \"remarks\": \"Certified that the Particulars given above are true and correct\"\n  }\n}\n```",
+      "json": {
+        "invoice_number": "SSS/25-26/00832",
+        "invoice_date": "31/01/2026",
+        "due_date": null,
+        "seller": "SURABHI INTEGRATED SERVICES",
+        "buyer": "M/s.MY HOME JEWEL FLAT OWNERS MAINTENANCE MUTUALLY AIDED COOPERATIVE SOCIETYLTD",
+        "address": "Flat No.104.H No.7-1-201 to 207.KVR Enclave,Adj. Gurudwara,AmeerpetHyderabad-500016",
+        "bank_name": "HDFC BANK",
+        "bank_address": null,
+        "account_number": "50200054972562",
+        "account_holder_name": "Surabhi Integrated Services",
+        "ifsc_code": "HDFC0000042",
+        "total_amount": "1471997.00",
+        "line_items": [
+          {
+            "hsn_number": "998522",
+            "service": "SECURITY SUPERVISOR",
+            "quantity": "124",
+            "price_per_unit": "1277.52",
+            "amount": "158412.0",
+            "tax_rate": "0",
+            "tax_amount": "0",
+            "amount_after_tax": "158412.0",
+            "additional_fields": {
+              "uom": "Days",
+              "period": "1to31 January"
+            }
+          },
+          {
+            "hsn_number": "998522",
+            "service": "SECURITY GUARD",
+            "quantity": "1465",
+            "price_per_unit": "896.65",
+            "amount": "1313585.00",
+            "tax_rate": "0",
+            "tax_amount": "0",
+            "amount_after_tax": "1313585.00",
+            "additional_fields": {
+              "uom": "Days",
+              "period": "1to31 January"
+            }
+          }
+        ],
+        "additional_fields": {
+          "seller_gstin": "36ABBFS8580K1ZM",
+          "seller_pan_no": "ABBFS8580K",
+          "seller_email": "info@surabhiintegrated.com",
+          "seller_website": "www.surabhiintegrated.com",
+          "seller_phone": "040-42037821",
+          "buyer_address": "MADINAGUDA",
+          "buyer_state": "Telangana",
+          "buyer_state_code": "36",
+          "buyer_gstin": "36AATAM7466Q1ZB",
+          "bill_for_the_month_of": "January-2026",
+          "place_of_supply": "HYDERABAD",
+          "invoice_total_in_words": "Rupees Fourteen Lakh Seventy One Thousand Nine Hundred Ninety Seven Only",
+          "rcm_note": "GST is payable by Registered Service Recipient on RCM basis vide Notification No.29/2018-Central TaxRate",
+          "remarks": "Certified that the Particulars given above are true and correct",
+          "deblurred_applied": false,
+          "HITL": false,
+          "status": 0,
+          "summary_total_amount": "1471997.00"
+        }
+      }
+    }
+  }

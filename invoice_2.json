@@ -1,0 +1,70 @@
+{
+    "_id": {
+      "$oid": "69f33effc7a80b896ff5b307"
+    },
+    "file_path": "D:\\IDP_2.0-INVOICE\\invoices_data\\uploads\\SD-6_20260430_170651.jpeg",
+    "uploaded_file_path": "D:\\IDP_2.0-INVOICE\\invoices_data\\uploads\\SD-6_20260430_170651.jpeg",
+    "ocr_text": "ORIGINAL FOR RECIPIENT\nTAX INVOICE\nJOHNSONUFTSPRIVATE LIMITED\nPLOTNO.B-31 PART)\nmE\nBALANAGAR,\nHYDERABAD 500037\nPhone040-230788812307888223078883\nState Code:36\nStteTELANGANA\nPANAAACI0838Q\nE-Mal\ninfo@johnsonliftstd.com\nRN89230560e1bad1db86297!96a253ddf03caa7e7cc14d401a66af4fc7f1416e2a\nweb\nwww.johnsonliftstd.com\nPlace of Supply /Delivery\nInvoice Details\nDetalls Of Customer (BTo\nMY HOME JEWELFLAT OWNERS MAINTENANCE MUTUALLY\nGST nvoiceNoTG01042506365\nMY HOMEJEWEL FLAT OWNERS MAINTENANCE MUTUALLY\nAIDED CSL\nDate\n06-JAN-2026\nAIDED CSL\nMY HOMEJEWEL\nSY NO.83.97.MY HOMEJEWELMADINAGUDA\nMADINAGUDA MIYAPUR\nSMNO.:\nSMA6990\nHYDERABAD,\nBranch Code\nTG01\nPIN500049\nHYDERABAD\nCust. Code\n123139\nRANGAREDDY\nRef No\nTG01INSER260106412\nCategory\nAMC-PSM\nPIN500049\nCONT.PERSONNARESH/B498058713\nGSTIN No.\n36AATAM7466Q1ZB\nGSTIN NO.\nState Code36StateTELANGANA\nTax Payable under Reverse charge :NO\nState Code36\nSEEAANNA\nCust.WO/PO\nCMCNO.MHUADWA/JLPL/003/2025-2026Dt01/07/25\nHSN/SAC\nQty\nBasic value\nSGST\nCGST\nS.No\nDescription\n998718\n76\n2046380.00\n18417420\n9%\n184174.20\nTowards the Charges for Servicing and Maintenance of the 76\n2046380.00\n184174.20\n184174.20\nCP:01/07/2025-30/06/20261P:01/01/2026-31/03/2026\nTotal Invoice Value\n2414728.40\nAmount in words: Indian RupeesTWENTY FOUR LAKH FOURTEEN THOUSAND SEVENI\nDRED TWENTY EIGHT AND PAISE FORTY ONLY\n1.Interest@ 18% per annum will be charged on all invoices not paid within 30days from the date of invoice.\n2.A Payments are to be made in favour of JOHNsON LIFTS PRIVATE uMITEDby Crossed Account\nFor Johnson Lifts Private Limited\nPayee Cheque/DraftSubject to Realization.\n3.Cash Payment Wi Not be Accepted.\nM\n4.Payment advice to be sent to Email: info@johnsonliftsltd.com\nPADMA\n5.This is ac\nivoice.No manual siznature required\nNABAN\nAuthorised Signatory\nAddress of Principa place of BusinessPlot No.B-31 Part)Tie BalanagarHyderabad 500037\nBankdetails:KOTAK MAHINDRA BANK LTD.ANNA NAGAR BRANCH IFSCKBK0008488 A/C NOJLIFTSTG01245017\nE.&O.E.\nBSinoln\n326\n5142",
+    "file_status": "healthy file",
+    "created_at": {
+      "$date": "2026-04-30T11:37:35.779Z"
+    },
+    "gemini": {
+      "model": "gemini-2.5-flash",
+      "raw_text": "```json\n{\n  \"invoice_number\": \"TG01042506365\",\n  \"invoice_date\": \"06/01/2026\",\n  \"due_date\": \"05/02/2026\",\n  \"seller\": \"JOHNSON LIFTS PRIVATE LIMITED\",\n  \"buyer\": \"MY HOME JEWEL FLAT OWNERS MAINTENANCE MUTUALLY AIDED CSL\",\n  \"address\": \"Plot No.B-31 Part), Balanagar, Hyderabad 500037, Telangana\",\n  \"bank_name\": \"KOTAK MAHINDRA BANK LTD.\",\n  \"bank_address\": \"ANNA NAGAR BRANCH\",\n  \"account_number\": \"JLIFTSTG01245017\",\n  \"account_holder_name\": \"JOHNSON LIFTS PRIVATE LIMITED\",\n  \"ifsc_code\": \"KBK0008488\",\n  \"total_amount\": \"2414728.40\",\n  \"line_items\": [\n    {\n      \"hsn_number\": \"998718\",\n      \"service\": \"Servicing and Maintenance\",\n      \"quantity\": \"76\",\n      \"price_per_unit\": \"26926.05\",\n      \"amount\": \"2046380.00\",\n      \"tax_rate\": \"18\",\n      \"tax_amount\": \"368348.40\",\n      \"amount_after_tax\": \"2414728.40\"\n    }\n  ],\n  \"additional_fields\": {\n    \"seller_phone\": \"040-230788812307888223078883\",\n    \"seller_email\": \"info@johnsonliftstd.com\",\n    \"seller_website\": \"www.johnsonliftstd.com\",\n    \"seller_pan\": \"AAACI0838Q\",\n    \"seller_state_code\": \"36\",\n    \"seller_state\": \"TELANGANA\",\n    \"buyer_gstin\": \"36AATAM7466Q1ZB\",\n    \"buyer_customer_code\": \"123139\",\n    \"buyer_ref_no\": \"TG01INSER260106412\",\n    \"buyer_category\": \"AMC-PSM\",\n    \"buyer_contact_person\": \"NARESH/B498058713\",\n    \"buyer_wo_po\": \"CMCNO.MHUADWA/JLPL/003/2025-2026Dt01/07/25\",\n    \"buyer_address\": \"SY NO.83.97, MY HOME JEWEL, MADINAGUDA, MIYAPUR, HYDERABAD, RANGAREDDY, PIN 500049, TELANGANA\",\n    \"place_of_supply_delivery_address\": \"MY HOME JEWEL FLAT OWNERS MAINTENANCE MUTUALLY AIDED CSL MY HOMEJEWEL SY NO.83.97.MY HOMEJEWELMADINAGUDA MADINAGUDA MIYAPUR HYDERABAD, PIN500049 HYDERABAD RANGAREDDY PIN500049\",\n    \"tax_payable_under_reverse_charge\": \"NO\",\n    \"amount_in_words\": \"Indian RupeesTWENTY FOUR LAKH FOURTEEN THOUSAND SEVENI DRED TWENTY EIGHT AND PAISE FORTY ONLY\",\n    \"interest_terms\": \"Interest@ 18% per annum will be charged on all invoices not paid within 30days from the date of invoice.\",\n    \"payment_terms_1\": \"All Payments are to be made in favour of JOHNSON LIFTS PRIVATE LIMITED by Crossed Account Payee Cheque/Draft Subject to Realization.\",\n    \"payment_terms_2\": \"Cash Payment Will Not be Accepted.\",\n    \"payment_terms_3\": \"Payment advice to be sent to Email: info@johnsonliftsltd.com\",\n    \"service_contract_period\": \"01/07/2025-30/06/2026\",\n    \"service_invoice_payment_period\": \"01/01/2026-31/03/2026\"\n  }\n}\n```",
+      "json": {
+        "invoice_number": "TG01042506365",
+        "invoice_date": "06/01/2026",
+        "due_date": "05/02/2026",
+        "seller": "JOHNSON LIFTS PRIVATE LIMITED",
+        "buyer": "MY HOME JEWEL FLAT OWNERS MAINTENANCE MUTUALLY AIDED CSL",
+        "address": "Plot No.B-31 Part), Balanagar, Hyderabad 500037, Telangana",
+        "bank_name": "KOTAK MAHINDRA BANK LTD.",
+        "bank_address": "ANNA NAGAR BRANCH",
+        "account_number": "JLIFTSTG01245017",
+        "account_holder_name": "JOHNSON LIFTS PRIVATE LIMITED",
+        "ifsc_code": "KBK0008488",
+        "total_amount": "2414728.40",
+        "line_items": [
+          {
+            "hsn_number": "998718",
+            "service": "Servicing and Maintenance",
+            "quantity": "76",
+            "price_per_unit": "26926.05",
+            "amount": "2046380.00",
+            "tax_rate": "18",
+            "tax_amount": "368348.40",
+            "amount_after_tax": "2414728.40"
+          }
+        ],
+        "additional_fields": {
+          "seller_phone": "040-230788812307888223078883",
+          "seller_email": "info@johnsonliftstd.com",
+          "seller_website": "www.johnsonliftstd.com",
+          "seller_pan": "AAACI0838Q",
+          "seller_state_code": "36",
+          "seller_state": "TELANGANA",
+          "buyer_gstin": "36AATAM7466Q1ZB",
+          "buyer_customer_code": "123139",
+          "buyer_ref_no": "TG01INSER260106412",
+          "buyer_category": "AMC-PSM",
+          "buyer_contact_person": "NARESH/B498058713",
+          "buyer_wo_po": "CMCNO.MHUADWA/JLPL/003/2025-2026Dt01/07/25",
+          "buyer_address": "SY NO.83.97, MY HOME JEWEL, MADINAGUDA, MIYAPUR, HYDERABAD, RANGAREDDY, PIN 500049, TELANGANA",
+          "place_of_supply_delivery_address": "MY HOME JEWEL FLAT OWNERS MAINTENANCE MUTUALLY AIDED CSL MY HOMEJEWEL SY NO.83.97.MY HOMEJEWELMADINAGUDA MADINAGUDA MIYAPUR HYDERABAD, PIN500049 HYDERABAD RANGAREDDY PIN500049",
+          "tax_payable_under_reverse_charge": "NO",
+          "amount_in_words": "Indian RupeesTWENTY FOUR LAKH FOURTEEN THOUSAND SEVENI DRED TWENTY EIGHT AND PAISE FORTY ONLY",
+          "interest_terms": "Interest@ 18% per annum will be charged on all invoices not paid within 30days from the date of invoice.",
+          "payment_terms_1": "All Payments are to be made in favour of JOHNSON LIFTS PRIVATE LIMITED by Crossed Account Payee Cheque/Draft Subject to Realization.",
+          "payment_terms_2": "Cash Payment Will Not be Accepted.",
+          "payment_terms_3": "Payment advice to be sent to Email: info@johnsonliftsltd.com",
+          "service_contract_period": "01/07/2025-30/06/2026",
+          "service_invoice_payment_period": "01/01/2026-31/03/2026",
+          "deblurred_applied": false,
+          "HITL": false,
+          "status": 0,
+          "summary_total_amount": "2414728.40"
+        }
+      }
+    }
+  }
