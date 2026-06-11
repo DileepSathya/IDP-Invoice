@@ -1,72 +1,53 @@
-#!/usr/bin/env python3
 """
-Migration script to update uploaded_file_path in MongoDB to use the new UPLOADS_DIR.
+Migration script: update uploaded_file_path in MongoDB when invoice files moved folders.
+
+Maps legacy paths (uploads/, raw/, error_files/) to invoices_data/Completed, ERROR, etc.
 """
+
+from __future__ import annotations
+
 import os
 from pathlib import Path
 
 from dotenv import load_dotenv
 from pymongo import MongoClient
 
-# Load .env from project root (one level above backend/)
-ROOT_DIR = Path(__file__).resolve().parent.parent
-load_dotenv(ROOT_DIR / ".env")
+from backend.invoice_files import COMPLETED_DIR, ERROR_DIR, HITL_PENDING_DIR, resolve_invoice_file
 
-# Get configuration
+load_dotenv()
+
 MONGO_URI = os.environ.get("MONGO_URI", "mongodb://localhost:27017")
 MONGO_DB = os.environ.get("MONGO_DB", "IDP")
 MONGO_INVOICES_COLLECTION = os.environ.get("MONGO_INVOICES_COLLECTION", "invoices")
-UPLOADS_DIR = Path(os.environ.get("UPLOADS_DIR", "./invoices_data/uploads")).expanduser().resolve()
 
-print(f"Connecting to MongoDB: {MONGO_URI}")
-print(f"Database: {MONGO_DB}")
-print(f"Collection: {MONGO_INVOICES_COLLECTION}")
-print(f"New UPLOADS_DIR: {UPLOADS_DIR}")
-print()
+client = MongoClient(MONGO_URI)
+coll = client[MONGO_DB][MONGO_INVOICES_COLLECTION]
 
-try:
-    client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
-    db = client[MONGO_DB]
-    coll = db[MONGO_INVOICES_COLLECTION]
+print(f"MongoDB: {MONGO_URI} / {MONGO_DB}.{MONGO_INVOICES_COLLECTION}")
+print(f"Completed dir: {COMPLETED_DIR}")
+print(f"HITL pending dir: {HITL_PENDING_DIR}")
+print(f"ERROR dir: {ERROR_DIR}")
 
-    # Find all documents with uploaded_file_path
-    docs = list(coll.find({"uploaded_file_path": {"$exists": True, "$ne": None}}))
+updated = 0
+missing = 0
 
-    if not docs:
-        print("No documents with uploaded_file_path found.")
-    else:
-        print(f"Found {len(docs)} documents with uploaded_file_path.\n")
+for doc in coll.find({}, {"uploaded_file_path": 1, "file_path": 1}):
+    for field in ("uploaded_file_path", "file_path"):
+        raw = doc.get(field)
+        if not raw:
+            continue
+        path = Path(raw)
+        if path.is_file():
+            continue
+        resolved = resolve_invoice_file(path.name)
+        if resolved is None:
+            missing += 1
+            print(f"[MISSING] {doc.get('_id')} {field}={raw}")
+            continue
+        new_path = str(resolved)
+        if new_path != raw:
+            coll.update_one({"_id": doc["_id"]}, {"$set": {field: new_path}})
+            updated += 1
+            print(f"[UPDATED] {doc.get('_id')} {field} -> {new_path}")
 
-        updated_count = 0
-        for doc in docs:
-            old_path = doc.get("uploaded_file_path")
-
-            # Extract just the filename from the old path
-            filename = Path(old_path).name
-
-            # Create new full path
-            new_path = str(UPLOADS_DIR / filename)
-
-            if old_path != new_path:
-                print(f"Updating: {filename}")
-                print(f"  Old: {old_path}")
-                print(f"  New: {new_path}")
-
-                # Update the document
-                coll.update_one(
-                    {"_id": doc["_id"]},
-                    {"$set": {"uploaded_file_path": new_path}},
-                )
-                updated_count += 1
-                print()
-
-        print(f"\nSuccessfully updated {updated_count} documents.")
-
-    client.close()
-    print("Migration complete!")
-
-except Exception as e:
-    print(f"Error: {e}")
-    import traceback
-
-    traceback.print_exc()
+print(f"Done. updated={updated} missing_on_disk={missing}")

@@ -16,10 +16,15 @@ if errorlevel 1 (
 REM ---- MongoDB best-effort check ----
 call :check_mongo
 
-REM ---- Ensure ./raw exists ----
-if not exist "raw" (
-  echo Creating folder .\raw ...
-  mkdir "raw" >nul 2>&1
+REM ---- Ensure invoice lifecycle folders exist ----
+for %%D in (
+  "invoices_data\to_be_processed"
+  "invoices_data\_api_staging"
+  "invoices_data\HITL_pending"
+  "invoices_data\ERROR"
+  "invoices_data\Completed"
+) do (
+  if not exist %%D mkdir %%D >nul 2>&1
 )
 
 REM ---- Ensure venv ----
@@ -98,7 +103,7 @@ start "watcher" cmd /k ""%cd%\%VENV_PY%" "%cd%\backend\agents\watch_raw.py""
 
 echo(
 echo [OK] Watcher window started.
-echo Drop files into: %cd%\raw
+echo Drop files into: %cd%\invoices_data\to_be_processed
 echo(
 echo Press any key to close this window.
 pause >nul

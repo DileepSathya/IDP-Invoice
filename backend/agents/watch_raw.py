@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 import os
 import queue
-import shutil
 import sys
 import threading
 import time
@@ -12,7 +11,6 @@ from pathlib import Path
 from uuid import uuid4
 
 from bson import ObjectId
-from dotenv import load_dotenv
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
@@ -23,86 +21,17 @@ if str(REPO_ROOT) not in sys.path:
 
 from backend.agents.ocr import ALLOWED_EXTS, process_file  # noqa: E402
 from backend.app_logging import configure_logging  # noqa: E402
+from backend.app_paths import load_app_dotenv  # noqa: E402
+from backend.hitl_status import pipeline_lifecycle_status  # noqa: E402
+from backend.invoice_files import (  # noqa: E402
+    TO_BE_PROCESSED_DIR,
+    ensure_invoice_data_layout,
+    finalize_invoice_file,
+)
 
 
-load_dotenv()
+load_app_dotenv()
 logger = logging.getLogger(__name__)
-RAW_DIR = Path(os.environ.get("RAW_DIR", "./invoices_data/raw")).expanduser().resolve()
-UPLOADS_DIR = Path(os.environ.get("UPLOADS_DIR", "./invoices_data/uploads")).expanduser().resolve()
-ERROR_FILES_DIR = Path(os.environ.get("ERROR_FILES_DIR", "./invoices_data/error_files")).expanduser().resolve()
-ERROR_FILES_DIR.mkdir(parents=True, exist_ok=True)
-
-
-def _to_float(value):
-    if value is None:
-        return None
-    try:
-        return float(str(value).replace(",", "").strip())
-    except Exception:
-        return None
-
-
-def _to_bool(value) -> bool:
-    if isinstance(value, bool):
-        return value
-    if value is None:
-        return False
-    if isinstance(value, (int, float)):
-        return bool(value)
-    text = str(value).strip().lower()
-    return text in {"1", "true", "yes", "y", "hit", "hitl"}
-
-
-def _sum_line_item_amounts_after_tax(line_items):
-    if not isinstance(line_items, list) or len(line_items) == 0:
-        return None
-    running = 0.0
-    seen = False
-    for li in line_items:
-        if not isinstance(li, dict):
-            continue
-        n = _to_float(li.get("amount_after_tax"))
-        if n is None:
-            continue
-        running += n
-        seen = True
-    return running if seen else None
-
-
-def _calculate_summary_total_amount(gemini_json: dict) -> float | None:
-    additional_fields = gemini_json.get("additional_fields") or {}
-    line_items = gemini_json.get("line_items") or []
-    amount_after_tax_sum = _sum_line_item_amounts_after_tax(line_items)
-    if amount_after_tax_sum is not None:
-        return amount_after_tax_sum
-    return _to_float(gemini_json.get("total_amount") or gemini_json.get("grand_total") or gemini_json.get("amount"))
-
-
-def _calculate_hitl_status(gemini_json: dict) -> tuple[bool, int]:
-    additional_fields = gemini_json.get("additional_fields") or {}
-    if not isinstance(additional_fields, dict):
-        additional_fields = {}
-        gemini_json["additional_fields"] = additional_fields
-
-    deblurred_applied = _to_bool(additional_fields.get("deblurred_applied"))
-    main_total = _to_float(gemini_json.get("total_amount") or gemini_json.get("grand_total") or gemini_json.get("amount"))
-    summary_total = _to_float(additional_fields.get("summary_total_amount"))
-    if summary_total is None:
-        summary_total = _calculate_summary_total_amount(gemini_json)
-        if summary_total is not None:
-            additional_fields["summary_total_amount"] = f"{summary_total:.2f}"
-
-    mismatch = False
-    if main_total is None and summary_total is None:
-        mismatch = False
-    elif main_total is None or summary_total is None:
-        mismatch = True
-    else:
-        mismatch = abs(main_total - summary_total) > 0.01
-
-    hitl = mismatch or deblurred_applied
-    status = 1 if hitl else 0
-    return hitl, status
 
 
 def _is_allowed(path: Path) -> bool:
@@ -158,8 +87,7 @@ class _EnqueueHandler(FileSystemEventHandler):
         p = Path(event.src_path)
         if _is_allowed(p):
             logger.info(
-                "[Raw folder watcher] A new file appeared under the watched raw folder; "
-                "it will be processed after the file finishes copying: %s",
+                "[Folder watcher] New file in to_be_processed; queued after copy completes: %s",
                 p,
             )
             self.q.put(p)
@@ -170,8 +98,7 @@ class _EnqueueHandler(FileSystemEventHandler):
         p = Path(event.dest_path)
         if _is_allowed(p):
             logger.info(
-                "[Raw folder watcher] A file was moved into the watched raw folder; "
-                "it will be processed after the file is ready: %s",
+                "[Folder watcher] File moved into to_be_processed; queued: %s",
                 p,
             )
             self.q.put(p)
@@ -182,30 +109,66 @@ def _worker(q: "queue.Queue[Path]") -> None:
         path = q.get()
         try:
             configure_logging()
+            if not path.is_file():
+                logger.info(
+                    "[Folder watcher → worker] Skipping %s — file no longer present "
+                    "(likely moved or removed by another process).",
+                    path,
+                )
+                continue
             logger.info(
-                "[Raw folder watcher → worker] Picked file from queue; waiting until the file "
-                "is fully written and stable before OCR: %s",
+                "[Folder watcher → worker] Waiting for stable file before OCR: %s",
                 path,
             )
             _wait_for_complete_write(path)
+            if not path.is_file():
+                logger.info(
+                    "[Folder watcher → worker] Skipping %s — removed before OCR could start.",
+                    path,
+                )
+                continue
             logger.info(
-                "[Raw folder watcher → worker] File is stable. Starting OCR and data extraction "
-                "(same pipeline as HTTP /upload): %s",
+                "[Folder watcher → worker] Starting OCR + Gemini pipeline: %s",
                 path,
             )
             r = process_file(str(path))
 
-            UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            new_name = f"{path.stem}_{ts}{path.suffix.lower()}"
-            uploaded_path = (UPLOADS_DIR / new_name).resolve()
-            logger.info(
-                "[Raw folder watcher → uploads] Saving a dated copy of the original file under "
-                "the uploads folder: %s → %s",
-                path,
-                uploaded_path,
-            )
-            shutil.copy2(str(path), str(uploaded_path))
+            gemini_json = r.gemini_json or {}
+            if not isinstance(gemini_json, dict):
+                gemini_json = {}
+
+            invoice_number = gemini_json.get("invoice_number") or gemini_json.get("invoice")
+            invoice_number_norm = str(invoice_number).strip() if invoice_number is not None else ""
+            file_status = "error" if not invoice_number_norm else "healthy file"
+
+            file_received_time = datetime.utcnow()
+            try:
+                file_received_time = datetime.utcfromtimestamp(path.stat().st_ctime)
+            except Exception:
+                pass
+
+            if not path.is_file():
+                logger.info(
+                    "[Folder watcher → worker] Skipping finalize for %s — file already moved.",
+                    path,
+                )
+                continue
+
+            hitl_value, status_value = pipeline_lifecycle_status(gemini_json, file_status=file_status)
+            try:
+                final_path = finalize_invoice_file(
+                    path,
+                    file_status=file_status,
+                    status=status_value,
+                    pipeline_failed=False,
+                )
+            except FileNotFoundError:
+                logger.info(
+                    "[Folder watcher → worker] File vanished before move (%s) — "
+                    "another process likely finished it.",
+                    path,
+                )
+                continue
 
             try:
                 from backend.agents.database import (
@@ -214,51 +177,27 @@ def _worker(q: "queue.Queue[Path]") -> None:
                     store_invoice_result,
                 )
 
-                gemini_json = r.gemini_json or {}
-                invoice_number = (
-                    gemini_json.get("invoice_number") or gemini_json.get("invoice")
-                    if isinstance(gemini_json, dict)
-                    else None
-                )
-                invoice_number_norm = str(invoice_number).strip() if invoice_number is not None else ""
-                file_status = "error" if not invoice_number_norm else "healthy file"
-
-                if file_status == "error":
-                    ERROR_FILES_DIR.mkdir(parents=True, exist_ok=True)
-                    error_path = ERROR_FILES_DIR / uploaded_path.name
-                    logger.warning(
-                        "[Raw folder watcher → error_files] Invoice number missing; copying upload "
-                        "to error_files for review: %s",
-                        error_path,
-                    )
-                    shutil.copy2(str(uploaded_path), str(error_path))
-
                 logger.info(
-                    "[Raw folder watcher → MongoDB] Storing OCR text and Gemini extraction in the "
-                    "database (collection configured by MONGO_INVOICES_COLLECTION).",
+                    "[Folder watcher → MongoDB] Storing extraction (collection from MONGO_INVOICES_COLLECTION).",
                 )
                 inserted_id = store_invoice_result(
-                    file_path=r.file_path,
-                    uploaded_file_path=str(uploaded_path),
+                    file_path=str(final_path),
+                    uploaded_file_path=str(final_path),
                     ocr_text=r.ocr_text,
                     gemini_model=r.gemini_model or (os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"),
-                    gemini_json=r.gemini_json,
+                    gemini_json=gemini_json,
                     gemini_raw_text=r.gemini_raw_text,
                     file_status=file_status,
                 )
                 logger.info(
-                    "[Raw folder watcher → MongoDB] Insert completed. Document id: %s",
+                    "[Folder watcher → MongoDB] Insert completed. Document id: %s | file=%s",
                     inserted_id,
+                    final_path,
                 )
                 db_insert_time = datetime.utcnow()
-                file_received_time = datetime.utcnow()
-                try:
-                    file_received_time = datetime.utcfromtimestamp(path.stat().st_ctime)
-                except Exception:
-                    pass
                 file_size = 0
                 try:
-                    file_size = int(path.stat().st_size)
+                    file_size = int(final_path.stat().st_size)
                 except Exception:
                     pass
                 record_pipeline_telemetry(
@@ -266,9 +205,9 @@ def _worker(q: "queue.Queue[Path]") -> None:
                         "run_id": str(uuid4()),
                         "source": "watch_raw",
                         "file_id": inserted_id,
-                        "file_name": path.name,
+                        "file_name": final_path.name,
                         "file_size": file_size,
-                        "file_type": path.suffix.lower().lstrip("."),
+                        "file_type": final_path.suffix.lower().lstrip("."),
                         "file_received_time": file_received_time,
                         "preprocessing_start_time": r.preprocessing_start_time,
                         "preprocessing_end_time": r.preprocessing_end_time,
@@ -290,44 +229,38 @@ def _worker(q: "queue.Queue[Path]") -> None:
                         "error_message": None,
                     }
                 )
-                # Sync HITL lifecycle fields immediately so telemetry snapshots are accurate.
                 try:
                     coll = get_invoices_collection()
-                    hitl, status = _calculate_hitl_status(gemini_json if isinstance(gemini_json, dict) else {})
                     coll.update_one(
                         {"_id": ObjectId(inserted_id)},
                         {
                             "$set": {
-                                "gemini.json.additional_fields.HITL": hitl,
+                                "gemini.json.additional_fields.HITL": hitl_value,
                                 "gemini.json.additional_fields.human_processed": False,
                                 "gemini.json.additional_fields.ever_hitl_true": False,
-                                "gemini.json.additional_fields.status": status,
+                                "gemini.json.additional_fields.status": status_value,
                             }
                         },
                     )
                 except Exception as e:
                     logger.warning(
-                        "[Raw folder watcher → MongoDB] Could not sync HITL/status immediately for %s: %s",
+                        "[Folder watcher → MongoDB] Could not sync HITL/status for %s: %s",
                         inserted_id,
                         e,
                     )
             except Exception as e:
                 logger.exception(
-                    "[Raw folder watcher → MongoDB] Failed to store invoice for %s: %s",
-                    path,
+                    "[Folder watcher → MongoDB] Failed to store invoice for %s: %s",
+                    final_path,
                     e,
                 )
                 try:
                     from backend.agents.database import record_pipeline_telemetry
 
                     file_received_time = datetime.utcnow()
-                    try:
-                        file_received_time = datetime.utcfromtimestamp(path.stat().st_ctime)
-                    except Exception:
-                        pass
                     file_size = 0
                     try:
-                        file_size = int(path.stat().st_size)
+                        file_size = int(final_path.stat().st_size)
                     except Exception:
                         pass
                     record_pipeline_telemetry(
@@ -335,70 +268,65 @@ def _worker(q: "queue.Queue[Path]") -> None:
                             "run_id": str(uuid4()),
                             "source": "watch_raw",
                             "file_id": None,
-                            "file_name": path.name,
+                            "file_name": final_path.name,
                             "file_size": file_size,
-                            "file_type": path.suffix.lower().lstrip("."),
+                            "file_type": final_path.suffix.lower().lstrip("."),
                             "file_received_time": file_received_time,
-                            "preprocessing_start_time": None,
-                            "preprocessing_end_time": None,
-                            "ocr_start_time": None,
-                            "ocr_end_time": None,
-                            "gemini_start_time": None,
-                            "gemini_end_time": None,
-                            "db_insert_time": None,
-                            "preprocessing_latency": None,
-                            "ocr_latency": None,
-                            "gemini_latency": None,
-                            "gemini_prompt_tokens": None,
-                            "gemini_output_tokens": None,
-                            "gemini_total_tokens": None,
-                            "gemini_model": os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash",
-                            "total_pipeline_latency": (datetime.utcnow() - file_received_time).total_seconds(),
                             "status": "error",
                             "error_stage": "db",
                             "error_message": str(e),
+                            "total_pipeline_latency": (datetime.utcnow() - file_received_time).total_seconds(),
                         }
                     )
                 except Exception:
                     pass
 
             logger.info(
-                "[Raw folder watcher] Pipeline finished successfully. Source file: %s | "
-                "Upload copy: %s",
-                r.file_path,
-                uploaded_path,
+                "[Folder watcher] Pipeline finished. Final location: %s (status=%s, HITL=%s)",
+                final_path,
+                status_value,
+                hitl_value,
             )
-            if logger.isEnabledFor(logging.DEBUG):
-                if r.gemini_json is not None:
-                    logger.debug("Gemini JSON: %s", r.gemini_json)
-                else:
-                    logger.debug("Gemini raw text (no JSON): %s", r.gemini_raw_text)
+            if logger.isEnabledFor(logging.DEBUG) and r.gemini_json is not None:
+                logger.debug("Gemini JSON: %s", r.gemini_json)
         except Exception as e:
             logger.exception(
-                "[Raw folder watcher] Pipeline failed for file %s: %s",
+                "[Folder watcher] Pipeline failed for file %s: %s",
                 path,
                 e,
             )
+            if path.is_file():
+                try:
+                    finalize_invoice_file(
+                        path,
+                        file_status="error",
+                        status=0,
+                        pipeline_failed=True,
+                    )
+                except Exception as move_err:
+                    logger.warning(
+                        "[Folder watcher] Could not move failed file to ERROR: %s",
+                        move_err,
+                    )
         finally:
             q.task_done()
 
 
 def main() -> None:
     configure_logging()
-    RAW_DIR.mkdir(parents=True, exist_ok=True)
+    ensure_invoice_data_layout()
 
     q: "queue.Queue[Path]" = queue.Queue()
     threading.Thread(target=_worker, args=(q,), daemon=True).start()
 
     handler = _EnqueueHandler(q)
     observer = Observer()
-    observer.schedule(handler, str(RAW_DIR), recursive=False)
+    observer.schedule(handler, str(TO_BE_PROCESSED_DIR), recursive=False)
     observer.start()
 
     logger.info(
-        "[Raw folder watcher] Service started. Watching directory: %s | "
-        "Allowed file types: %s | Processing is sequential (one file at a time).",
-        RAW_DIR,
+        "[Folder watcher] Watching to_be_processed: %s | Allowed types: %s | Sequential processing.",
+        TO_BE_PROCESSED_DIR,
         sorted(ALLOWED_EXTS),
     )
 
@@ -412,4 +340,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

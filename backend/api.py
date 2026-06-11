@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
 import hmac
 import hashlib
 import threading
@@ -17,12 +16,27 @@ from urllib import request as urllib_request
 from urllib import error as urllib_error
 
 from bson import ObjectId
-from dotenv import load_dotenv
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from starlette.types import ASGIApp, Receive, Scope, Send
 
+from backend.app_paths import app_dir, frontend_dist_dir, load_app_dotenv
+from backend.hitl_status import (
+    calculate_hitl_flag as _calculate_hitl_flag,
+    calculate_status_from_hitl as _calculate_status_from_hitl,
+    pipeline_lifecycle_status,
+    to_bool as _to_bool,
+)
+from backend.invoice_files import (
+    ensure_invoice_data_layout,
+    finalize_invoice_file,
+    relocate_after_hitl_processed,
+    resolve_invoice_file,
+    staging_path_for_upload,
+)
 from backend.agents.rag_chatbot import answer_question
 from backend.agents.database import (
     get_api_clients_collection,
@@ -41,7 +55,7 @@ from datetime import datetime, date
 logger = logging.getLogger(__name__)
 user_audit_logger = logging.getLogger("user_audit")
 
-_USER_LOG_PATH = Path(__file__).resolve().parent.parent / "logs" / "user.log"
+_USER_LOG_PATH = app_dir() / "logs" / "user.log"
 if not user_audit_logger.handlers:
     _USER_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     _user_fh = logging.FileHandler(_USER_LOG_PATH, encoding="utf-8")
@@ -167,17 +181,10 @@ def _collect_telemetry_overview_counts() -> TelemetryOverviewResponse:
     )
 
 
-load_dotenv()
+load_app_dotenv()
 configure_logging()
 
-RAW_DIR = Path(os.environ.get("RAW_DIR", "./raw")).expanduser().resolve()
-RAW_DIR.mkdir(parents=True, exist_ok=True)
-
-UPLOADS_DIR = Path(os.environ.get("UPLOADS_DIR", "./invoices_data/uploads")).expanduser().resolve()
-UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
-
-ERROR_FILES_DIR = Path(os.environ.get("ERROR_FILES_DIR", "./invoices_data/error_files")).expanduser().resolve()
-ERROR_FILES_DIR.mkdir(parents=True, exist_ok=True)
+ensure_invoice_data_layout()
 
 API_KEY_HEADER = "x-api-key"
 MAX_UPLOAD_BYTES = int(os.environ.get("API_MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
@@ -573,15 +580,23 @@ def _process_job(
         job_id,
         file_path,
     )
+    staging_path = Path(file_path)
     try:
         ocr_result = process_file(file_path)
         gemini_json_norm: dict[str, Any] = dict(ocr_result.gemini_json or {})
         invoice_number = gemini_json_norm.get("invoice_number") or gemini_json_norm.get("invoice")
         invoice_number_norm = str(invoice_number).strip() if invoice_number is not None else ""
         file_status = "error" if not invoice_number_norm else "healthy file"
+        _, status_value = pipeline_lifecycle_status(gemini_json_norm, file_status=file_status)
+        final_path = finalize_invoice_file(
+            staging_path,
+            file_status=file_status,
+            status=status_value,
+            pipeline_failed=False,
+        )
         inserted_id = store_invoice_result(
-            file_path=ocr_result.file_path,
-            uploaded_file_path=file_path,
+            file_path=str(final_path),
+            uploaded_file_path=str(final_path),
             ocr_text=ocr_result.ocr_text,
             gemini_model=ocr_result.gemini_model or (os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"),
             gemini_json=gemini_json_norm,
@@ -592,6 +607,25 @@ def _process_job(
             {"_id": ObjectId(inserted_id)},
             {"$set": {"tenant_id": tenant_id, "job_id": job_id}},
         )
+        try:
+            hitl_value, _ = _sync_hitl_and_status(
+                invoices,
+                ObjectId(inserted_id),
+                gemini_json_norm,
+                uploaded_file_path=str(final_path),
+            )
+            invoices.update_one(
+                {"_id": ObjectId(inserted_id)},
+                {
+                    "$set": {
+                        "gemini.json.additional_fields.HITL": hitl_value,
+                        "gemini.json.additional_fields.human_processed": False,
+                        "gemini.json.additional_fields.status": status_value,
+                    }
+                },
+            )
+        except Exception:
+            pass
         completed_at = datetime.utcnow()
         record_pipeline_telemetry(
             {
@@ -599,7 +633,7 @@ def _process_job(
                 "source": "api_v1",
                 "file_id": inserted_id,
                 "tenant_id": tenant_id,
-                "file_name": Path(file_path).name,
+                "file_name": final_path.name,
                 "file_size": file_size,
                 "file_type": file_ext,
                 "file_received_time": file_received_time,
@@ -651,13 +685,23 @@ def _process_job(
             error_message=None,
         )
     except Exception as e:
+        if staging_path.is_file():
+            try:
+                finalize_invoice_file(
+                    staging_path,
+                    file_status="error",
+                    status=0,
+                    pipeline_failed=True,
+                )
+            except Exception:
+                pass
         record_pipeline_telemetry(
             {
                 "run_id": job_id,
                 "source": "api_v1",
                 "file_id": None,
                 "tenant_id": tenant_id,
-                "file_name": Path(file_path).name,
+                "file_name": staging_path.name,
                 "file_size": file_size,
                 "file_type": file_ext,
                 "file_received_time": file_received_time,
@@ -966,63 +1010,13 @@ def _calculate_summary_total_amount(gemini_json: dict[str, Any]) -> Optional[flo
     return base_amount + sgst_amount + cgst_amount + igst_amount + round_off
 
 
-def _to_bool(value: Any) -> bool:
-    if isinstance(value, bool):
-        return value
-    if value is None:
-        return False
-    if isinstance(value, (int, float)):
-        return bool(value)
-    text = str(value).strip().lower()
-    return text in {"1", "true", "yes", "y", "hit", "hitl"}
-
-
-def _calculate_hitl_flag(gemini_json: dict[str, Any]) -> bool:
-    additional_fields = gemini_json.get("additional_fields") or {}
-    if not isinstance(additional_fields, dict):
-        additional_fields = {}
-
-    # Human approval can override automated HITL calculation.
-    human_approved = _to_bool(additional_fields.get("human_approved"))
-    if human_approved:
-        return False
-
-    deblurred_applied = _to_bool(additional_fields.get("deblurred_applied"))
-
-    main_total = _to_float(
-        gemini_json.get("total_amount")
-        or gemini_json.get("grand_total")
-        or gemini_json.get("amount")
-    )
-    summary_total_amount = _to_float(additional_fields.get("summary_total_amount"))
-
-    mismatch = False
-    if main_total is None and summary_total_amount is None:
-        mismatch = False
-    elif main_total is None or summary_total_amount is None:
-        # If one exists and the other is missing/unparseable, treat it as mismatch.
-        mismatch = True
-    else:
-        mismatch = abs(main_total - summary_total_amount) > 0.01
-
-    return mismatch or deblurred_applied
-
-
-def _calculate_status_from_hitl(*, hitl_value: bool, human_processed: bool) -> int:
-    # 0: System processed, 1: HITL process pending, 2: HITL processed
-    if human_processed:
-        return 2
-    if hitl_value:
-        return 1
-    return 0
-
-
 def _sync_hitl_and_status(
     coll: Any,
     oid: ObjectId,
     gemini_json: dict[str, Any],
     *,
     mark_human_processed: bool = False,
+    uploaded_file_path: Optional[str] = None,
 ) -> tuple[bool, int]:
     additional_fields = gemini_json.get("additional_fields") or {}
     if not isinstance(additional_fields, dict):
@@ -1064,6 +1058,17 @@ def _sync_hitl_and_status(
         except Exception:
             pass
 
+    if human_processed and status_value == 2 and uploaded_file_path:
+        new_path = relocate_after_hitl_processed(uploaded_file_path)
+        if new_path and new_path != uploaded_file_path:
+            try:
+                coll.update_one(
+                    {"_id": oid},
+                    {"$set": {"uploaded_file_path": new_path, "file_path": new_path}},
+                )
+            except Exception:
+                pass
+
     return hitl_value, status_value
 
 
@@ -1084,6 +1089,21 @@ async def _app_lifespan(app: FastAPI):
     yield
 
 
+class StripApiPrefixMiddleware:
+    """Map /api/* (Vite dev proxy paths) to backend routes in production."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http":
+            path = scope.get("path", "")
+            if path == "/api" or path.startswith("/api/"):
+                scope = dict(scope)
+                scope["path"] = path[4:] if len(path) > 4 else "/"
+        await self.app(scope, receive, send)
+
+
 app = FastAPI(title="IDP Invoices API", lifespan=_app_lifespan)
 
 app.add_middleware(
@@ -1093,9 +1113,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(StripApiPrefixMiddleware)
 
-# Serve uploaded files so the frontend can render previews.
-app.mount("/raw", StaticFiles(directory=UPLOADS_DIR), name="raw")
+@app.get("/raw/{filename:path}")
+def serve_invoice_file(filename: str) -> FileResponse:
+    """Serve invoice images from Completed / HITL_pending / ERROR (by basename)."""
+    resolved = resolve_invoice_file(filename)
+    if not resolved:
+        raise HTTPException(status_code=404, detail="File not found.")
+    return FileResponse(resolved)
 
 
 @app.middleware("http")
@@ -1190,12 +1216,7 @@ async def v1_upload_file(
             detail=f"File too large. Max allowed bytes: {MAX_UPLOAD_BYTES}",
         )
 
-    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    filename_without_ext = Path(file.filename or "file").stem
-    tenant_safe = client.tenant_id.replace("/", "_").replace("\\", "_").strip()
-    tenant_dir = UPLOADS_DIR / "api" / tenant_safe
-    tenant_dir.mkdir(parents=True, exist_ok=True)
-    target_path = tenant_dir / f"{filename_without_ext}_{timestamp}_{uuid4().hex[:8]}{ext}"
+    target_path = staging_path_for_upload(file.filename or f"file{ext}")
     target_path.write_bytes(content)
 
     job_id = str(uuid4())
@@ -1617,7 +1638,13 @@ def human_approve_invoice(invoice_id: str) -> InvoiceSummary:
     additional_fields["human_approved"] = True
     gemini_json["additional_fields"] = additional_fields
 
-    hitl_value, _ = _sync_hitl_and_status(coll, oid, gemini_json, mark_human_processed=True)
+    hitl_value, _ = _sync_hitl_and_status(
+        coll,
+        oid,
+        gemini_json,
+        mark_human_processed=True,
+        uploaded_file_path=doc.get("uploaded_file_path"),
+    )
 
     try:
         coll.update_one(
@@ -1687,7 +1714,14 @@ def update_invoice_json_editor(invoice_id: str, payload: InvoiceJsonEditorUpdate
     coll.update_one({"_id": oid}, {"$set": {"gemini.json": gemini_json}})
 
     # Ensure HITL lifecycle flags are updated after manual JSON edits.
-    _sync_hitl_and_status(coll, oid, gemini_json, mark_human_processed=True)
+    _sync_hitl_and_status(
+        coll,
+        oid,
+        gemini_json,
+        mark_human_processed=True,
+        uploaded_file_path=doc.get("uploaded_file_path"),
+    )
+    doc = coll.find_one({"_id": oid}) or doc
 
     additional_fields = gemini_json.get("additional_fields") or {}
     comment = ""
@@ -1724,7 +1758,7 @@ async def upload_invoice(file: UploadFile = File(...)) -> InvoiceSummary:
     configure_logging()
     logger.info(
         "[HTTP API → POST /upload] Upload received (FastAPI). Running the same OCR + Gemini "
-        "pipeline as the raw-folder watcher.",
+        "pipeline as the to_be_processed folder watcher.",
     )
     ext = Path(file.filename or "").suffix.lower()
     if ext not in ALLOWED_EXTS:
@@ -1733,15 +1767,7 @@ async def upload_invoice(file: UploadFile = File(...)) -> InvoiceSummary:
             detail=f"Unsupported file type: {ext}. Allowed: {sorted(ALLOWED_EXTS)}",
         )
 
-    # Create timestamp
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    # Generate filename: original_name + timestamp + extension
-    filename_without_ext = Path(file.filename or "file").stem
-    timestamped_filename = f"{filename_without_ext}_{timestamp}{ext}"
-    
-    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
-    target_path = UPLOADS_DIR / timestamped_filename
+    staging_path = staging_path_for_upload(file.filename or f"file{ext}")
     run_id = str(uuid4())
     file_received_time = datetime.utcnow()
     file_size = 0
@@ -1749,21 +1775,31 @@ async def upload_invoice(file: UploadFile = File(...)) -> InvoiceSummary:
 
     content = await file.read()
     file_size = len(content)
-    target_path.write_bytes(content)
+    staging_path.write_bytes(content)
     logger.info(
-        "[HTTP API → POST /upload] Saved uploaded bytes to disk: %s (%s bytes).",
-        target_path,
+        "[HTTP API → POST /upload] Staged in API staging (not watched) for pipeline: %s (%s bytes).",
+        staging_path,
         len(content),
     )
     try:
-        ocr_result = process_file(str(target_path))
+        ocr_result = process_file(str(staging_path))
     except Exception as e:
+        if staging_path.is_file():
+            try:
+                finalize_invoice_file(
+                    staging_path,
+                    file_status="error",
+                    status=0,
+                    pipeline_failed=True,
+                )
+            except Exception:
+                pass
         record_pipeline_telemetry(
             {
                 "run_id": run_id,
                 "source": "api",
                 "file_id": None,
-                "file_name": target_path.name,
+                "file_name": staging_path.name,
                 "file_size": file_size,
                 "file_type": file_type,
                 "file_received_time": file_received_time,
@@ -1796,23 +1832,26 @@ async def upload_invoice(file: UploadFile = File(...)) -> InvoiceSummary:
     invoice_number_norm = str(invoice_number).strip() if invoice_number is not None else ""
     file_status = "error" if not invoice_number_norm else "healthy file"
 
-    # If Gemini couldn't extract an invoice number, keep a copy in error_files/.
+    _, status_value = pipeline_lifecycle_status(gemini_json, file_status=file_status)
+    final_path = finalize_invoice_file(
+        staging_path,
+        file_status=file_status,
+        status=status_value,
+        pipeline_failed=False,
+    )
     if file_status == "error":
-        ERROR_FILES_DIR.mkdir(parents=True, exist_ok=True)
-        error_path = ERROR_FILES_DIR / target_path.name
         logger.warning(
-            "[HTTP API → POST /upload] No invoice number in extraction; copying file to error_files: %s",
-            error_path,
+            "[HTTP API → POST /upload] No invoice number in extraction; file moved to ERROR: %s",
+            final_path,
         )
-        shutil.copy2(str(target_path), str(error_path))
 
     logger.info(
         "[HTTP API → POST /upload] Persisting result to MongoDB via store_invoice_result.",
     )
     try:
         inserted_id = store_invoice_result(
-            file_path=ocr_result.file_path,
-            uploaded_file_path=str(target_path),
+            file_path=str(final_path),
+            uploaded_file_path=str(final_path),
             ocr_text=ocr_result.ocr_text,
             gemini_model=ocr_result.gemini_model or (os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"),
             gemini_json=gemini_json_norm,
@@ -1825,7 +1864,7 @@ async def upload_invoice(file: UploadFile = File(...)) -> InvoiceSummary:
                 "run_id": run_id,
                 "source": "api",
                 "file_id": None,
-                "file_name": target_path.name,
+                "file_name": final_path.name,
                 "file_size": file_size,
                 "file_type": file_type,
                 "file_received_time": file_received_time,
@@ -1853,7 +1892,12 @@ async def upload_invoice(file: UploadFile = File(...)) -> InvoiceSummary:
     # Immediately sync HITL lifecycle fields on new upload to avoid telemetry drift.
     try:
         coll = get_invoices_collection()
-        _sync_hitl_and_status(coll, ObjectId(inserted_id), gemini_json_norm)
+        _sync_hitl_and_status(
+            coll,
+            ObjectId(inserted_id),
+            gemini_json_norm,
+            uploaded_file_path=str(final_path),
+        )
     except Exception as e:
         logger.warning("Failed to sync HITL/status immediately after upload insert: %s", e)
     logger.info(
@@ -1867,7 +1911,7 @@ async def upload_invoice(file: UploadFile = File(...)) -> InvoiceSummary:
             "run_id": run_id,
             "source": "api",
             "file_id": inserted_id,
-            "file_name": target_path.name,
+            "file_name": final_path.name,
             "file_size": file_size,
             "file_type": file_type,
             "file_received_time": file_received_time,
@@ -1892,7 +1936,7 @@ async def upload_invoice(file: UploadFile = File(...)) -> InvoiceSummary:
         }
     )
 
-    status_value = None
+    status_value = status_value if file_status != "error" else None
     payment_status_value = gemini_json.get("payment_status") or "not_paid"
     total_amount = (
         gemini_json.get("total_amount")
@@ -1928,8 +1972,8 @@ async def upload_invoice(file: UploadFile = File(...)) -> InvoiceSummary:
 
     return InvoiceSummary(
         id=inserted_id,
-        file_path=ocr_result.file_path,
-        uploaded_file_path=str(target_path),
+        file_path=str(final_path),
+        uploaded_file_path=str(final_path),
         file_status=file_status,
         invoice_number=invoice_number,
         total_amount=total_amount,
@@ -2062,7 +2106,14 @@ def update_invoice(invoice_id: str, payload: InvoiceUpdate) -> InvoiceSummary:
     # Sync HITL/status after any edits.
     gemini_json = (doc.get("gemini") or {}).get("json") or {}
     if isinstance(gemini_json, dict):
-        _sync_hitl_and_status(coll, oid, gemini_json, mark_human_processed=True)
+        _sync_hitl_and_status(
+            coll,
+            oid,
+            gemini_json,
+            mark_human_processed=True,
+            uploaded_file_path=doc.get("uploaded_file_path"),
+        )
+        doc = coll.find_one({"_id": oid}) or doc
 
     return _invoice_summary_row_from_doc(doc, line_item_index=line_item_index)
 
@@ -2115,7 +2166,14 @@ def add_invoice_line_item(invoice_id: str, payload: LineItemCreate) -> InvoiceSu
     # Sync HITL/status after any line-item add.
     gemini_json = (doc.get("gemini") or {}).get("json") or {}
     if isinstance(gemini_json, dict):
-        _sync_hitl_and_status(coll, oid, gemini_json, mark_human_processed=True)
+        _sync_hitl_and_status(
+            coll,
+            oid,
+            gemini_json,
+            mark_human_processed=True,
+            uploaded_file_path=doc.get("uploaded_file_path"),
+        )
+        doc = coll.find_one({"_id": oid}) or doc
 
     gemini_json = (doc.get("gemini") or {}).get("json") or {}
     line_items = gemini_json.get("line_items") or []
@@ -2171,7 +2229,14 @@ def delete_invoice_line_item(invoice_id: str, line_item_index: int) -> InvoiceLi
     # Sync HITL/status after any line-item deletion.
     gemini_json = (doc.get("gemini") or {}).get("json") or {}
     if isinstance(gemini_json, dict):
-        _sync_hitl_and_status(coll, oid, gemini_json, mark_human_processed=True)
+        _sync_hitl_and_status(
+            coll,
+            oid,
+            gemini_json,
+            mark_human_processed=True,
+            uploaded_file_path=doc.get("uploaded_file_path"),
+        )
+        doc = coll.find_one({"_id": oid}) or doc
 
     gemini_json = (doc.get("gemini") or {}).get("json") or {}
     invoice_total_amount = (
@@ -2278,4 +2343,32 @@ def chat(req: ChatRequest) -> ChatResponse:
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Chat failed: {e}") from e
 
+
+def _mount_frontend() -> None:
+    dist = frontend_dist_dir()
+    if not dist.is_dir():
+        logger.warning("Frontend dist not found at %s — running API-only.", dist)
+        return
+
+    assets_dir = dist / "assets"
+    if assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="frontend_assets")
+
+    @app.get("/")
+    async def spa_index() -> FileResponse:
+        return FileResponse(dist / "index.html")
+
+    @app.get("/{spa_path:path}")
+    async def spa_fallback(spa_path: str) -> FileResponse:
+        if spa_path.startswith(("api/", "raw/")):
+            raise HTTPException(status_code=404, detail="Not found")
+        candidate = dist / spa_path
+        if candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(dist / "index.html")
+
+    logger.info("Serving frontend from %s", dist)
+
+
+_mount_frontend()
 

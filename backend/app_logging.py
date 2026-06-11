@@ -18,10 +18,10 @@ import os
 import sys
 from pathlib import Path
 
-# Repository root: backend/app_logging.py -> parents[1] == repo root
-_REPO_ROOT = Path(__file__).resolve().parent.parent
-_DEFAULT_LOG_DIR = _REPO_ROOT / "logs"
-_DEFAULT_LOG_PATH = _DEFAULT_LOG_DIR / "idp.log"
+from backend.app_paths import load_app_dotenv, logs_dir
+
+load_app_dotenv()
+_DEFAULT_LOG_PATH = logs_dir() / "idp.log"
 
 
 def _make_formatter() -> logging.Formatter:

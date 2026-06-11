@@ -6,7 +6,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Iterable, List, Optional, Sequence, Tuple
 
-from dotenv import load_dotenv
+from backend.app_paths import load_app_dotenv
 from pymongo import MongoClient
 
 # Gemini / LLM
@@ -241,7 +241,7 @@ def _build_chat_prompt(question: str, chunks: list[RetrievedChunk]) -> str:
 
 
 def _get_gemini_answer(prompt: str) -> str:
-    load_dotenv()
+    load_app_dotenv()
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if not api_key:
         raise RuntimeError("Missing GEMINI_API_KEY (or GOOGLE_API_KEY).")

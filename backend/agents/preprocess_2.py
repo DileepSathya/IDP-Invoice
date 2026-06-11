@@ -81,7 +81,7 @@ def preprocess_image_for_ocr(image_path):
 
         img = cv2.filter2D(img, -1, kernel)
 
-        # Write outside RAW_DIR: saving next to the original retriggers folder watchers
+        # Write outside to_be_processed: saving next to the original retriggers the folder watcher
         # (e.g. watch_raw.py) and runs OCR / extraction twice.
         _, ext = image_path.rsplit(".", 1) if "." in image_path else (image_path, "png")
         fd, new_img_path = tempfile.mkstemp(suffix=f".{ext}", prefix="idp_sharp_")

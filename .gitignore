@@ -9,3 +9,6 @@ __pycache__/
 logs/
 DATA/
 invoices_data/
+dist/
+build/
+packaging/mongodb-cache/

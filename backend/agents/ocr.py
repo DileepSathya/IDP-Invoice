@@ -9,8 +9,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 import google.generativeai as genai
-from dotenv import load_dotenv
-from paddleocr import PaddleOCR
+from backend.app_paths import load_app_dotenv
 
 from backend.app_logging import configure_logging
 
@@ -50,7 +49,13 @@ def _get_ocr():
     if _PADDLE_OCR is None:
         logger.info("[OCR engine] Initializing PaddleOCR...")
 
-        _PADDLE_OCR = PaddleOCR(use_angle_cls=True, lang="en")
+        try:
+            from paddleocr import PaddleOCR
+
+            _PADDLE_OCR = PaddleOCR(use_angle_cls=True, lang="en")
+        except Exception:
+            logger.exception("[OCR engine] PaddleOCR initialization failed")
+            raise
 
         logger.info("[OCR engine] Initialization DONE ✅")
 
@@ -69,8 +74,12 @@ def _extract_text_from_image(
     from backend.agents.preprocess_2 import preprocess_image_for_ocr
 
     def _result_to_text(result) -> str:
+        if not result:
+            return ""
         lines: list[str] = []
         for line in result:
+            if not line:
+                continue
             for word in line:
                 lines.append(word[1][0])
         return "\n".join(lines).strip()
@@ -241,7 +250,7 @@ def _extract_text_from_docx(docx_path: str) -> str:
 def _gemini_extract_invoice_json(
     ocr_text: str,
 ) -> tuple[str, Optional[Any], Optional[int], Optional[int], Optional[int], Optional[str]]:
-    load_dotenv()
+    load_app_dotenv()
 
     logger.info("[Gemini] Start extraction")
 

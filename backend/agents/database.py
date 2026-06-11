@@ -7,7 +7,7 @@ from dataclasses import asdict, is_dataclass
 from typing import Any, Optional
 from pymongo.errors import ServerSelectionTimeoutError
 
-from dotenv import load_dotenv
+from backend.app_paths import load_app_dotenv
 
 
 def normalize_gemini_json_for_storage(gemini_json: Optional[Any]) -> Optional[dict[str, Any]]:
@@ -33,7 +33,7 @@ _CLIENT: Optional[MongoClient] = None
 def _get_client() -> MongoClient:
     global _CLIENT
     if _CLIENT is None:
-        load_dotenv()
+        load_app_dotenv()
         uri = os.environ.get("MONGO_URI", "mongodb://localhost:27017")
         
         logger.info(
@@ -56,13 +56,13 @@ def _get_client() -> MongoClient:
 
 
 def get_db() -> Database:
-    load_dotenv()
+    load_app_dotenv()
     db_name = os.environ.get("MONGO_DB", "IDP")
     return _get_client()[db_name]
 
 
 def get_invoices_collection() -> Collection:
-    load_dotenv()
+    load_app_dotenv()
     coll_name = os.environ.get("MONGO_INVOICES_COLLECTION", "invoices")
     db_name = os.environ.get("MONGO_DB", "IDP")
     coll = get_db()[coll_name]
@@ -79,7 +79,7 @@ def get_invoices_collection() -> Collection:
 
 
 def get_api_clients_collection() -> Collection:
-    load_dotenv()
+    load_app_dotenv()
     coll_name = os.environ.get("MONGO_API_CLIENTS_COLLECTION", "api_clients")
     coll = get_db()[coll_name]
     coll.create_index([("key_hash", 1)], unique=True)
@@ -89,7 +89,7 @@ def get_api_clients_collection() -> Collection:
 
 
 def get_jobs_collection() -> Collection:
-    load_dotenv()
+    load_app_dotenv()
     coll_name = os.environ.get("MONGO_JOBS_COLLECTION", "invoice_jobs")
     coll = get_db()[coll_name]
     coll.create_index([("job_id", 1)], unique=True)
@@ -99,7 +99,7 @@ def get_jobs_collection() -> Collection:
 
 
 def get_webhook_attempts_collection() -> Collection:
-    load_dotenv()
+    load_app_dotenv()
     coll_name = os.environ.get("MONGO_WEBHOOK_ATTEMPTS_COLLECTION", "webhook_attempts")
     coll = get_db()[coll_name]
     coll.create_index([("job_id", 1), ("event", 1), ("attempt_no", 1)], unique=True)
@@ -110,7 +110,7 @@ def get_webhook_attempts_collection() -> Collection:
 
 
 def get_pipeline_runs_collection() -> Collection:
-    load_dotenv()
+    load_app_dotenv()
     coll_name = os.environ.get("MONGO_PIPELINE_RUNS_COLLECTION", "pipeline_runs")
     coll = get_db()[coll_name]
     coll.create_index([("created_at", -1)])
@@ -122,7 +122,7 @@ def get_pipeline_runs_collection() -> Collection:
 
 
 def get_pipeline_metrics_collection() -> Collection:
-    load_dotenv()
+    load_app_dotenv()
     coll_name = os.environ.get("MONGO_PIPELINE_METRICS_COLLECTION", "pipeline_metrics_timeseries")
     coll = get_db()[coll_name]
     coll.create_index([("ts", -1)])
