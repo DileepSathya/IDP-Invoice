@@ -11,6 +11,9 @@ load_app_dotenv()
 
 
 def main() -> None:
+    from license_validator import validate_license
+
+    validate_license()
     from backend.agents.watch_raw import main as watcher_main
 
     os.chdir(app_dir())

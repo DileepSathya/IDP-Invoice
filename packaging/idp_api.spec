@@ -11,6 +11,19 @@ from pyinstaller_helpers import get_paddle_artifacts  # noqa: E402
 
 _paddle_datas, _paddle_binaries, _paddle_hiddenimports = get_paddle_artifacts()
 
+_LICENSE_IMPORTS = [
+    "license_validator",
+    "licensing",
+    "licensing.hardware_fingerprint",
+    "licensing.public_key_embed",
+    "cryptography",
+    "cryptography.hazmat.primitives.asymmetric.padding",
+    "cryptography.hazmat.primitives.hashes",
+    "cryptography.hazmat.primitives.kdf.pbkdf2",
+    "cryptography.hazmat.primitives.ciphers.aead",
+    "cryptography.hazmat.backends.openssl",
+]
+
 block_cipher = None
 
 a = Analysis(
@@ -54,6 +67,7 @@ a = Analysis(
         "backend.agents.preprocess_2",
         "backend.invoice_files",
         "backend.hitl_status",
+        *_LICENSE_IMPORTS,
         *_paddle_hiddenimports,
     ],
     hookspath=[str(ROOT / "packaging")],

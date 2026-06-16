@@ -127,6 +127,28 @@ def _worker(q: "queue.Queue[Path]") -> None:
                     path,
                 )
                 continue
+            try:
+                from license_validator import InvoiceQuotaExceeded, ensure_invoice_quota_available
+
+                ensure_invoice_quota_available()
+            except InvoiceQuotaExceeded as exc:
+                logger.error(
+                    "[Folder watcher → worker] %s Skipping file: %s",
+                    exc.message,
+                    path,
+                )
+                if path.is_file():
+                    try:
+                        finalize_invoice_file(
+                            path,
+                            file_status="error",
+                            status=0,
+                            pipeline_failed=True,
+                        )
+                    except Exception:
+                        pass
+                continue
+
             logger.info(
                 "[Folder watcher → worker] Starting OCR + Gemini pipeline: %s",
                 path,
@@ -280,6 +302,10 @@ def _worker(q: "queue.Queue[Path]") -> None:
                     )
                 except Exception:
                     pass
+
+            from license_validator import increment_invoice_count
+
+            increment_invoice_count()
 
             logger.info(
                 "[Folder watcher] Pipeline finished. Final location: %s (status=%s, HITL=%s)",

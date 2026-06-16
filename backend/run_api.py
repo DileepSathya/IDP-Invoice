@@ -11,6 +11,9 @@ load_app_dotenv()
 
 
 def main() -> None:
+    from license_validator import validate_license
+
+    validate_license()
     import uvicorn
 
     from backend.api import app

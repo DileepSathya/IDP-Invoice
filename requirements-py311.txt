@@ -17,6 +17,7 @@ pymupdf
 python-docx
 python-dotenv
 pymongo
+cryptography>=42.0.0
 fastapi
 uvicorn[standard]
 python-multipart

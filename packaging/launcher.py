@@ -160,8 +160,14 @@ def start_bundled_mongo(root: Path, port: int) -> subprocess.Popen | None:
 
 
 def main() -> None:
+    from license_validator import get_license_welcome_message, validate_license
+
     root = portable_root()
     os.chdir(root)
+    validate_license()
+    print()
+    print(get_license_welcome_message())
+    print()
     ensure_layout(root)
 
     api_port = int(os.environ.get("IDP_API_PORT", _read_env_value(root, "IDP_API_PORT", "8000")))

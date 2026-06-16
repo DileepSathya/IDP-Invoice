@@ -582,6 +582,9 @@ def _process_job(
     )
     staging_path = Path(file_path)
     try:
+        from license_validator import InvoiceQuotaExceeded, ensure_invoice_quota_available
+
+        ensure_invoice_quota_available()
         ocr_result = process_file(file_path)
         gemini_json_norm: dict[str, Any] = dict(ocr_result.gemini_json or {})
         invoice_number = gemini_json_norm.get("invoice_number") or gemini_json_norm.get("invoice")
@@ -626,6 +629,9 @@ def _process_job(
             )
         except Exception:
             pass
+        from license_validator import increment_invoice_count
+
+        increment_invoice_count()
         completed_at = datetime.utcnow()
         record_pipeline_telemetry(
             {
@@ -685,6 +691,8 @@ def _process_job(
             error_message=None,
         )
     except Exception as e:
+        from license_validator import InvoiceQuotaExceeded
+
         if staging_path.is_file():
             try:
                 finalize_invoice_file(
@@ -695,6 +703,7 @@ def _process_job(
                 )
             except Exception:
                 pass
+        error_stage = "license" if isinstance(e, InvoiceQuotaExceeded) else "pipeline"
         record_pipeline_telemetry(
             {
                 "run_id": job_id,
@@ -706,7 +715,7 @@ def _process_job(
                 "file_type": file_ext,
                 "file_received_time": file_received_time,
                 "status": "error",
-                "error_stage": "pipeline",
+                "error_stage": error_stage,
                 "error_message": str(e),
                 "total_pipeline_latency": (datetime.utcnow() - file_received_time).total_seconds(),
             }
@@ -715,13 +724,22 @@ def _process_job(
             {"job_id": job_id, "tenant_id": tenant_id},
             {"$set": {"status": "failed", "error": str(e), "completed_at": datetime.utcnow()}},
         )
-        logger.exception(
-            "job_failed request_id=%s tenant_id=%s job_id=%s error=%s",
-            request_id,
-            tenant_id,
-            job_id,
-            e,
-        )
+        if isinstance(e, InvoiceQuotaExceeded):
+            logger.warning(
+                "job_failed request_id=%s tenant_id=%s job_id=%s error=%s",
+                request_id,
+                tenant_id,
+                job_id,
+                e,
+            )
+        else:
+            logger.exception(
+                "job_failed request_id=%s tenant_id=%s job_id=%s error=%s",
+                request_id,
+                tenant_id,
+                job_id,
+                e,
+            )
         _send_job_webhook_if_enabled(
             job_id=job_id,
             tenant_id=tenant_id,
@@ -1202,6 +1220,13 @@ async def v1_upload_file(
     callback_secret: Optional[str] = Form(default=None),
     client: ApiClientContext = Depends(_authenticate_api_key),
 ) -> ApiUploadResponse:
+    try:
+        from license_validator import InvoiceQuotaExceeded, ensure_invoice_quota_available
+
+        ensure_invoice_quota_available()
+    except InvoiceQuotaExceeded as exc:
+        raise HTTPException(status_code=403, detail=exc.message) from exc
+
     ext = Path(file.filename or "").suffix.lower()
     if ext not in ALLOWED_EXTS:
         raise HTTPException(
@@ -1760,6 +1785,14 @@ async def upload_invoice(file: UploadFile = File(...)) -> InvoiceSummary:
         "[HTTP API → POST /upload] Upload received (FastAPI). Running the same OCR + Gemini "
         "pipeline as the to_be_processed folder watcher.",
     )
+    try:
+        from license_validator import InvoiceQuotaExceeded, ensure_invoice_quota_available
+
+        ensure_invoice_quota_available()
+    except InvoiceQuotaExceeded as exc:
+        logger.warning("[HTTP API → POST /upload] %s", exc.message)
+        raise HTTPException(status_code=403, detail=exc.message) from exc
+
     ext = Path(file.filename or "").suffix.lower()
     if ext not in ALLOWED_EXTS:
         raise HTTPException(
@@ -1900,6 +1933,9 @@ async def upload_invoice(file: UploadFile = File(...)) -> InvoiceSummary:
         )
     except Exception as e:
         logger.warning("Failed to sync HITL/status immediately after upload insert: %s", e)
+    from license_validator import increment_invoice_count
+
+    increment_invoice_count()
     logger.info(
         "[HTTP API → POST /upload] Completed. New invoice id=%s | file_status=%s",
         inserted_id,

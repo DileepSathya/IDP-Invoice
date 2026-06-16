@@ -1,0 +1,7 @@
+generated_at,customer_id,fingerprint,plan,invoice_limit,issued_at,expires_at,license_file
+2026-06-11T13:09:04,Test-1,05b8d6a7ae7d172b1d0c13a0295deaf7dedb4e07079d76890e5b38ce9071832d,quota,1,2026-06-11,2099-12-31,D:\IDP_2.0-INVOICE\Customers\Test-1.lic
+2026-06-11T13:17:30,Test-1,05b8d6a7ae7d172b1d0c13a0295deaf7dedb4e07079d76890e5b38ce9071832d,monthly,0,2026-06-11,2026-06-11,D:\IDP_2.0-INVOICE\Customers\Test-1.lic
+2026-06-11T13:19:23,Test-1,05b8d6a7ae7d172b1d0c13a0295deaf7dedb4e07079d76890e5b38ce9071832d,monthly,0,2026-06-11,2026-06-10,D:\IDP_2.0-INVOICE\Customers\Test-1.lic
+2026-06-15T11:30:22,Test_3,467c6e5d3c7289251c31cc6bdb69c9e2ecc5a79bca2b411c09c593fb7eff2424,quota,10,2026-06-15,2099-12-31,D:\IDP_2.0-INVOICE\Customers\Test_3.lic
+2026-06-15T12:20:20,Test_4,467c6e5d3c7289251c31cc6bdb69c9e2ecc5a79bca2b411c09c593fb7eff2424,quota,10,2026-06-15,2099-12-31,D:\IDP_2.0-INVOICE\Customers\Test_4.lic
+2026-06-16T12:44:37,Test_4,467c6e5d3c7289251c31cc6bdb69c9e2ecc5a79bca2b411c09c593fb7eff2424,quota,2,2026-06-16,2099-12-31,D:\IDP_2.0-INVOICE\Customers\Test_4.lic

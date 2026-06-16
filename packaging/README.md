@@ -87,6 +87,11 @@ The API serves `frontend/dist` when present and maps `/api/*` to backend routes.
 The API spec intentionally excludes unused vector-embedding stacks (`torch`, `transformers`,
 `sentence_transformers`, `llama_index`). The chatbot uses MongoDB keyword retrieval + Gemini only.
 
+## Offline licensing
+
+See `licensing/README.md` for key generation, customer fingerprint tool, and `license.lic` workflow.
+Run `python keygen/generate_keys.py` once before shipping builds.
+
 ## Paddle / OCR in frozen builds
 
 PyInstaller specs collect Paddle native DLLs into `idp-api/_internal/paddle/libs/` and use

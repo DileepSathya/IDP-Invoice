@@ -12,3 +12,8 @@ invoices_data/
 dist/
 build/
 packaging/mongodb-cache/
+keygen/private_key.pem
+license.lic
+*.lic
+invoice_count.enc
+license_state.json

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from dataclasses import asdict, is_dataclass
 from typing import Any, Optional
 from pymongo.errors import ServerSelectionTimeoutError
@@ -59,6 +59,25 @@ def get_db() -> Database:
     load_app_dotenv()
     db_name = os.environ.get("MONGO_DB", "IDP")
     return _get_client()[db_name]
+
+
+def count_stored_invoices_since(since: date) -> int:
+    """
+    Count invoice documents with created_at on or after since (UTC midnight).
+
+    Returns -1 when MongoDB is unavailable (caller should fall back to local counter).
+    """
+    since_dt = datetime.combine(since, time.min)
+    try:
+        coll = get_invoices_collection()
+        return int(coll.count_documents({"created_at": {"$gte": since_dt}}))
+    except Exception as e:
+        logger.warning(
+            "[MongoDB] Could not count invoices for license quota (since %s): %s",
+            since.isoformat(),
+            e,
+        )
+        return -1
 
 
 def get_invoices_collection() -> Collection:

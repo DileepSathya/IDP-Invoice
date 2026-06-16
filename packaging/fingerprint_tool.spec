@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec for the portable launcher (onefile)."""
+"""PyInstaller spec for customer fingerprint tool (onefile)."""
 
 from pathlib import Path
 
@@ -8,21 +8,13 @@ ROOT = Path(SPECPATH).resolve().parent
 block_cipher = None
 
 a = Analysis(
-    [str(ROOT / "packaging" / "launcher.py")],
+    [str(ROOT / "fingerprint_tool.py")],
     pathex=[str(ROOT)],
     binaries=[],
     datas=[],
     hiddenimports=[
-        "license_validator",
         "licensing",
         "licensing.hardware_fingerprint",
-        "licensing.public_key_embed",
-        "cryptography",
-        "cryptography.hazmat.primitives.asymmetric.padding",
-        "cryptography.hazmat.primitives.hashes",
-        "cryptography.hazmat.primitives.kdf.pbkdf2",
-        "cryptography.hazmat.primitives.ciphers.aead",
-        "cryptography.hazmat.backends.openssl",
     ],
     hookspath=[],
     hooksconfig={},
@@ -42,7 +34,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="Start IDP Invoice",
+    name="fingerprint_tool",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

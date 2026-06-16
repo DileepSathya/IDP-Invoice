@@ -109,8 +109,16 @@ if (-not $SkipMongoDB) {
 Write-Host "`nCopying OCR runtime packages/metadata into frozen bundles ..."
 & (Join-Path $Root "packaging\copy_ocr_runtime.ps1") -DistRoot $DistRoot
 
+if (-not $SkipPyInstaller) {
+    Write-Host "`nBuilding fingerprint_tool.exe ..."
+    & $Py -m PyInstaller @commonArgs (Join-Path $Root "packaging\fingerprint_tool.spec")
+    if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed for fingerprint_tool.spec" }
+}
+
 Write-Host "`n[OK] Portable build ready:"
 Write-Host "  $DistRoot"
 Write-Host "  Run: $(Join-Path $DistRoot 'Start IDP Invoice.exe')"
-Write-Host "`nBefore first use: edit dist\IDP-Invoice\.env and set GEMINI_API_KEY."
+Write-Host "`nBefore first use:"
+Write-Host "  1. Edit dist\IDP-Invoice\.env and set GEMINI_API_KEY."
+Write-Host "  2. Place license.lic next to Start IDP Invoice.exe (see licensing\README.md)."
 Write-Host "Bundled MongoDB starts automatically when MONGO_URI points to localhost."
