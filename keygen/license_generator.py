@@ -11,8 +11,13 @@ import sys
 from datetime import date, datetime
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
+from licensing.timestamps import utc_now_iso
 
 KEYGEN_DIR = Path(__file__).resolve().parent
 REPO_ROOT = KEYGEN_DIR.parent
@@ -54,7 +59,7 @@ def build_license(
         "customerId": customer_id,
         "machineId": fingerprint.strip().lower(),
         "plan": plan,
-        "issuedAt": issued_at or date.today().isoformat(),
+        "issuedAt": issued_at or utc_now_iso(),
         "expiresAt": expires_at,
         "invoiceLimit": int(invoice_limit),
     }
@@ -169,6 +174,7 @@ def _print_success(payload: dict, out_path: Path, plan: str) -> None:
         print("     Limit:    unlimited (one-time purchase)")
     else:
         print("     Limit:    unlimited (time subscription)")
+    print(f"     Issued:   {payload['issuedAt']}")
     if plan in {"monthly", "yearly", "quota"}:
         print(f"     Expires:  {payload['expiresAt']}")
     else:

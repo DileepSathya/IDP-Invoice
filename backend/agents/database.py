@@ -61,20 +61,26 @@ def get_db() -> Database:
     return _get_client()[db_name]
 
 
-def count_stored_invoices_since(since: date) -> int:
+def count_stored_invoices_since(since: date | datetime) -> int:
     """
-    Count invoice documents with created_at on or after since (UTC midnight).
+    Count invoice documents with created_at on or after `since`.
+
+    Accepts a date (UTC midnight, legacy date-only issuedAt) or a datetime
+    (exact UTC instant for issuedAt with time component).
 
     Returns -1 when MongoDB is unavailable (caller should fall back to local counter).
     """
-    since_dt = datetime.combine(since, time.min)
+    if isinstance(since, datetime):
+        since_dt = since
+    else:
+        since_dt = datetime.combine(since, time.min)
     try:
         coll = get_invoices_collection()
         return int(coll.count_documents({"created_at": {"$gte": since_dt}}))
     except Exception as e:
         logger.warning(
             "[MongoDB] Could not count invoices for license quota (since %s): %s",
-            since.isoformat(),
+            since_dt.isoformat(),
             e,
         )
         return -1

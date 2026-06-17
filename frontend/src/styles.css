@@ -1149,6 +1149,125 @@ tbody tr:nth-child(even) {
   z-index: 1500;
 }
 
+.plan-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  padding: 0.85rem 1.1rem;
+  border-radius: 0.9rem;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.22), rgba(168, 85, 247, 0.14));
+  border: 1px solid rgba(129, 140, 248, 0.45);
+}
+
+.plan-banner-content {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  min-width: 0;
+}
+
+.plan-banner-label {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: #e0e7ff;
+}
+
+.plan-banner-highlight {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #f9fafb;
+}
+
+.plan-banner-customer {
+  font-size: 0.82rem;
+  color: #c7d2fe;
+}
+
+.plan-banner-link {
+  flex-shrink: 0;
+  color: #c7d2fe;
+  font-size: 0.82rem;
+  text-decoration: none;
+  padding: 0.35rem 0.75rem;
+  border-radius: 999px;
+  border: 1px solid rgba(129, 140, 248, 0.5);
+  background: rgba(15, 23, 42, 0.35);
+}
+
+.plan-banner-link:hover {
+  background: rgba(99, 102, 241, 0.25);
+  color: #f9fafb;
+}
+
+.settings-section h3 {
+  margin: 0 0 0.75rem 0;
+}
+
+.settings-loading {
+  margin: 0;
+  color: #9ca3af;
+  font-size: 0.9rem;
+}
+
+.plan-details-card {
+  padding: 1.1rem 1.25rem;
+  border-radius: 0.9rem;
+  border: 1px solid rgba(55, 65, 81, 0.8);
+  background: rgba(15, 23, 42, 0.75);
+}
+
+.plan-details-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.65rem 1rem;
+  margin-bottom: 1rem;
+  padding-bottom: 0.85rem;
+  border-bottom: 1px solid rgba(55, 65, 81, 0.7);
+}
+
+.plan-details-badge {
+  display: inline-flex;
+  padding: 0.3rem 0.75rem;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #6366f1, #a855f7);
+  color: #f9fafb;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.plan-details-status {
+  font-size: 0.9rem;
+  color: #d1d5db;
+}
+
+.plan-details-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 0.85rem 1.25rem;
+}
+
+.plan-detail-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.plan-detail-label {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #9ca3af;
+}
+
+.plan-detail-value {
+  font-size: 0.92rem;
+  color: #f3f4f6;
+}
+
 @media (max-width: 768px) {
   .app-main {
     padding: 1rem;

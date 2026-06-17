@@ -13,7 +13,7 @@ import json
 import logging
 import os
 import sys
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 from cryptography.exceptions import InvalidSignature
@@ -23,6 +23,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 from licensing.hardware_fingerprint import machine_fingerprint
+from licensing.timestamps import parse_license_timestamp, utc_now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -175,9 +176,9 @@ def _is_count_limited(payload: dict | None = None) -> bool:
     return _plan_name(data) in COUNT_BASED_PLANS
 
 
-def _quota_period_start(payload: dict) -> date:
+def _quota_period_start(payload: dict) -> datetime:
     issued_raw = str(payload.get("issuedAt", "")).strip()
-    return date.fromisoformat(issued_raw)
+    return parse_license_timestamp(issued_raw)
 
 
 def _quota_period_key(payload: dict) -> str:
@@ -192,7 +193,7 @@ def _quota_period_key(payload: dict) -> str:
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
-def _mongodb_invoice_count_since(period_start: date) -> int | None:
+def _mongodb_invoice_count_since(period_start: datetime) -> int | None:
     try:
         from backend.agents.database import count_stored_invoices_since
 
@@ -290,7 +291,7 @@ def _load_validated_payload() -> dict:
             "customerId": "DEV",
             "machineId": machine_fingerprint(),
             "plan": "dev",
-            "issuedAt": date.today().isoformat(),
+            "issuedAt": utc_now_iso(),
             "expiresAt": "2099-12-31",
             "invoiceLimit": 999_999_999,
         }
@@ -340,7 +341,7 @@ def _load_validated_payload() -> dict:
             _fail("License invalid.")
         issued_raw = str(payload.get("issuedAt", "")).strip()
         try:
-            date.fromisoformat(issued_raw)
+            parse_license_timestamp(issued_raw)
         except ValueError:
             _fail("License invalid.")
         if expires is not None and date.today() > expires:
@@ -424,6 +425,72 @@ def get_license_welcome_message() -> str:
     return f"{prefix}License active."
 
 
+PLAN_LABELS = {
+    "monthly": "Monthly Subscription",
+    "yearly": "Yearly Subscription",
+    "quota": "Quota Subscription",
+    "onetime": "One-Time License",
+}
+
+
+def get_license_profile() -> dict:
+    """Structured license details for the web UI (settings + dashboard banner)."""
+    if _license_disabled():
+        return {
+            "plan": "dev",
+            "planLabel": "Development Mode",
+            "customerId": "",
+            "issuedAt": None,
+            "expiresAt": None,
+            "remainingDays": None,
+            "invoiceLimit": None,
+            "invoicesUsed": None,
+            "invoicesRemaining": None,
+            "isUnlimited": True,
+            "statusMessage": "Development mode — license checks disabled.",
+        }
+
+    payload = _load_validated_payload()
+    plan = _plan_name(payload)
+    customer = str(payload.get("customerId", "")).strip()
+    issued = str(payload.get("issuedAt", "")).strip() or None
+    expires_raw = str(payload.get("expiresAt", "")).strip()
+    expires = expires_raw or None
+
+    profile: dict = {
+        "plan": plan,
+        "planLabel": PLAN_LABELS.get(plan, "License"),
+        "customerId": customer,
+        "issuedAt": issued,
+        "expiresAt": expires,
+        "remainingDays": None,
+        "invoiceLimit": None,
+        "invoicesUsed": None,
+        "invoicesRemaining": None,
+        "isUnlimited": plan in UNLIMITED_PLANS or plan in TIME_BASED_PLANS,
+        "statusMessage": "License active.",
+    }
+
+    if plan in TIME_BASED_PLANS:
+        days = get_remaining_days() or 0
+        profile["remainingDays"] = days
+        day_word = "day" if days == 1 else "days"
+        profile["statusMessage"] = f"{days} {day_word} remaining"
+    elif plan == "quota":
+        limit = int(payload.get("invoiceLimit", 0))
+        remaining = get_remaining_invoices()
+        used = max(0, limit - remaining)
+        profile["invoiceLimit"] = limit
+        profile["invoicesUsed"] = used
+        profile["invoicesRemaining"] = remaining
+        profile["isUnlimited"] = False
+        profile["statusMessage"] = f"{remaining} invoice processing remaining"
+    elif plan == "onetime":
+        profile["statusMessage"] = "Unlimited invoice processing"
+
+    return profile
+
+
 def ensure_invoice_quota_available() -> None:
     """Raise InvoiceQuotaExceeded when no invoice slots remain (quota plan only)."""
     if not _is_count_limited():
@@ -433,13 +500,18 @@ def ensure_invoice_quota_available() -> None:
 
 
 def increment_invoice_count() -> None:
-    """Call after each successfully processed invoice (quota plan only)."""
     if _license_disabled() or not _is_count_limited():
         return
     payload = _load_validated_payload()
-    machine_id = str(payload.get("machineId", "")).strip().lower()
     limit = int(payload.get("invoiceLimit", 0))
-    count = _get_effective_invoice_count(payload)
-    if count >= limit:
+    machine_id = str(payload.get("machineId", "")).strip().lower()
+
+    mongodb_count = _mongodb_invoice_count_since(_quota_period_start(payload))
+    if mongodb_count is not None:
+        count = _reconcile_quota_counter(payload)  # sync enc from MongoDB
+    else:
+        count = (_try_read_counter(machine_id) or 0) + 1
+        _write_counter(machine_id, count)
+
+    if count > limit:
         raise InvoiceQuotaExceeded()
-    _write_counter(machine_id, count + 1)

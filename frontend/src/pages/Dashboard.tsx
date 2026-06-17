@@ -3,6 +3,8 @@ import {
   InvoiceSummary,
   InvoiceListResponse,
   SearchField,
+  LicenseProfile,
+  fetchLicenseProfile,
   fetchSearchSuggestions,
   fetchSearchValues,
   fetchInvoices,
@@ -14,6 +16,7 @@ import {
   deleteInvoiceLineItem,
   deleteInvoices,
 } from "../api";
+import { PlanBanner } from "../components/PlanBanner";
 
 type InvoiceEditorFormState = {
   invoice_number: string;
@@ -97,6 +100,7 @@ export const Dashboard: React.FC = () => {
   const [jsonEditorSaving, setJsonEditorSaving] = useState(false);
   const [saveConfirmOpen, setSaveConfirmOpen] = useState(false);
   const [saveComment, setSaveComment] = useState("");
+  const [licenseProfile, setLicenseProfile] = useState<LicenseProfile | null>(null);
   const [jsonEditorPreviewUrl, setJsonEditorPreviewUrl] = useState<string | null>(null);
   const [jsonEditorPreviewZoom, setJsonEditorPreviewZoom] = useState(1);
   const [jsonEditorPreviewRotate, setJsonEditorPreviewRotate] = useState(0);
@@ -246,6 +250,15 @@ export const Dashboard: React.FC = () => {
     }
   };
 
+  const loadLicenseProfile = async () => {
+    try {
+      const data = await fetchLicenseProfile();
+      setLicenseProfile(data);
+    } catch {
+      // Non-blocking: dashboard still works if license endpoint fails.
+    }
+  };
+
   const handleDeleteSelected = async () => {
     if (selectedInvoiceIds.length === 0) return;
 
@@ -378,6 +391,7 @@ export const Dashboard: React.FC = () => {
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
     void loadInvoices();
+    void loadLicenseProfile();
   }, []);
 
   const handleFileChange = async (
@@ -394,6 +408,7 @@ export const Dashboard: React.FC = () => {
       setStatus(
         "2) Invoice processed and saved to MongoDB.\n3) Table below is refreshed with the new record.",
       );
+      void loadLicenseProfile();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Upload failed");
       setStatus(null);
@@ -692,6 +707,8 @@ export const Dashboard: React.FC = () => {
 
   return (
     <div className="panel">
+      {licenseProfile && <PlanBanner profile={licenseProfile} />}
+
       <div className="panel-header">
         <div>
           <h2>Upload Document</h2>

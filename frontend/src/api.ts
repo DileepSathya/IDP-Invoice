@@ -51,6 +51,20 @@ export type ChatResponse = {
   answer: string;
 };
 
+export type LicenseProfile = {
+  plan: "monthly" | "yearly" | "quota" | "onetime" | "dev" | string;
+  planLabel: string;
+  customerId: string;
+  issuedAt: string | null;
+  expiresAt: string | null;
+  remainingDays: number | null;
+  invoiceLimit: number | null;
+  invoicesUsed: number | null;
+  invoicesRemaining: number | null;
+  isUnlimited: boolean;
+  statusMessage: string;
+};
+
 export type InvoiceJsonEditorResponse = {
   id: string;
   uploaded_file_path?: string | null;
@@ -206,6 +220,14 @@ export async function deleteInvoices(
     throw new Error(msg || `Delete failed (${res.status})`);
   }
   return (await res.json()) as DeleteInvoicesResponse;
+}
+
+export async function fetchLicenseProfile(): Promise<LicenseProfile> {
+  const res = await fetch("/api/license");
+  if (!res.ok) {
+    throw new Error(`Failed to load license profile (${res.status})`);
+  }
+  return res.json();
 }
 
 export async function chat(question: string): Promise<ChatResponse> {

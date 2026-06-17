@@ -796,6 +796,20 @@ class ChatResponse(BaseModel):
     answer: str
 
 
+class LicenseProfileResponse(BaseModel):
+    plan: str
+    planLabel: str
+    customerId: str
+    issuedAt: Optional[str] = None
+    expiresAt: Optional[str] = None
+    remainingDays: Optional[int] = None
+    invoiceLimit: Optional[int] = None
+    invoicesUsed: Optional[int] = None
+    invoicesRemaining: Optional[int] = None
+    isUnlimited: bool
+    statusMessage: str
+
+
 class SearchValuesResponse(BaseModel):
     values: List[str]
 
@@ -1207,6 +1221,13 @@ def _all_distinct_values(field: str) -> list[str]:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/license", response_model=LicenseProfileResponse)
+def get_license_profile() -> LicenseProfileResponse:
+    from license_validator import get_license_profile as _get_license_profile
+
+    return LicenseProfileResponse(**_get_license_profile())
 
 
 @app.post("/v1/files", response_model=ApiUploadResponse, status_code=202)
