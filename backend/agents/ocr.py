@@ -12,6 +12,7 @@ import google.generativeai as genai
 from backend.app_paths import load_app_dotenv
 
 from backend.app_logging import configure_logging
+from backend.pipeline_errors import GeminiApiPipelineError, NetworkPipelineError, wrap_pipeline_error
 
 
 logger = logging.getLogger(__name__)
@@ -321,6 +322,9 @@ OCR TEXT:
         logger.info("[Gemini] Response received ✅ (chars=%s)", len(raw))
     except Exception as e:
         logger.error("[Gemini] API call failed ❌: %s", e)
+        wrapped = wrap_pipeline_error(e)
+        if isinstance(wrapped, (NetworkPipelineError, GeminiApiPipelineError)):
+            raise wrapped from e
         raise
 
     # Cleanup markdown

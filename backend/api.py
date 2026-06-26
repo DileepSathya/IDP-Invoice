@@ -37,7 +37,8 @@ from backend.invoice_files import (
     resolve_invoice_file,
     staging_path_for_upload,
 )
-from backend.agents.rag_chatbot import answer_question
+from backend.agents.chat_engine import chat as run_chat, get_suggestions
+from backend.agents.chat_sessions import get_or_create_session, load_session
 from backend.agents.database import (
     get_api_clients_collection,
     get_invoices_collection,
@@ -788,12 +789,23 @@ class InvoiceListResponse(BaseModel):
     total_amount_sum: float
 
 
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+    timestamp: Optional[str] = None
+
+
 class ChatRequest(BaseModel):
     question: str
+    session_id: Optional[str] = None
 
 
 class ChatResponse(BaseModel):
     answer: str
+    session_id: str
+    messages: List[ChatMessage] = Field(default_factory=list)
+    suggestions: List[str] = Field(default_factory=list)
+    mode: Optional[str] = None
 
 
 class LicenseProfileResponse(BaseModel):
@@ -826,6 +838,28 @@ class TelemetryOverviewResponse(BaseModel):
     hitl_flagged_files: int
     hitl_process_pending: int
     hitl_processed: int
+    system_processed: int
+    human_approved_files: int
+
+
+class PipelineStatusResponse(BaseModel):
+    generated_at: str
+    awaiting_processing: int
+    in_process: int
+    processed: int
+    error: int
+    gemini_api_error: int = 0
+    hitl_pending: int
+    queue_total: int
+    api_staging: int
+    watcher_active: bool
+    async_jobs: int
+    stored_total: int
+    stored_healthy: int
+    stored_errors: int
+    hitl_flagged_total: int
+    hitl_review_pending: int
+    hitl_reviewed: int
     system_processed: int
     human_approved_files: int
 
@@ -1414,6 +1448,15 @@ def v1_list_invoices(
 def telemetry_overview(persist_snapshot: bool = Query(default=True)) -> TelemetryOverviewResponse:
     overview = _collect_telemetry_overview_counts()
     return overview
+
+
+@app.get("/telemetry/pipeline-status", response_model=PipelineStatusResponse)
+def telemetry_pipeline_status() -> PipelineStatusResponse:
+    from backend.pipeline_status import collect_pipeline_status
+
+    overview = _collect_telemetry_overview_counts()
+    status = collect_pipeline_status(overview=overview.model_dump())
+    return PipelineStatusResponse(**status)
 
 
 @app.get("/invoices/search/values", response_model=SearchValuesResponse)
@@ -2384,19 +2427,49 @@ def delete_invoices(payload: DeleteInvoicesRequest) -> DeleteInvoicesResponse:
     )
 
 
+@app.get("/chat/suggestions")
+def chat_suggestions() -> dict[str, list[str]]:
+    return {"suggestions": get_suggestions()}
+
+
+@app.get("/chat/session/{session_id}")
+def chat_session(session_id: str) -> dict[str, Any]:
+    session = load_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Chat session not found.")
+    return session
+
+
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest) -> ChatResponse:
     if not req.question.strip():
         raise HTTPException(status_code=400, detail="Question must not be empty.")
 
     logger.info(
-        "[HTTP API → POST /chat] Chat question received; RAG will search MongoDB invoices then "
-        "call Gemini (backend.agents.rag_chatbot.answer_question).",
+        "[HTTP API → POST /chat] Chat question received; Qdrant semantic search + structured "
+        "intents, optional Gemini (backend.agents.chat_engine.chat).",
     )
     try:
-        resp = answer_question(req.question)
+        result = run_chat(req.question, session_id=req.session_id)
         logger.info("[HTTP API → POST /chat] Answer generated and returned to client.")
-        return ChatResponse(answer=resp)
+        messages = [
+            ChatMessage(
+                role=str(m.get("role", "")),
+                content=str(m.get("content", "")),
+                timestamp=m.get("timestamp"),
+            )
+            for m in (result.get("messages") or [])
+            if isinstance(m, dict)
+        ]
+        return ChatResponse(
+            answer=str(result.get("answer") or ""),
+            session_id=str(result.get("session_id") or ""),
+            messages=messages,
+            suggestions=list(result.get("suggestions") or []),
+            mode=result.get("mode"),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Chat failed: {e}") from e
 

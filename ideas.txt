@@ -1,1 +1,1 @@
-limited API acess for a user
+http://127.0.0.1:8000/telemetry/overview

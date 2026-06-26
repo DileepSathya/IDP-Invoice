@@ -172,6 +172,20 @@ def retrieve_relevant_chunks(
     candidate_limit: int = 200,
     top_k: int = 5,
 ) -> list[RetrievedChunk]:
+    try:
+        from backend.agents.chat_vector_index import search as vector_search
+
+        logger.info(
+            "[RAG chatbot] Step 1 — Qdrant semantic search with embeddings "
+            "(backend.agents.chat_vector_index.search).",
+        )
+        return vector_search(question, top_k=top_k)
+    except Exception as exc:
+        logger.warning(
+            "[RAG chatbot] Vector search unavailable (%s); falling back to keyword overlap.",
+            exc,
+        )
+
     logger.info(
         "[RAG chatbot] Step 1 — Loading invoices from MongoDB and scoring by keyword overlap "
         "(backend.agents.rag_chatbot.retrieve_relevant_chunks).",
@@ -179,8 +193,7 @@ def retrieve_relevant_chunks(
     coll = get_invoices_collection()
     question_tokens = _tokenize(question)
 
-    # Load recent documents only (lightweight).
-    cursor = coll.find({}, sort=[("_id", -1)], limit=candidate_limit)
+    cursor = coll.find({}, sort=[("_id", -1)], batch_size=500)
 
     scored: list[tuple[int, dict[str, Any]]] = []
     for doc in cursor:

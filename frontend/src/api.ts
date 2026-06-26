@@ -47,8 +47,18 @@ export type DeleteInvoicesResponse = {
   deleted_count: number;
 };
 
+export type ChatMessage = {
+  role: "user" | "assistant" | string;
+  content: string;
+  timestamp?: string | null;
+};
+
 export type ChatResponse = {
   answer: string;
+  session_id: string;
+  messages: ChatMessage[];
+  suggestions: string[];
+  mode?: string | null;
 };
 
 export type LicenseProfile = {
@@ -63,6 +73,28 @@ export type LicenseProfile = {
   invoicesRemaining: number | null;
   isUnlimited: boolean;
   statusMessage: string;
+};
+
+export type PipelineStatus = {
+  generated_at: string;
+  awaiting_processing: number;
+  in_process: number;
+  processed: number;
+  error: number;
+  gemini_api_error?: number;
+  hitl_pending: number;
+  queue_total: number;
+  api_staging: number;
+  watcher_active: boolean;
+  async_jobs: number;
+  stored_total: number;
+  stored_healthy: number;
+  stored_errors: number;
+  hitl_flagged_total: number;
+  hitl_review_pending: number;
+  hitl_reviewed: number;
+  system_processed: number;
+  human_approved_files: number;
 };
 
 export type InvoiceJsonEditorResponse = {
@@ -230,17 +262,73 @@ export async function fetchLicenseProfile(): Promise<LicenseProfile> {
   return res.json();
 }
 
-export async function chat(question: string): Promise<ChatResponse> {
+export async function fetchPipelineStatus(): Promise<PipelineStatus> {
+  const res = await fetch("/api/telemetry/pipeline-status");
+  if (!res.ok) {
+    throw new Error(`Failed to load pipeline status (${res.status})`);
+  }
+  return res.json();
+}
+
+const CHAT_SESSION_KEY = "idp_chat_session_id";
+
+export function getChatSessionId(): string | null {
+  try {
+    return sessionStorage.getItem(CHAT_SESSION_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setChatSessionId(sessionId: string): void {
+  try {
+    sessionStorage.setItem(CHAT_SESSION_KEY, sessionId);
+  } catch {
+    /* ignore */
+  }
+}
+
+export async function fetchChatSuggestions(): Promise<string[]> {
+  const res = await fetch("/api/chat/suggestions");
+  if (!res.ok) {
+    throw new Error(`Failed to load chat suggestions (${res.status})`);
+  }
+  const data = (await res.json()) as { suggestions?: string[] };
+  return Array.isArray(data.suggestions) ? data.suggestions : [];
+}
+
+export async function fetchChatSession(sessionId: string): Promise<{
+  session_id: string;
+  messages: ChatMessage[];
+}> {
+  const res = await fetch(`/api/chat/session/${encodeURIComponent(sessionId)}`);
+  if (!res.ok) {
+    throw new Error(`Failed to load chat session (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function chat(
+  question: string,
+  sessionId?: string | null,
+): Promise<ChatResponse> {
   const res = await fetch("/api/chat", {
     method: "POST",
     headers: JSON_HEADERS,
-    body: JSON.stringify({ question }),
+    body: JSON.stringify({
+      question,
+      session_id: sessionId ?? getChatSessionId(),
+    }),
   });
   if (!res.ok) {
     const msg = await res.text();
     throw new Error(msg || `Chat failed (${res.status})`);
   }
-  return res.json();
+  const data = (await res.json()) as ChatResponse;
+  if (data.session_id) {
+    setChatSessionId(data.session_id);
+  }
+  return data;
 }
 
 export async function fetchSearchValues(field: SearchField): Promise<string[]> {

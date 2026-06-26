@@ -1,10 +1,11 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   InvoiceSummary,
   InvoiceListResponse,
   SearchField,
   LicenseProfile,
   fetchLicenseProfile,
+  fetchPipelineStatus,
   fetchSearchSuggestions,
   fetchSearchValues,
   fetchInvoices,
@@ -101,6 +102,8 @@ export const Dashboard: React.FC = () => {
   const [saveConfirmOpen, setSaveConfirmOpen] = useState(false);
   const [saveComment, setSaveComment] = useState("");
   const [licenseProfile, setLicenseProfile] = useState<LicenseProfile | null>(null);
+  const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
+  const pipelineSnapshotRef = useRef<string | null>(null);
   const [jsonEditorPreviewUrl, setJsonEditorPreviewUrl] = useState<string | null>(null);
   const [jsonEditorPreviewZoom, setJsonEditorPreviewZoom] = useState(1);
   const [jsonEditorPreviewRotate, setJsonEditorPreviewRotate] = useState(0);
@@ -226,9 +229,12 @@ export const Dashboard: React.FC = () => {
     };
   }, [isDraggingPreview]);
 
-  const loadInvoices = async () => {
+  const loadInvoices = useCallback(async (options?: { silent?: boolean }) => {
+    const silent = options?.silent ?? false;
     try {
-      setLoading(true);
+      if (!silent) {
+        setLoading(true);
+      }
       setError(null);
       const data: InvoiceListResponse = await fetchInvoices({
         start_date: startDate || undefined,
@@ -243,12 +249,17 @@ export const Dashboard: React.FC = () => {
         hitl_only: showHitlOnly,
       });
       setInvoices(items);
+      setLastRefreshedAt(new Date());
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load invoices");
+      if (!silent) {
+        setError(e instanceof Error ? e.message : "Failed to load invoices");
+      }
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
     }
-  };
+  }, [startDate, endDate, fileStatusFilter, searchField, searchValue, showHitlOnly]);
 
   const loadLicenseProfile = async () => {
     try {
@@ -390,9 +401,67 @@ export const Dashboard: React.FC = () => {
 
   useEffect(() => {
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+    pipelineSnapshotRef.current = null;
     void loadInvoices();
     void loadLicenseProfile();
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const pollForUpdates = async () => {
+      if (editing || jsonEditorOpen || uploading) {
+        return;
+      }
+
+      try {
+        const pipeline = await fetchPipelineStatus();
+        if (cancelled) {
+          return;
+        }
+
+        const snapshot = JSON.stringify({
+          stored_total: pipeline.stored_total,
+          stored_healthy: pipeline.stored_healthy,
+          stored_errors: pipeline.stored_errors,
+          hitl_flagged_total: pipeline.hitl_flagged_total,
+          hitl_review_pending: pipeline.hitl_review_pending,
+          in_process: pipeline.in_process,
+          watcher_active: pipeline.watcher_active,
+          queue_total: pipeline.queue_total,
+          processed: pipeline.processed,
+          error: pipeline.error,
+          gemini_api_error: pipeline.gemini_api_error ?? 0,
+        });
+
+        if (pipelineSnapshotRef.current === null) {
+          pipelineSnapshotRef.current = snapshot;
+          return;
+        }
+
+        if (snapshot === pipelineSnapshotRef.current) {
+          return;
+        }
+
+        pipelineSnapshotRef.current = snapshot;
+        await loadInvoices({ silent: true });
+        if (!cancelled) {
+          void loadLicenseProfile();
+        }
+      } catch {
+        // Background poll — keep the current table if a refresh fails.
+      }
+    };
+
+    const intervalId = window.setInterval(() => {
+      void pollForUpdates();
+    }, 3000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [loadInvoices, editing, jsonEditorOpen, uploading]);
 
   const handleFileChange = async (
     event: React.ChangeEvent<HTMLInputElement>,
@@ -739,6 +808,13 @@ export const Dashboard: React.FC = () => {
           <div className="section-header filters-row">
             <div>
               <h3>Recent Invoices</h3>
+              {lastRefreshedAt && (
+                <p className="analytics-updated live-refresh-hint">
+                  Live updates enabled
+                  {" · "}
+                  last refreshed {lastRefreshedAt.toLocaleTimeString()}
+                </p>
+              )}
               <div className="filters-inline">
                 <label>
                   From
@@ -1878,3 +1954,4 @@ function FormatAdditionalFieldLabel(key: string): string {
     .join(" ");
 }
 
+export { Dashboard as Home };

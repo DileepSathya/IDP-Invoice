@@ -33,6 +33,7 @@ def ensure_layout(root: Path) -> None:
         "invoices_data/_api_staging",
         "invoices_data/HITL_pending",
         "invoices_data/ERROR",
+        "invoices_data/gemini_api_error",
         "invoices_data/Completed",
         "logs",
         "data/db",

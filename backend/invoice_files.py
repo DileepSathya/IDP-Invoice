@@ -30,6 +30,9 @@ TO_BE_PROCESSED_DIR = _invoice_dir(
 )
 HITL_PENDING_DIR = _invoice_dir("HITL_PENDING_DIR", "./invoices_data/HITL_pending")
 ERROR_DIR = _invoice_dir("ERROR_DIR", "./invoices_data/ERROR", "ERROR_FILES_DIR")
+GEMINI_API_ERROR_DIR = _invoice_dir(
+    "GEMINI_API_ERROR_DIR", "./invoices_data/gemini_api_error"
+)
 COMPLETED_DIR = _invoice_dir("COMPLETED_DIR", "./invoices_data/Completed", "UPLOADS_DIR")
 # UI / API uploads only — not watched by the folder watcher (avoids duplicate OCR).
 API_STAGING_DIR = _invoice_dir("API_STAGING_DIR", "./invoices_data/_api_staging")
@@ -45,6 +48,7 @@ INVOICE_FILE_DIRS: tuple[Path, ...] = (
     TO_BE_PROCESSED_DIR,
     HITL_PENDING_DIR,
     ERROR_DIR,
+    GEMINI_API_ERROR_DIR,
     COMPLETED_DIR,
 )
 
@@ -77,6 +81,22 @@ def destination_dir(*, file_status: str, status: int, pipeline_failed: bool) -> 
     if status == 1:
         return HITL_PENDING_DIR
     return COMPLETED_DIR
+
+
+def move_to_gemini_api_error(source: Path) -> Path:
+    """Move a file that failed due to Gemini API errors into the recovery folder."""
+    return move_invoice_file(source, GEMINI_API_ERROR_DIR)
+
+
+def list_gemini_api_error_files() -> list[Path]:
+    ensure_invoice_data_layout()
+    from backend.agents.ocr import ALLOWED_EXTS
+
+    files: list[Path] = []
+    for entry in GEMINI_API_ERROR_DIR.iterdir():
+        if entry.is_file() and entry.suffix.lower() in ALLOWED_EXTS:
+            files.append(entry)
+    return sorted(files, key=lambda p: p.name.lower())
 
 
 def move_invoice_file(source: Path, dest_dir: Path) -> Path:
