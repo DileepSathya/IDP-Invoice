@@ -168,7 +168,17 @@ export const Chat: React.FC = () => {
               className={`chat-message chat-message--${isUser ? "user" : "assistant"}`}
             >
               <div className="chat-message-bubble">
-                <pre className="chat-message-text">{msg.content}</pre>
+                {isUser ? (
+                  <pre className="chat-message-text">{msg.content}</pre>
+                ) : msg.content.trimStart().startsWith("<") ? (
+                  <div
+                    className="chat-message-text"
+                    // eslint-disable-next-line react/no-danger
+                    dangerouslySetInnerHTML={{ __html: msg.content }}
+                  />
+                ) : (
+                  <pre className="chat-message-text">{msg.content}</pre>
+                )}
                 {msg.timestamp && (
                   <time className="chat-message-time">{formatMessageTime(msg.timestamp)}</time>
                 )}

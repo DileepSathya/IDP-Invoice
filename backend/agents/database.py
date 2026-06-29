@@ -95,6 +95,7 @@ def get_invoices_collection() -> Collection:
     # "Ensure" collection by ensuring indexes; collection will exist after first write.
     coll.create_index("file_path")
     coll.create_index([("tenant_id", 1), ("created_at", -1)])
+    coll.create_index([("processed_at", -1)])
     logger.debug(
         "[MongoDB] Using database %r, collection %r (indexes ensured on file_path).",
         db_name,
@@ -174,12 +175,14 @@ def store_invoice_result(
     )
     coll = get_invoices_collection()
     normalized_json = normalize_gemini_json_for_storage(gemini_json)
+    now = datetime.utcnow()
     doc: dict[str, Any] = {
         "file_path": file_path,
         "uploaded_file_path": uploaded_file_path,
         "ocr_text": ocr_text,
         "file_status": file_status,
-        "created_at": datetime.utcnow(),
+        "created_at": now,
+        "processed_at": now,
         "gemini": {
             "model": gemini_model,
             "raw_text": gemini_raw_text,

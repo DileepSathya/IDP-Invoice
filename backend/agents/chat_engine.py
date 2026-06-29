@@ -194,8 +194,10 @@ def chat(
     append_message(sid, role="user", content=q)
     session = get_or_create_session(sid)
 
-    structured = _try_structured_intent(q, session)
-    if structured is not None:
+    # Only use legacy structured handler for conversation-history queries.
+    # All invoice data queries are handled by the 3-layer pipeline for clean output.
+    if _HISTORY_RE.search(q):
+        structured = _format_history_answer(session)
         append_message(sid, role="assistant", content=structured)
         session = get_or_create_session(sid)
         return {
@@ -206,19 +208,32 @@ def chat(
             "mode": "structured",
         }
 
-    chunks = vector_search(q)
     if _gemini_available():
         try:
-            logger.info("[Chat engine] Using Gemini for answer (online mode).")
-            answer = answer_question(q)
-            mode = "gemini"
+            logger.info("[Chat engine] Using 3-layer pipeline (intent → MongoDB → refine).")
+            from backend.agents.invoice_chat_pipeline import run_pipeline
+            history = [
+                {"role": m.get("role", ""), "content": m.get("content", "")}
+                for m in (session.get("messages") or [])
+                if isinstance(m, dict)
+            ]
+            answer = run_pipeline(q, chat_history=history)
+            mode = "pipeline"
         except Exception as exc:
-            logger.warning("[Chat engine] Gemini failed, falling back to offline: %s", exc)
-            answer = _format_offline_rag_answer(q, chunks)
-            mode = "offline_fallback"
+            logger.error("[Chat engine] Gemini pipeline error: %s", exc)
+            answer = (
+                "⚠️ The AI assistant is temporarily unavailable.\n\n"
+                "This is likely due to a Gemini API error (quota exceeded, invalid key, or network issue).\n"
+                "Please check your GEMINI_API_KEY and quota at https://aistudio.google.com, then try again."
+            )
+            mode = "gemini_error"
     else:
-        answer = _format_offline_rag_answer(q, chunks)
-        mode = "offline"
+        answer = (
+            "⚠️ The AI assistant is not configured.\n\n"
+            "GEMINI_API_KEY is missing from your .env file. "
+            "Please add it and restart the server."
+        )
+        mode = "no_gemini_key"
 
     append_message(sid, role="assistant", content=answer)
     session = get_or_create_session(sid)
