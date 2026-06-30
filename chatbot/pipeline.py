@@ -69,7 +69,7 @@ This month : {month_start_str} to {today_str}
 === Output Format ===
 Return ONLY this JSON, no extra text:
 {{
-  "intent_type": "<count|sum|list|detail|average|trend|irrelevant to invoice application>",
+  "intent_type": "<count|sum|list|detail|average|trend|irrelevant>",
   "filters": {{
     "seller": "<substring or null>",
     "buyer": "<substring or null>",
@@ -122,9 +122,10 @@ was PROCESSED (processed_at field), NOT the date written on the invoice.
 "invoices processed this week" → intent_type=list, processed_date_from={week_start_str}, processed_date_to={today_str}
 
 === Irrelevant Query Rule ===
-If the user's query is NOT related to invoices, billing, payments, vendors, or this invoice management
-application, return EXACTLY this JSON and nothing else:
-{{"intent_type": "irrelevant to invoice application", "filters": {{}}, "limit": 0, "clarification_needed": null}}
+If the user's query has NOTHING to do with invoices, billing, payments, amounts, vendors, buyers, or
+this invoice management system — for example general knowledge questions like "who is the prime minister
+of India?", "what is 2+2?", "tell me a joke" — return EXACTLY this JSON and nothing else:
+{{"intent_type": "irrelevant", "filters": {{}}, "limit": 0, "clarification_needed": null}}
 """
 
 
@@ -424,7 +425,7 @@ def chat(user_query: str, chat_history: list[dict] | None = None) -> dict:
         intent = extract_intent(user_query, chat_history)
 
         # If query is not related to the application, reject it early
-        if intent.get("intent_type") == "irrelevant to invoice application":
+        if "irrelevant" in (intent.get("intent_type") or ""):
             return {
                 "answer":  "That question doesn't seem related to the invoice management application. Please ask about invoices, billing, vendors, payment status, or related topics.",
                 "intent":  intent,
@@ -505,9 +506,10 @@ def chat(user_query: str, chat_history: list[dict] | None = None) -> dict:
     try:
         # Layer 1 — understand the query
         intent = extract_intent(user_query, chat_history)
+    
 
         # If query is not related to the application, reject it early
-        if intent.get("intent_type") == "irrelevant to invoice application":
+        if "irrelevant" in (intent.get("intent_type") or ""):
             return {
                 "answer":  "That question doesn't seem related to the invoice management application. Please ask about invoices, billing, vendors, payment status, or related topics.",
                 "intent":  intent,
