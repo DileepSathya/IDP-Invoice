@@ -69,7 +69,7 @@ This month : {month_start_str} to {today_str}
 === Output Format ===
 Return ONLY this JSON, no extra text:
 {{
-  "intent_type": "<count|sum|list|detail|average|trend>",
+  "intent_type": "<count|sum|list|detail|average|trend|irrelevant to invoice application>",
   "filters": {{
     "seller": "<substring or null>",
     "buyer": "<substring or null>",
@@ -120,6 +120,11 @@ was PROCESSED (processed_at field), NOT the date written on the invoice.
 "average bill value for security guard" → intent_type=average, service_type="SECURITY GUARD"
 "corrupted files" → intent_type=list, file_status="corrupted"
 "invoices processed this week" → intent_type=list, processed_date_from={week_start_str}, processed_date_to={today_str}
+
+=== Irrelevant Query Rule ===
+If the user's query is NOT related to invoices, billing, payments, vendors, or this invoice management
+application, return EXACTLY this JSON and nothing else:
+{{"intent_type": "irrelevant to invoice application", "filters": {{}}, "limit": 0, "clarification_needed": null}}
 """
 
 
@@ -418,6 +423,15 @@ def chat(user_query: str, chat_history: list[dict] | None = None) -> dict:
         # Layer 1 — understand the query
         intent = extract_intent(user_query, chat_history)
 
+        # If query is not related to the application, reject it early
+        if intent.get("intent_type") == "irrelevant to invoice application":
+            return {
+                "answer":  "That question doesn't seem related to the invoice management application. Please ask about invoices, billing, vendors, payment status, or related topics.",
+                "intent":  intent,
+                "raw":     {},
+                "error":   None,
+            }
+
         # If Gemini needs clarification, ask the user
         if intent.get("clarification_needed"):
             return {
@@ -492,6 +506,15 @@ def chat(user_query: str, chat_history: list[dict] | None = None) -> dict:
         # Layer 1 — understand the query
         intent = extract_intent(user_query, chat_history)
 
+        # If query is not related to the application, reject it early
+        if intent.get("intent_type") == "irrelevant to invoice application":
+            return {
+                "answer":  "That question doesn't seem related to the invoice management application. Please ask about invoices, billing, vendors, payment status, or related topics.",
+                "intent":  intent,
+                "raw":     {},
+                "error":   None,
+            }
+
         # If Gemini needs clarification, ask the user
         if intent.get("clarification_needed"):
             return {
@@ -511,7 +534,7 @@ def chat(user_query: str, chat_history: list[dict] | None = None) -> dict:
 
     except Exception as e:
         return {
-            "answer": f"Sorry, I ran into an error processing your query. Please try again.",
+            "answer": "Sorry, I ran into an error processing your query. Please try again.",
             "intent": {},
             "raw":    {},
             "error":  str(e),
