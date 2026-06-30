@@ -5,7 +5,7 @@ Layer 1  →  Intent Engine     (Gemini understands messy user query)
 Layer 2  →  Query Builder     (Python builds safe MongoDB query from intent)
 Layer 3  →  Response Refiner  (Gemini formats raw data into clean answer)
 """
-
+import logging
 import json
 import re
 from datetime import datetime, timezone, timedelta
@@ -15,7 +15,7 @@ from config import (
     MONGO_URI, MONGO_DB, MONGO_COLLECTION,
     GEMINI_API_KEY, GEMINI_MODEL, MAX_LIST_RESULTS,
 )
-
+logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────────────────────
 # SETUP
 # ─────────────────────────────────────────────────────────────────────────────
@@ -129,7 +129,35 @@ of India?", "what is 2+2?", "tell me a joke" — return EXACTLY this JSON and no
 """
 
 
+_RELEVANCE_PROMPT = """You are a classifier for an invoice management system.
+Determine if the user's question is related to THIS application's domain.
+
+Relevant topics: invoices, billing, payments, vendors, buyers, amounts, invoice status,
+processing status, HITL review, corrupted files, sellers, GST, invoice numbers, bill months.
+
+NOT relevant: general knowledge, math, geography, history, politics, science, sports,
+entertainment, recipes, weather, coding help unrelated to this app, or anything not
+about invoice/billing data.
+
+Reply with ONLY one word: YES or NO
+
+User question: {query}"""
+
+
+def _is_invoice_related(user_query: str) -> bool:
+    """Quick binary relevance check before running the full intent pipeline."""
+    try:
+        response = _gemini.generate_content(
+            _RELEVANCE_PROMPT.format(query=user_query)
+        )
+        answer = response.text.strip().upper()
+        return answer.startswith("Y")
+    except Exception:
+        return True  # on error, allow through
+
+
 def extract_intent(user_query: str, chat_history: list[dict]) -> dict:
+    logger.info("Entering layer -1")
     """
     Layer 1: Use Gemini to convert messy user query → structured intent JSON.
     chat_history format: [{"role": "user"|"assistant", "content": "..."}]
@@ -153,11 +181,12 @@ def extract_intent(user_query: str, chat_history: list[dict]) -> dict:
     raw = re.sub(r"\s*```$", "", raw)
 
     try:
+         
         return json.loads(raw)
     except json.JSONDecodeError:
         # Fallback: treat as a generic list query
         return {
-            "intent_type": "list",
+            "intent_type": "irrelevant",
             "filters": {},
             "limit": MAX_LIST_RESULTS,
             "clarification_needed": None,
@@ -420,18 +449,24 @@ def chat(user_query: str, chat_history: list[dict] | None = None) -> dict:
     if chat_history is None:
         chat_history = []
 
+    _IRRELEVANT = {
+        "answer":  "That question isn't related to the invoice management application. Please ask about invoices, billing, vendors, payment status, or related topics.",
+        "intent":  {},
+        "raw":     {},
+        "error":   None,
+    }
+
     try:
+        # Pre-check: reject off-topic queries before running the full pipeline
+        if not _is_invoice_related(user_query):
+            return _IRRELEVANT
+
         # Layer 1 — understand the query
         intent = extract_intent(user_query, chat_history)
 
-        # If query is not related to the application, reject it early
+        # Fallback: catch any irrelevant intent that slipped through
         if "irrelevant" in (intent.get("intent_type") or ""):
-            return {
-                "answer":  "That question doesn't seem related to the invoice management application. Please ask about invoices, billing, vendors, payment status, or related topics.",
-                "intent":  intent,
-                "raw":     {},
-                "error":   None,
-            }
+            return _IRRELEVANT
 
         # If Gemini needs clarification, ask the user
         if intent.get("clarification_needed"):
@@ -503,19 +538,25 @@ def chat(user_query: str, chat_history: list[dict] | None = None) -> dict:
     if chat_history is None:
         chat_history = []
 
+    _IRRELEVANT = {
+        "answer":  "That question isn't related to the invoice management application. Please ask about invoices, billing, vendors, payment status, or related topics.",
+        "intent":  {},
+        "raw":     {},
+        "error":   None,
+    }
+
     try:
+        # Pre-check: reject off-topic queries before running the full pipeline
+        if not _is_invoice_related(user_query):
+            return _IRRELEVANT
+       
         # Layer 1 — understand the query
         intent = extract_intent(user_query, chat_history)
-    
+       
 
-        # If query is not related to the application, reject it early
+        # Fallback: catch any irrelevant intent that slipped through
         if "irrelevant" in (intent.get("intent_type") or ""):
-            return {
-                "answer":  "That question doesn't seem related to the invoice management application. Please ask about invoices, billing, vendors, payment status, or related topics.",
-                "intent":  intent,
-                "raw":     {},
-                "error":   None,
-            }
+            return _IRRELEVANT
 
         # If Gemini needs clarification, ask the user
         if intent.get("clarification_needed"):
@@ -525,10 +566,10 @@ def chat(user_query: str, chat_history: list[dict] | None = None) -> dict:
                 "raw":     {},
                 "error":   None,
             }
-
+        logger.info("Entering layer -2")
         # Layer 2 — fetch data from MongoDB
         raw_result = execute_query(intent)
-
+        logger.info("layer -2 completed")
         # Layer 3 — format the response
         answer = refine_response(user_query, raw_result, chat_history)
 

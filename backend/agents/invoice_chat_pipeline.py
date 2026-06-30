@@ -166,6 +166,38 @@ user explicitly asks about the date written on the invoice.
 INTENT_SYSTEM_PROMPT = _build_intent_prompt()
 
 
+_RELEVANCE_PROMPT = (
+    "You are a relevance classifier for an invoice management system.\n"
+    "Relevant topics: invoices, billing, payments, amounts, vendors, buyers, sellers, GST,\n"
+    "invoice numbers, bill months, processing status, HITL review, corrupted files.\n"
+    "NOT relevant: general knowledge, math, geography, history, politics, science, sports,\n"
+    "weather, jokes, coding help, or anything unrelated to invoice/billing data.\n\n"
+    "Examples of NOT relevant:\n"
+    "  'who is the prime minister of india' → NO\n"
+    "  'what is 2+2' → NO\n"
+    "  'tell me a joke' → NO\n"
+    "Examples of relevant:\n"
+    "  'show me all invoices' → YES\n"
+    "  'how many pending invoices' → YES\n"
+    "  'total amount this month' → YES\n\n"
+    "Reply with ONLY one word: YES or NO\n\n"
+    "User question: {query}"
+)
+
+
+def _is_invoice_related(user_query: str) -> bool:
+    """Binary relevance gate — runs before the full intent pipeline."""
+    try:
+        response = _get_gemini().generate_content(
+            _RELEVANCE_PROMPT.format(query=user_query)
+        )
+        answer = response.text.strip().upper()
+        logger.info("[Pipeline] Relevance check for %r → %s", user_query, answer)
+        return answer.startswith("Y")
+    except Exception:
+        return True  # fail open — let the pipeline handle it
+
+
 def extract_intent(user_query: str, chat_history: list[dict]) -> dict:
     """Layer 1: Gemini converts messy query → structured intent JSON."""
     history_text = ""
@@ -1107,6 +1139,11 @@ def run_pipeline(user_query: str, chat_history: list[dict] | None = None) -> str
     """
     if chat_history is None:
         chat_history = []
+
+    # Relevance gate — reject off-topic queries before hitting MongoDB
+    if not _is_invoice_related(user_query):
+        logger.info("[Pipeline] Off-topic query rejected: %r", user_query)
+        return "That question isn't related to the invoice management application. Please ask about invoices, billing, vendors, payment status, or related topics."
 
     # Layer 1 — intent extraction (Gemini)
     intent = extract_intent(user_query, chat_history)
