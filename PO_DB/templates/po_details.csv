@@ -1,0 +1,4 @@
+po_id,business_unit,item_id,line_number,rate,qty,units,comments,total
+PO1001,BU01,I0001,1,450.00,10,box,Urgent delivery needed,4500.00
+PO1001,BU01,I0002,2,1200.00,5,nos,,6000.00
+PO1002,BU01,I0001,1,450.00,20,box,,9000.00

@@ -44,9 +44,9 @@ load_dotenv()
 #  CONFIGURATION  – change these as needed
 # ─────────────────────────────────────────────
 #"KLKA2526-12078" "36230377"  "SSS/25-26/00832"
-INVOICE_NUMBER = "TTFPL/25-26/510" # <── set your invoice number here
+INVOICE_NUMBER = "KLKA2526-12078" # <── set your invoice number here
 
-TALLY_URL          = "http://localhost:9000"   # Tally HTTP server
+TALLY_URL          = "http://192.168.29.237:9000"   # Tally HTTP server
 TALLY_TIMEOUT      = 10                        # seconds
 TALLY_LONG_TIMEOUT = 120                       # company list / heavy exports
 
