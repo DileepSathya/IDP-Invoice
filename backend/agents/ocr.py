@@ -255,6 +255,9 @@ def _gemini_extract_invoice_json(
 
     logger.info("[Gemini] Start extraction")
 
+    # The Settings → AI agent pane writes straight into .env (see
+    # backend/agent_settings.py), so this already picks up a key saved from
+    # the UI — no separate lookup needed.
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if not api_key:
         logger.warning("[Gemini] API key missing → skipping extraction")
@@ -290,19 +293,30 @@ Return STRICT JSON format with these fields:
 invoice
 seller
 buyer
-service
-HSN
-qnty
-amount
-total_amount
 address
 bank_name
 bank_address
 account_number
 account_holder_name
+total_amount
+po_id (the Purchase Order number / PO number / Purchase ID, however it is labeled on the invoice; null if not present anywhere)
+due_date
+term_to_pay (the payment term / term of payment / net days, e.g. "Net 30", "30 days", "60 days"; null if not shown)
+line_items: an array of objects, each with:
+  - service
+  - HSN
+  - qnty (numeric quantity only, without unit of measure)
+  - unit (unit of measure for qnty, e.g. "nos", "units", "ltr", "kg", "pcs"; null if not shown)
+  - price_per_unit
+  - amount (pre-tax amount; must equal qnty * price_per_unit when both are present)
 
 Rules:
 - If a field is not present return null
+- po_id may be labeled PO Number, Purchase Order, Purchase Order Number, Purchase ID, or similar - extract it under the single key po_id; if genuinely not shown, return null
+- term_to_pay may be labeled Term of Payment, Payment Terms, Net Days, or Credit Period - extract it under the single key term_to_pay; if not shown, return null (either term_to_pay or due_date being present is enough)
+- Never guess qnty or price_per_unit: only fill them when the OCR text actually shows a value
+- Ensure total_amount equals the sum of every line item's amount whenever the invoice supports that computation
+- If there is a separate Billing Summary / Totals section, add sub_total, discount, sgst_amount, cgst_amount, igst_amount, round_off into additional_fields (use exact key names, null if not shown)
 - Do not add explanations
 - Return only JSON
 

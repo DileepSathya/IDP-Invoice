@@ -16,7 +16,7 @@ from urllib import request as urllib_request
 from urllib import error as urllib_error
 
 from bson import ObjectId
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -24,15 +24,25 @@ from pydantic import BaseModel, Field
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from backend.app_paths import app_dir, frontend_dist_dir, load_app_dotenv
+from backend.agent_settings import (
+    SUPPORTED_MODELS,
+    get_agent_settings,
+    is_agent_configured,
+    masked_api_key,
+    missing_agent_settings,
+    save_agent_settings,
+)
 from backend.hitl_status import (
     calculate_hitl_flag as _calculate_hitl_flag,
     calculate_status_from_hitl as _calculate_status_from_hitl,
+    compute_expected_total as _compute_expected_total,
     pipeline_lifecycle_status,
     to_bool as _to_bool,
 )
 from backend.invoice_files import (
     ensure_invoice_data_layout,
     finalize_invoice_file,
+    move_to_gemini_api_error,
     relocate_after_hitl_processed,
     resolve_invoice_file,
     staging_path_for_upload,
@@ -43,12 +53,14 @@ from backend.agents.database import (
     get_api_clients_collection,
     get_invoices_collection,
     get_jobs_collection,
+    get_pipeline_error_counts,
     get_webhook_attempts_collection,
     record_pipeline_telemetry,
     store_invoice_result,
 )
 from backend.agents.ocr import ALLOWED_EXTS, process_file
 from backend.app_logging import configure_logging
+from backend.pipeline_errors import is_gemini_api_error, is_network_error
 
 from datetime import datetime, date
 
@@ -169,6 +181,8 @@ def _collect_telemetry_overview_counts() -> TelemetryOverviewResponse:
         if _to_bool(additional_fields.get("human_approved")):
             human_approved_files += 1
 
+    error_counts = get_pipeline_error_counts()
+
     return TelemetryOverviewResponse(
         generated_at=datetime.utcnow().isoformat() + "Z",
         total_uploaded_files=total_uploaded_files,
@@ -179,6 +193,8 @@ def _collect_telemetry_overview_counts() -> TelemetryOverviewResponse:
         hitl_processed=hitl_processed,
         system_processed=system_processed,
         human_approved_files=human_approved_files,
+        gemini_quota_error_count=error_counts.get("gemini_quota_error_count", 0),
+        network_error_count=error_counts.get("network_error_count", 0),
     )
 
 
@@ -704,7 +720,14 @@ def _process_job(
                 )
             except Exception:
                 pass
-        error_stage = "license" if isinstance(e, InvoiceQuotaExceeded) else "pipeline"
+        if isinstance(e, InvoiceQuotaExceeded):
+            error_stage = "license"
+        elif is_gemini_api_error(e):
+            error_stage = "gemini_quota"
+        elif is_network_error(e):
+            error_stage = "network"
+        else:
+            error_stage = "pipeline"
         record_pipeline_telemetry(
             {
                 "run_id": job_id,
@@ -768,6 +791,7 @@ class InvoiceSummary(BaseModel):
     status: Optional[int] = None
     payment_status: Optional[str] = None
     quantity: Optional[Any] = None
+    unit: Optional[Any] = None
     price_per_unit: Optional[Any] = None
     amount: Optional[Any] = None
     tax_rate: Optional[Any] = None
@@ -778,8 +802,14 @@ class InvoiceSummary(BaseModel):
     sgst_amount: Optional[Any] = None
     cgst_rate: Optional[Any] = None
     cgst_amount: Optional[Any] = None
+    igst_rate: Optional[Any] = None
+    igst_amount: Optional[Any] = None
+    discount: Optional[Any] = None
+    round_off: Optional[Any] = None
     summary_total_amount: Optional[Any] = None
     hitl: Optional[bool] = None
+    hitl_remark: Optional[str] = None
+    hitl_remarks: Optional[List[str]] = None
     deblurred_applied: Optional[bool] = None
     human_approved: Optional[bool] = None
 
@@ -822,6 +852,24 @@ class LicenseProfileResponse(BaseModel):
     statusMessage: str
 
 
+class AgentSettingsResponse(BaseModel):
+    model: Optional[str] = None
+    api_key_masked: Optional[str] = None
+    configured: bool
+    supported_models: List[str]
+
+
+class AgentSettingsUpdate(BaseModel):
+    model: str
+    api_key: str
+
+
+class ConfigStatusResponse(BaseModel):
+    configured: bool
+    missing: List[str]
+    message: Optional[str] = None
+
+
 class SearchValuesResponse(BaseModel):
     values: List[str]
 
@@ -840,6 +888,8 @@ class TelemetryOverviewResponse(BaseModel):
     hitl_processed: int
     system_processed: int
     human_approved_files: int
+    gemini_quota_error_count: int = 0
+    network_error_count: int = 0
 
 
 class PipelineStatusResponse(BaseModel):
@@ -862,6 +912,8 @@ class PipelineStatusResponse(BaseModel):
     hitl_reviewed: int
     system_processed: int
     human_approved_files: int
+    gemini_quota_error_count: int = 0
+    network_error_count: int = 0
 
 
 class InvoiceUpdate(BaseModel):
@@ -875,6 +927,7 @@ class InvoiceUpdate(BaseModel):
     status: Optional[str] = None
     payment_status: Optional[str] = None
     quantity: Optional[str] = None
+    unit: Optional[str] = None
     price_per_unit: Optional[str] = None
     amount: Optional[str] = None
     tax_rate: Optional[str] = None
@@ -885,12 +938,17 @@ class InvoiceUpdate(BaseModel):
     sgst_amount: Optional[str] = None
     cgst_rate: Optional[str] = None
     cgst_amount: Optional[str] = None
+    igst_rate: Optional[str] = None
+    igst_amount: Optional[str] = None
+    discount: Optional[str] = None
+    round_off: Optional[str] = None
 
 
 class LineItemCreate(BaseModel):
     hsn_number: Optional[str] = ""
     service: Optional[str] = ""
     quantity: Optional[str] = ""
+    unit: Optional[str] = ""
     price_per_unit: Optional[str] = ""
     amount: Optional[str] = ""
     tax_rate: Optional[str] = ""
@@ -936,6 +994,7 @@ def _invoice_summary_row_from_doc(doc: dict[str, Any], *, line_item_index: Optio
         hsn_value = li.get("hsn_number") or li.get("HSN_number") or li.get("HSN")
         service_value = li.get("service") or li.get("description")
         quantity_value = li.get("quantity") or li.get("qty")
+        unit_value = li.get("unit") or li.get("uom") or li.get("unit_of_measure")
         price_per_unit_value = li.get("price_per_unit") or li.get("rate") or li.get("unit_price")
         amount_value = li.get("amount") or li.get("total")
         tax_rate_value = li.get("tax_rate")
@@ -950,6 +1009,7 @@ def _invoice_summary_row_from_doc(doc: dict[str, Any], *, line_item_index: Optio
         )
         service_value = gemini_json.get("service")
         quantity_value = gemini_json.get("quantity")
+        unit_value = gemini_json.get("unit") or gemini_json.get("uom") or gemini_json.get("unit_of_measure")
         price_per_unit_value = gemini_json.get("price_per_unit")
         amount_value = gemini_json.get("amount")
         tax_rate_value = gemini_json.get("tax_rate")
@@ -991,6 +1051,7 @@ def _invoice_summary_row_from_doc(doc: dict[str, Any], *, line_item_index: Optio
         status=status_value,
         payment_status=payment_status_value,
         quantity=quantity_value,
+        unit=unit_value,
         price_per_unit=price_per_unit_value,
         amount=amount_value,
         tax_rate=tax_rate_value,
@@ -1001,8 +1062,14 @@ def _invoice_summary_row_from_doc(doc: dict[str, Any], *, line_item_index: Optio
         sgst_amount=additional_fields.get("sgst_amount"),
         cgst_rate=additional_fields.get("cgst_rate"),
         cgst_amount=additional_fields.get("cgst_amount"),
+        igst_rate=additional_fields.get("igst_rate"),
+        igst_amount=additional_fields.get("igst_amount") or additional_fields.get("total_igst_amount"),
+        discount=additional_fields.get("discount") or additional_fields.get("discount_amount") or additional_fields.get("total_discount"),
+        round_off=additional_fields.get("round_off") or additional_fields.get("roundoff") or additional_fields.get("square_off"),
         summary_total_amount=additional_fields.get("summary_total_amount"),
         hitl=hitl_value,
+        hitl_remark=str(additional_fields.get("hitl_remark") or "") or None,
+        hitl_remarks=(additional_fields.get("hitl_remarks") if isinstance(additional_fields.get("hitl_remarks"), list) else None),
         deblurred_applied=deblurred_applied_value,
         human_approved=human_approved_value,
     )
@@ -1033,47 +1100,14 @@ def _sum_line_item_amounts(line_items: Any) -> Optional[float]:
     return running if seen else None
 
 
-def _sum_line_item_amounts_after_tax(line_items: Any) -> Optional[float]:
-    if not isinstance(line_items, list) or len(line_items) == 0:
-        return None
-    running = 0.0
-    seen = False
-    for li in line_items:
-        if not isinstance(li, dict):
-            continue
-        n = _to_float(li.get("amount_after_tax"))
-        if n is None:
-            continue
-        running += n
-        seen = True
-    return running if seen else None
-
-
 def _calculate_summary_total_amount(gemini_json: dict[str, Any]) -> Optional[float]:
-    additional_fields = gemini_json.get("additional_fields") or {}
-    line_items = gemini_json.get("line_items") or []
-
-    # Preferred source: line-item final values (amount_after_tax).
-    amount_after_tax_sum = _sum_line_item_amounts_after_tax(line_items)
-    if amount_after_tax_sum is not None:
-        return amount_after_tax_sum
-
-    base_amount = _sum_line_item_amounts(line_items)
-    if base_amount is None:
-        base_amount = _to_float(
-            additional_fields.get("sub_total")
-            or additional_fields.get("subtotal_after_discount")
-            or gemini_json.get("amount")
-        )
-
-    sgst_amount = _to_float(additional_fields.get("sgst_amount")) or 0.0
-    cgst_amount = _to_float(additional_fields.get("cgst_amount")) or 0.0
-    igst_amount = _to_float(additional_fields.get("igst_amount") or additional_fields.get("total_igst_amount")) or 0.0
-    round_off = _to_float(additional_fields.get("round_off")) or 0.0
-
-    if base_amount is None:
-        return _to_float(gemini_json.get("total_amount") or gemini_json.get("grand_total"))
-    return base_amount + sgst_amount + cgst_amount + igst_amount + round_off
+    # Delegates to the shared hitl_status implementation so the "true" invoice total
+    # (line items + discount/round-off/CGST/SGST/IGST, wherever they live) is computed
+    # identically for HITL validation and for the UI's displayed summary total.
+    expected = _compute_expected_total(gemini_json)
+    if expected is not None:
+        return expected
+    return _to_float(gemini_json.get("total_amount") or gemini_json.get("grand_total"))
 
 
 def _sync_hitl_and_status(
@@ -1089,7 +1123,10 @@ def _sync_hitl_and_status(
         additional_fields = {}
         gemini_json["additional_fields"] = additional_fields
 
+    existing_human_approved = _to_bool(additional_fields.get("human_approved"))
+
     hitl_value = _calculate_hitl_flag(gemini_json)
+    additional_fields = gemini_json.get("additional_fields") or {}
     existing_hitl = additional_fields.get("HITL", additional_fields.get("HIT"))
     existing_hitl_bool = _to_bool(existing_hitl)
 
@@ -1117,6 +1154,14 @@ def _sync_hitl_and_status(
         update_doc["gemini.json.additional_fields.ever_hitl_true"] = human_processed
     if existing_status != status_value:
         update_doc["gemini.json.additional_fields.status"] = status_value
+
+    # Keep the concise HITL reasons in sync with the freshly computed remarks so every
+    # read path (including a doc refetched straight from Mongo) reflects the latest check.
+    update_doc["gemini.json.additional_fields.hitl_remark"] = additional_fields.get("hitl_remark", "")
+    update_doc["gemini.json.additional_fields.hitl_remarks"] = additional_fields.get("hitl_remarks", [])
+    new_human_approved = _to_bool(additional_fields.get("human_approved"))
+    if new_human_approved != existing_human_approved:
+        update_doc["gemini.json.additional_fields.human_approved"] = new_human_approved
 
     if update_doc:
         try:
@@ -1152,6 +1197,9 @@ async def _app_lifespan(app: FastAPI):
     # Uvicorn may replace root log handlers after import; re-attach logs/idp.log here so
     # post-OCR lines (uploads path, MongoDB insert) are always recorded.
     configure_logging()
+    from backend.agent_settings import load_agent_settings_into_env
+
+    load_agent_settings_into_env()
     yield
 
 
@@ -1188,6 +1236,58 @@ def serve_invoice_file(filename: str) -> FileResponse:
     if not resolved:
         raise HTTPException(status_code=404, detail="File not found.")
     return FileResponse(resolved)
+
+
+def _open_pdf_for_preview(filename: str):
+    """Resolve + open a quarantined/completed PDF for preview rendering.
+
+    Kept separate from `/raw/{filename}` (rather than nested under it) so this
+    never competes with that catch-all path route for a match — distinct
+    prefixes avoid any FastAPI/Starlette route-ordering ambiguity.
+    """
+    resolved = resolve_invoice_file(filename)
+    if not resolved:
+        raise HTTPException(status_code=404, detail="File not found.")
+    if resolved.suffix.lower() != ".pdf":
+        raise HTTPException(status_code=400, detail="Not a PDF file.")
+
+    import pymupdf
+
+    try:
+        return pymupdf.open(str(resolved))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to open PDF: {e}") from e
+
+
+@app.get("/raw-pdf-info/{filename:path}")
+def get_pdf_preview_info(filename: str) -> dict[str, int]:
+    """Page count for the PDF preview pager (Prev/Next arrows) in the UI."""
+    doc = _open_pdf_for_preview(filename)
+    try:
+        return {"page_count": doc.page_count}
+    finally:
+        doc.close()
+
+
+@app.get("/raw-pdf-page/{filename:path}")
+def get_pdf_preview_page(filename: str, page: int = Query(1, ge=1)) -> Response:
+    """Render one PDF page to a PNG so the preview panes can show it as a
+    plain image — reusing the same zoom/pan UI as JPEG/PNG previews, and
+    sidestepping any browser/webview differences in native PDF rendering
+    (the previous <iframe>-based preview also ran into this app's own
+    X-Frame-Options: DENY security header blocking the embed)."""
+    doc = _open_pdf_for_preview(filename)
+    try:
+        if page > doc.page_count:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Page {page} out of range (PDF has {doc.page_count} page(s)).",
+            )
+        pix = doc[page - 1].get_pixmap(dpi=150)
+        png_bytes = pix.tobytes("png")
+    finally:
+        doc.close()
+    return Response(content=png_bytes, media_type="image/png")
 
 
 @app.middleware("http")
@@ -1262,6 +1362,54 @@ def get_license_profile() -> LicenseProfileResponse:
     from license_validator import get_license_profile as _get_license_profile
 
     return LicenseProfileResponse(**_get_license_profile())
+
+
+@app.get("/agent-settings", response_model=AgentSettingsResponse)
+def get_agent_settings_route() -> AgentSettingsResponse:
+    settings = get_agent_settings()
+    return AgentSettingsResponse(
+        model=settings.get("model"),
+        api_key_masked=masked_api_key(settings.get("api_key")),
+        configured=is_agent_configured(),
+        supported_models=list(SUPPORTED_MODELS),
+    )
+
+
+@app.put("/agent-settings", response_model=AgentSettingsResponse)
+def put_agent_settings_route(payload: AgentSettingsUpdate) -> AgentSettingsResponse:
+    try:
+        save_agent_settings(payload.model, payload.api_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    settings = get_agent_settings()
+    logger.info("[HTTP API → PUT /agent-settings] AI agent settings updated (model=%s).", settings.get("model"))
+    return AgentSettingsResponse(
+        model=settings.get("model"),
+        api_key_masked=masked_api_key(settings.get("api_key")),
+        configured=is_agent_configured(),
+        supported_models=list(SUPPORTED_MODELS),
+    )
+
+
+_CONFIG_MISSING_MESSAGES = {
+    "ai_model": "No AI model selected.",
+    "api_key": "No API key entered.",
+}
+
+
+@app.get("/config-status", response_model=ConfigStatusResponse)
+def get_config_status() -> ConfigStatusResponse:
+    missing = missing_agent_settings()
+    if not missing:
+        return ConfigStatusResponse(configured=True, missing=[], message=None)
+
+    parts = [_CONFIG_MISSING_MESSAGES.get(item, item) for item in missing]
+    message = (
+        "AI agent is not fully configured (" + "; ".join(parts) + "). "
+        "Open the account menu → Settings → AI agent to finish setup before uploading invoices."
+    )
+    return ConfigStatusResponse(configured=False, missing=missing, message=message)
 
 
 @app.post("/v1/files", response_model=ApiUploadResponse, status_code=202)
@@ -1601,6 +1749,7 @@ def list_invoices(
                 li_service = li.get("service") or li.get("description")
                 li_hsn = li.get("hsn_number") or li.get("HSN_number") or li.get("HSN")
                 li_quantity = li.get("quantity") or li.get("qty")
+                li_unit = li.get("unit") or li.get("uom") or li.get("unit_of_measure")
                 li_price_per_unit = li.get("price_per_unit") or li.get("rate") or li.get("unit_price")
                 li_amount = li.get("amount") or li.get("total")
                 li_tax_rate = li.get("tax_rate")
@@ -1623,6 +1772,7 @@ def list_invoices(
                         status=status_value,
                         payment_status=payment_status_value,
                         quantity=li_quantity,
+                        unit=li_unit,
                         price_per_unit=li_price_per_unit,
                         amount=li_amount,
                         tax_rate=li_tax_rate,
@@ -1633,8 +1783,23 @@ def list_invoices(
                         sgst_amount=(gemini_json.get("additional_fields") or {}).get("sgst_amount"),
                         cgst_rate=(gemini_json.get("additional_fields") or {}).get("cgst_rate"),
                         cgst_amount=(gemini_json.get("additional_fields") or {}).get("cgst_amount"),
+                        igst_rate=(gemini_json.get("additional_fields") or {}).get("igst_rate"),
+                        igst_amount=(gemini_json.get("additional_fields") or {}).get("igst_amount")
+                        or (gemini_json.get("additional_fields") or {}).get("total_igst_amount"),
+                        discount=(gemini_json.get("additional_fields") or {}).get("discount")
+                        or (gemini_json.get("additional_fields") or {}).get("discount_amount")
+                        or (gemini_json.get("additional_fields") or {}).get("total_discount"),
+                        round_off=(gemini_json.get("additional_fields") or {}).get("round_off")
+                        or (gemini_json.get("additional_fields") or {}).get("roundoff")
+                        or (gemini_json.get("additional_fields") or {}).get("square_off"),
                         summary_total_amount=(gemini_json.get("additional_fields") or {}).get("summary_total_amount"),
                         hitl=hitl_value,
+                        hitl_remark=str((gemini_json.get("additional_fields") or {}).get("hitl_remark") or "") or None,
+                        hitl_remarks=(
+                            (gemini_json.get("additional_fields") or {}).get("hitl_remarks")
+                            if isinstance((gemini_json.get("additional_fields") or {}).get("hitl_remarks"), list)
+                            else None
+                        ),
                         deblurred_applied=_to_bool((gemini_json.get("additional_fields") or {}).get("deblurred_applied")),
                         human_approved=_to_bool((gemini_json.get("additional_fields") or {}).get("human_approved")),
                     )
@@ -1668,6 +1833,7 @@ def list_invoices(
                     status=status_value,
                     payment_status=payment_status_value,
                     quantity=gemini_json.get("quantity"),
+                    unit=gemini_json.get("unit") or gemini_json.get("uom") or gemini_json.get("unit_of_measure"),
                     price_per_unit=gemini_json.get("price_per_unit"),
                     amount=gemini_json.get("amount"),
                     tax_rate=tax_rate_value,
@@ -1678,8 +1844,23 @@ def list_invoices(
                     sgst_amount=(gemini_json.get("additional_fields") or {}).get("sgst_amount"),
                     cgst_rate=(gemini_json.get("additional_fields") or {}).get("cgst_rate"),
                     cgst_amount=(gemini_json.get("additional_fields") or {}).get("cgst_amount"),
+                    igst_rate=(gemini_json.get("additional_fields") or {}).get("igst_rate"),
+                    igst_amount=(gemini_json.get("additional_fields") or {}).get("igst_amount")
+                    or (gemini_json.get("additional_fields") or {}).get("total_igst_amount"),
+                    discount=(gemini_json.get("additional_fields") or {}).get("discount")
+                    or (gemini_json.get("additional_fields") or {}).get("discount_amount")
+                    or (gemini_json.get("additional_fields") or {}).get("total_discount"),
+                    round_off=(gemini_json.get("additional_fields") or {}).get("round_off")
+                    or (gemini_json.get("additional_fields") or {}).get("roundoff")
+                    or (gemini_json.get("additional_fields") or {}).get("square_off"),
                     summary_total_amount=(gemini_json.get("additional_fields") or {}).get("summary_total_amount"),
                     hitl=hitl_value,
+                    hitl_remark=str((gemini_json.get("additional_fields") or {}).get("hitl_remark") or "") or None,
+                    hitl_remarks=(
+                        (gemini_json.get("additional_fields") or {}).get("hitl_remarks")
+                        if isinstance((gemini_json.get("additional_fields") or {}).get("hitl_remarks"), list)
+                        else None
+                    ),
                     deblurred_applied=_to_bool((gemini_json.get("additional_fields") or {}).get("deblurred_applied")),
                     human_approved=_to_bool((gemini_json.get("additional_fields") or {}).get("human_approved")),
                 )
@@ -1849,6 +2030,16 @@ async def upload_invoice(file: UploadFile = File(...)) -> InvoiceSummary:
         "[HTTP API → POST /upload] Upload received (FastAPI). Running the same OCR + Gemini "
         "pipeline as the to_be_processed folder watcher.",
     )
+    if not is_agent_configured():
+        missing = missing_agent_settings()
+        parts = [_CONFIG_MISSING_MESSAGES.get(item, item) for item in missing]
+        detail = (
+            "AI agent is not configured (" + "; ".join(parts) + "). "
+            "Set the AI model and API key in the account menu → Settings → AI agent before uploading invoices."
+        )
+        logger.warning("[HTTP API → POST /upload] Rejected upload — %s", detail)
+        raise HTTPException(status_code=400, detail=detail)
+
     try:
         from license_validator import InvoiceQuotaExceeded, ensure_invoice_quota_available
 
@@ -1881,16 +2072,35 @@ async def upload_invoice(file: UploadFile = File(...)) -> InvoiceSummary:
     try:
         ocr_result = process_file(str(staging_path))
     except Exception as e:
+        # Gemini API failures (invalid/expired key, quota, rate limit, etc.) go
+        # to gemini_api_error/ instead of ERROR/ so the folder watcher's
+        # recovery loop can automatically retry them once the key/quota issue
+        # is fixed — matches how the background watcher already handles this
+        # (see _handle_gemini_api_failure in backend/agents/watch_raw.py).
+        # Everything else (bad file, OCR failure, etc.) is not retryable the
+        # same way, so it still goes to ERROR/ as before.
+        gemini_api_failure = is_gemini_api_error(e)
+        network_failure = not gemini_api_failure and is_network_error(e)
+
         if staging_path.is_file():
             try:
-                finalize_invoice_file(
-                    staging_path,
-                    file_status="error",
-                    status=0,
-                    pipeline_failed=True,
-                )
+                if gemini_api_failure:
+                    move_to_gemini_api_error(staging_path)
+                else:
+                    finalize_invoice_file(
+                        staging_path,
+                        file_status="error",
+                        status=0,
+                        pipeline_failed=True,
+                    )
             except Exception:
                 pass
+        if gemini_api_failure:
+            upload_error_stage = "gemini_quota"
+        elif network_failure:
+            upload_error_stage = "network"
+        else:
+            upload_error_stage = "ocr"
         record_pipeline_telemetry(
             {
                 "run_id": run_id,
@@ -1916,10 +2126,19 @@ async def upload_invoice(file: UploadFile = File(...)) -> InvoiceSummary:
                 "gemini_model": os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash",
                 "total_pipeline_latency": (datetime.utcnow() - file_received_time).total_seconds(),
                 "status": "error",
-                "error_stage": "ocr",
+                "error_stage": upload_error_stage,
                 "error_message": str(e),
             }
         )
+        if gemini_api_failure:
+            raise HTTPException(
+                status_code=502,
+                detail=(
+                    f"Gemini API error: {e}. The file has been moved to the Gemini "
+                    "retry queue and will be reprocessed automatically once the API "
+                    "key/quota issue is fixed."
+                ),
+            ) from e
         raise HTTPException(status_code=500, detail=f"OCR/Gemini failed: {e}") from e
 
     gemini_json_norm: dict[str, Any] = dict(ocr_result.gemini_json or {})
@@ -2110,6 +2329,11 @@ def update_invoice(invoice_id: str, payload: InvoiceUpdate) -> InvoiceSummary:
             update_doc[f"gemini.json.line_items.{line_item_index}.quantity"] = payload.quantity
         else:
             update_doc["gemini.json.quantity"] = payload.quantity
+    if payload.unit is not None:
+        if line_item_index is not None:
+            update_doc[f"gemini.json.line_items.{line_item_index}.unit"] = payload.unit
+        else:
+            update_doc["gemini.json.unit"] = payload.unit
     if payload.price_per_unit is not None:
         if line_item_index is not None:
             update_doc[f"gemini.json.line_items.{line_item_index}.price_per_unit"] = payload.price_per_unit
@@ -2160,6 +2384,14 @@ def update_invoice(invoice_id: str, payload: InvoiceUpdate) -> InvoiceSummary:
         update_doc["gemini.json.additional_fields.cgst_rate"] = payload.cgst_rate
     if payload.cgst_amount is not None:
         update_doc["gemini.json.additional_fields.cgst_amount"] = payload.cgst_amount
+    if payload.igst_rate is not None:
+        update_doc["gemini.json.additional_fields.igst_rate"] = payload.igst_rate
+    if payload.igst_amount is not None:
+        update_doc["gemini.json.additional_fields.igst_amount"] = payload.igst_amount
+    if payload.discount is not None:
+        update_doc["gemini.json.additional_fields.discount"] = payload.discount
+    if payload.round_off is not None:
+        update_doc["gemini.json.additional_fields.round_off"] = payload.round_off
     if not update_doc:
         # status/payment_status are intentionally non-persistent now.
         doc = coll.find_one({"_id": oid})
@@ -2186,6 +2418,10 @@ def update_invoice(invoice_id: str, payload: InvoiceUpdate) -> InvoiceSummary:
             payload.cgst_amount,
             payload.sgst_rate,
             payload.cgst_rate,
+            payload.igst_rate,
+            payload.igst_amount,
+            payload.discount,
+            payload.round_off,
             payload.amount_after_tax,
         ]
     ):
@@ -2234,6 +2470,7 @@ def add_invoice_line_item(invoice_id: str, payload: LineItemCreate) -> InvoiceSu
         "hsn_number": payload.hsn_number or "",
         "service": payload.service or "",
         "quantity": payload.quantity or "",
+        "unit": payload.unit or "",
         "price_per_unit": payload.price_per_unit or "",
         "amount": payload.amount or "",
         "tax_rate": payload.tax_rate or "",
@@ -2385,6 +2622,7 @@ def delete_invoice_line_item(invoice_id: str, line_item_index: int) -> InvoiceLi
                     status=status_value,
                     payment_status=payment_status_value,
                     quantity=li.get("quantity") or li.get("qty"),
+                    unit=li.get("unit") or li.get("uom") or li.get("unit_of_measure"),
                     price_per_unit=li.get("price_per_unit") or li.get("rate") or li.get("unit_price"),
                     amount=li.get("amount") or li.get("total"),
                     tax_rate=li.get("tax_rate"),
@@ -2395,8 +2633,18 @@ def delete_invoice_line_item(invoice_id: str, line_item_index: int) -> InvoiceLi
                     sgst_amount=additional_fields.get("sgst_amount"),
                     cgst_rate=additional_fields.get("cgst_rate"),
                     cgst_amount=additional_fields.get("cgst_amount"),
+                    igst_rate=additional_fields.get("igst_rate"),
+                    igst_amount=additional_fields.get("igst_amount") or additional_fields.get("total_igst_amount"),
+                    discount=additional_fields.get("discount") or additional_fields.get("discount_amount") or additional_fields.get("total_discount"),
+                    round_off=additional_fields.get("round_off") or additional_fields.get("roundoff") or additional_fields.get("square_off"),
                     summary_total_amount=additional_fields.get("summary_total_amount"),
                     hitl=hitl_value,
+                    hitl_remark=str(additional_fields.get("hitl_remark") or "") or None,
+                    hitl_remarks=(
+                        additional_fields.get("hitl_remarks")
+                        if isinstance(additional_fields.get("hitl_remarks"), list)
+                        else None
+                    ),
                 )
             )
     else:

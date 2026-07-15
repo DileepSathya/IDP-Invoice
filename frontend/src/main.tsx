@@ -5,6 +5,7 @@ import { Home } from "./pages/Dashboard";
 import { AnalyticsDashboard } from "./pages/AnalyticsDashboard";
 import { Chat } from "./pages/Chat";
 import { Settings } from "./pages/Settings";
+import { AccountMenu } from "./components/AccountMenu";
 import "./styles.css";
 
 const AppLayout: React.FC = () => {
@@ -15,14 +16,17 @@ const AppLayout: React.FC = () => {
     <div className="app-shell">
       <header className="app-header">
         <h1>Intelligence Document Processing – Invoices</h1>
-        <nav className="app-nav">
-          <NavLink to="/" end>
-            Home
-          </NavLink>
-          <NavLink to="/dashboard">Dashboard</NavLink>
-          <NavLink to="/chat">Chatbot</NavLink>
-          <NavLink to="/settings">Settings</NavLink>
-        </nav>
+        <div className="app-header-right">
+          <nav className="app-nav">
+            <NavLink to="/" end>
+              Home
+            </NavLink>
+            <NavLink to="/dashboard">Dashboard</NavLink>
+            <NavLink to="/chat">Chatbot</NavLink>
+            <NavLink to="/settings">Settings</NavLink>
+          </nav>
+          <AccountMenu />
+        </div>
       </header>
       <main className={`app-main${isChatRoute ? " app-main--chat" : ""}`}>
         <Routes>

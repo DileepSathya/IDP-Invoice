@@ -129,4 +129,6 @@ def collect_pipeline_status(*, overview: dict[str, Any]) -> dict[str, Any]:
         "hitl_reviewed": int(overview.get("hitl_processed", 0)),
         "system_processed": int(overview.get("system_processed", 0)),
         "human_approved_files": int(overview.get("human_approved_files", 0)),
+        "gemini_quota_error_count": int(overview.get("gemini_quota_error_count", 0)),
+        "network_error_count": int(overview.get("network_error_count", 0)),
     }

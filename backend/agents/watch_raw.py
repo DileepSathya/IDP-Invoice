@@ -393,12 +393,48 @@ def _process_invoice_path(path: Path) -> None:
             pass
 
 
+def _record_pipeline_error_telemetry(path: Path, exc: Exception, *, error_stage: str) -> None:
+    """Best-effort telemetry record so the dashboard can track cumulative pipeline errors
+    (e.g. Gemini quota-exceeded vs. network failures)."""
+    try:
+        from backend.agents.database import record_pipeline_telemetry
+
+        file_size = 0
+        try:
+            file_size = int(path.stat().st_size)
+        except Exception:
+            pass
+        now = datetime.utcnow()
+        record_pipeline_telemetry(
+            {
+                "run_id": str(uuid4()),
+                "source": "watch_raw",
+                "file_id": None,
+                "file_name": path.name,
+                "file_size": file_size,
+                "file_type": path.suffix.lower().lstrip("."),
+                "file_received_time": now,
+                "status": "error",
+                "error_stage": error_stage,
+                "error_message": str(exc),
+                "total_pipeline_latency": 0.0,
+            }
+        )
+    except Exception:
+        logger.debug(
+            "[Folder watcher] Could not record telemetry for %s error on %s.",
+            error_stage,
+            path,
+        )
+
+
 def _handle_gemini_api_failure(path: Path, exc: Exception) -> None:
     logger.error(
         "[Folder watcher] Gemini API error for %s: %s — moving to gemini_api_error folder.",
         path,
         exc,
     )
+    _record_pipeline_error_telemetry(path, exc, error_stage="gemini_quota")
     if path.is_file():
         try:
             move_to_gemini_api_error(path)
@@ -414,12 +450,22 @@ def _handle_gemini_api_failure(path: Path, exc: Exception) -> None:
     time.sleep(GEMINI_RETRY_SLEEP_SECONDS)
 
 
+def _handle_network_failure(path: Path, exc: Exception) -> None:
+    logger.error(
+        "[Folder watcher] Network error for %s: %s.",
+        path,
+        exc,
+    )
+    _record_pipeline_error_telemetry(path, exc, error_stage="network")
+
+
 def _handle_generic_failure(path: Path, exc: Exception) -> None:
     logger.exception(
         "[Folder watcher] Pipeline failed for file %s: %s",
         path,
         exc,
     )
+    _record_pipeline_error_telemetry(path, exc, error_stage="pipeline")
     if path.is_file():
         try:
             finalize_invoice_file(
@@ -563,7 +609,8 @@ def _worker(q: "queue.Queue[Path]") -> None:
         _set_processing_active(True)
         try:
             _process_invoice_path(path)
-        except NetworkPipelineError:
+        except NetworkPipelineError as exc:
+            _handle_network_failure(path, exc)
             _shutdown_event.set()
             return
         except GeminiApiPipelineError as exc:
@@ -571,6 +618,7 @@ def _worker(q: "queue.Queue[Path]") -> None:
         except Exception as exc:
             wrapped = wrap_pipeline_error(exc)
             if isinstance(wrapped, NetworkPipelineError):
+                _handle_network_failure(path, wrapped)
                 _shutdown_event.set()
                 return
             if isinstance(wrapped, GeminiApiPipelineError):

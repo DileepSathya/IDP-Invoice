@@ -155,6 +155,30 @@ def get_pipeline_metrics_collection() -> Collection:
     return coll
 
 
+def get_pipeline_error_counts() -> dict[str, int]:
+    """
+    Cumulative (all-time) pipeline failure counts by error_stage, sourced from pipeline_runs.
+
+    Used by the dashboard to surface Gemini quota-exceeded vs. network error volume, distinct
+    from the "files currently sitting in the gemini_api_error folder" live queue count.
+    """
+    try:
+        runs_coll = get_pipeline_runs_collection()
+        gemini_quota_error_count = int(
+            runs_coll.count_documents({"status": "error", "error_stage": "gemini_quota"})
+        )
+        network_error_count = int(
+            runs_coll.count_documents({"status": "error", "error_stage": "network"})
+        )
+        return {
+            "gemini_quota_error_count": gemini_quota_error_count,
+            "network_error_count": network_error_count,
+        }
+    except Exception as e:
+        logger.warning("[MongoDB] Could not count pipeline error stages: %s", e)
+        return {"gemini_quota_error_count": 0, "network_error_count": 0}
+
+
 def store_invoice_result(
     *,
     file_path: str,

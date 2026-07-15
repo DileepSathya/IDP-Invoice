@@ -13,6 +13,7 @@ export type InvoiceSummary = {
   status?: number | null;
   payment_status?: string | null;
   quantity?: unknown | null;
+  unit?: unknown | null;
   price_per_unit?: unknown | null;
   amount?: unknown | null;
   tax_rate?: unknown | null;
@@ -23,8 +24,14 @@ export type InvoiceSummary = {
   sgst_amount?: unknown | null;
   cgst_rate?: unknown | null;
   cgst_amount?: unknown | null;
+  igst_rate?: unknown | null;
+  igst_amount?: unknown | null;
+  discount?: unknown | null;
+  round_off?: unknown | null;
   summary_total_amount?: unknown | null;
   hitl?: boolean | null;
+  hitl_remark?: string | null;
+  hitl_remarks?: string[] | null;
   deblurred_applied?: boolean | null;
   human_approved?: boolean | null;
 };
@@ -95,6 +102,8 @@ export type PipelineStatus = {
   hitl_reviewed: number;
   system_processed: number;
   human_approved_files: number;
+  gemini_quota_error_count?: number;
+  network_error_count?: number;
 };
 
 export type InvoiceJsonEditorResponse = {
@@ -156,6 +165,7 @@ export type InvoiceUpdatePayload = Partial<{
   status: string | null;
   payment_status: string | null;
   quantity: string | null;
+  unit: string | null;
   price_per_unit: string | null;
   amount: string | null;
   tax_rate: string | null;
@@ -166,6 +176,10 @@ export type InvoiceUpdatePayload = Partial<{
   sgst_amount: string | null;
   cgst_rate: string | null;
   cgst_amount: string | null;
+  igst_rate: string | null;
+  igst_amount: string | null;
+  discount: string | null;
+  round_off: string | null;
 }>;
 
 export async function updateInvoice(
@@ -203,6 +217,7 @@ export async function addInvoiceLineItem(
     hsn_number: string;
     service: string;
     quantity: string;
+    unit: string;
     price_per_unit: string;
     amount: string;
     tax_rate: string;
@@ -258,6 +273,64 @@ export async function fetchLicenseProfile(): Promise<LicenseProfile> {
   const res = await fetch("/api/license");
   if (!res.ok) {
     throw new Error(`Failed to load license profile (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function fetchPdfPageCount(filename: string): Promise<number> {
+  const res = await fetch(`/api/raw-pdf-info/${encodeURIComponent(filename)}`);
+  if (!res.ok) {
+    throw new Error(`Failed to load PDF info (${res.status})`);
+  }
+  const data = (await res.json()) as { page_count?: number };
+  return typeof data.page_count === "number" && data.page_count > 0 ? data.page_count : 1;
+}
+
+export function pdfPageImageUrl(filename: string, page: number): string {
+  return `/api/raw-pdf-page/${encodeURIComponent(filename)}?page=${page}`;
+}
+
+export type AgentSettings = {
+  model: string | null;
+  api_key_masked: string | null;
+  configured: boolean;
+  supported_models: string[];
+};
+
+export type ConfigStatus = {
+  configured: boolean;
+  missing: string[];
+  message: string | null;
+};
+
+export async function fetchAgentSettings(): Promise<AgentSettings> {
+  const res = await fetch("/api/agent-settings");
+  if (!res.ok) {
+    throw new Error(`Failed to load AI agent settings (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function saveAgentSettings(
+  model: string,
+  apiKey: string,
+): Promise<AgentSettings> {
+  const res = await fetch("/api/agent-settings", {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ model, api_key: apiKey }),
+  });
+  if (!res.ok) {
+    const msg = await res.text();
+    throw new Error(msg || `Failed to save AI agent settings (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function fetchConfigStatus(): Promise<ConfigStatus> {
+  const res = await fetch("/api/config-status");
+  if (!res.ok) {
+    throw new Error(`Failed to load configuration status (${res.status})`);
   }
   return res.json();
 }

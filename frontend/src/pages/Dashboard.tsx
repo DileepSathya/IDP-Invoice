@@ -4,12 +4,16 @@ import {
   InvoiceListResponse,
   SearchField,
   LicenseProfile,
+  ConfigStatus,
+  fetchConfigStatus,
   fetchLicenseProfile,
   fetchPipelineStatus,
   fetchSearchSuggestions,
   fetchSearchValues,
   fetchInvoices,
   fetchInvoiceJsonEditor,
+  fetchPdfPageCount,
+  pdfPageImageUrl,
   uploadInvoice,
   updateInvoice,
   saveInvoiceJsonEditor,
@@ -32,12 +36,15 @@ type InvoiceEditorFormState = {
   account_holder_name: string;
   ifsc_code: string;
   total_amount: string;
+  po_id: string;
+  term_to_pay: string;
 };
 
 type InvoiceEditorLineItem = {
   hsn_number: string;
   service: string;
   quantity: string;
+  unit: string;
   price_per_unit: string;
   amount: string;
   tax_rate: string;
@@ -49,6 +56,34 @@ type InvoiceEditorAdditionalField = {
   key: string;
   value: string;
 };
+
+// Shared across the editing-state, EditableCell props, and the change/commit
+// handlers below so adding a new editable billing-summary field (e.g. IGST,
+// discount, round-off) only means updating this one list instead of the
+// half-dozen near-identical inline unions that used to be repeated per site.
+type EditableInvoiceField =
+  | "invoice_number"
+  | "total_amount"
+  | "hsn_value"
+  | "invoice_date"
+  | "seller"
+  | "service_category"
+  | "quantity"
+  | "unit"
+  | "price_per_unit"
+  | "amount"
+  | "tax_rate"
+  | "tax_amount"
+  | "amount_after_tax"
+  | "sub_total"
+  | "sgst_rate"
+  | "sgst_amount"
+  | "cgst_rate"
+  | "cgst_amount"
+  | "igst_rate"
+  | "igst_amount"
+  | "discount"
+  | "round_off";
 
 export const Dashboard: React.FC = () => {
   const [allInvoices, setAllInvoices] = useState<InvoiceSummary[]>([]);
@@ -70,6 +105,8 @@ export const Dashboard: React.FC = () => {
   const [loadingSearchOptions, setLoadingSearchOptions] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewZoom, setPreviewZoom] = useState<number>(1);
+  const [previewPdfPage, setPreviewPdfPage] = useState(1);
+  const [previewPdfPageCount, setPreviewPdfPageCount] = useState(1);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [previewPosition, setPreviewPosition] = useState<{ top: number; left: number }>({
     top: 100,
@@ -94,6 +131,8 @@ export const Dashboard: React.FC = () => {
     account_holder_name: "",
     ifsc_code: "",
     total_amount: "",
+    po_id: "",
+    term_to_pay: "",
   });
   const [jsonEditorLineItems, setJsonEditorLineItems] = useState<InvoiceEditorLineItem[]>([]);
   const [jsonEditorAdditionalFields, setJsonEditorAdditionalFields] = useState<InvoiceEditorAdditionalField[]>([]);
@@ -102,31 +141,17 @@ export const Dashboard: React.FC = () => {
   const [saveConfirmOpen, setSaveConfirmOpen] = useState(false);
   const [saveComment, setSaveComment] = useState("");
   const [licenseProfile, setLicenseProfile] = useState<LicenseProfile | null>(null);
+  const [configStatus, setConfigStatus] = useState<ConfigStatus | null>(null);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
   const pipelineSnapshotRef = useRef<string | null>(null);
   const [jsonEditorPreviewUrl, setJsonEditorPreviewUrl] = useState<string | null>(null);
   const [jsonEditorPreviewZoom, setJsonEditorPreviewZoom] = useState(1);
   const [jsonEditorPreviewRotate, setJsonEditorPreviewRotate] = useState(0);
+  const [jsonEditorPdfPage, setJsonEditorPdfPage] = useState(1);
+  const [jsonEditorPdfPageCount, setJsonEditorPdfPageCount] = useState(1);
   const [editing, setEditing] = useState<{
     id: string;
-    field:
-      | "invoice_number"
-      | "total_amount"
-      | "hsn_value"
-      | "invoice_date"
-      | "seller"
-      | "service_category"
-      | "quantity"
-      | "price_per_unit"
-      | "amount"
-      | "tax_rate"
-      | "tax_amount"
-      | "amount_after_tax"
-      | "sub_total"
-      | "sgst_rate"
-      | "sgst_amount"
-      | "cgst_rate"
-      | "cgst_amount";
+    field: EditableInvoiceField;
     lineItemIndex: number | null | undefined;
   } | null>(null);
   const panStart = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
@@ -229,6 +254,49 @@ export const Dashboard: React.FC = () => {
     };
   }, [isDraggingPreview]);
 
+  // PDFs are rendered page-by-page as plain images (see pdfPageImageUrl) so the
+  // existing zoom/pan image viewer just works for them too — find out how many
+  // pages this PDF has whenever a new one is opened, and reset back to page 1.
+  useEffect(() => {
+    let cancelled = false;
+    if (!previewUrl || GetPreviewKind(previewUrl) !== "pdf") {
+      setPreviewPdfPage(1);
+      setPreviewPdfPageCount(1);
+      return;
+    }
+    setPreviewPdfPage(1);
+    void fetchPdfPageCount(PathBasename(previewUrl))
+      .then((count) => {
+        if (!cancelled) setPreviewPdfPageCount(count);
+      })
+      .catch(() => {
+        if (!cancelled) setPreviewPdfPageCount(1);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [previewUrl]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!jsonEditorPreviewUrl || GetPreviewKind(jsonEditorPreviewUrl) !== "pdf") {
+      setJsonEditorPdfPage(1);
+      setJsonEditorPdfPageCount(1);
+      return;
+    }
+    setJsonEditorPdfPage(1);
+    void fetchPdfPageCount(PathBasename(jsonEditorPreviewUrl))
+      .then((count) => {
+        if (!cancelled) setJsonEditorPdfPageCount(count);
+      })
+      .catch(() => {
+        if (!cancelled) setJsonEditorPdfPageCount(1);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [jsonEditorPreviewUrl]);
+
   const loadInvoices = useCallback(async (options?: { silent?: boolean }) => {
     const silent = options?.silent ?? false;
     try {
@@ -267,6 +335,16 @@ export const Dashboard: React.FC = () => {
       setLicenseProfile(data);
     } catch {
       // Non-blocking: dashboard still works if license endpoint fails.
+    }
+  };
+
+  const loadConfigStatus = async () => {
+    try {
+      const data = await fetchConfigStatus();
+      setConfigStatus(data);
+    } catch {
+      // Non-blocking: if the check itself fails, don't block the home screen.
+      setConfigStatus(null);
     }
   };
 
@@ -404,6 +482,7 @@ export const Dashboard: React.FC = () => {
     pipelineSnapshotRef.current = null;
     void loadInvoices();
     void loadLicenseProfile();
+    void loadConfigStatus();
   }, []);
 
   useEffect(() => {
@@ -489,40 +568,11 @@ export const Dashboard: React.FC = () => {
 
   const handleCellChange = (
     id: string,
-    field: keyof Pick<
-      InvoiceSummary,
-      | "invoice_number"
-      | "total_amount"
-      | "hsn_value"
-      | "invoice_date"
-      | "seller"
-      | "service_category"
-      | "quantity"
-      | "price_per_unit"
-      | "amount"
-      | "tax_rate"
-      | "tax_amount"
-      | "amount_after_tax"
-      | "sub_total"
-      | "sgst_rate"
-      | "sgst_amount"
-      | "cgst_rate"
-      | "cgst_amount"
-    >,
+    field: keyof Pick<InvoiceSummary, EditableInvoiceField>,
     value: string,
     lineItemIndex?: number | null,
   ) => {
-    const invoiceLevelFields = new Set<
-      | "invoice_number"
-      | "total_amount"
-      | "invoice_date"
-      | "seller"
-      | "sub_total"
-      | "sgst_rate"
-      | "sgst_amount"
-      | "cgst_rate"
-      | "cgst_amount"
-    >([
+    const invoiceLevelFields = new Set<EditableInvoiceField>([
       "invoice_number",
       "total_amount",
       "invoice_date",
@@ -532,6 +582,10 @@ export const Dashboard: React.FC = () => {
       "sgst_amount",
       "cgst_rate",
       "cgst_amount",
+      "igst_rate",
+      "igst_amount",
+      "discount",
+      "round_off",
     ]);
 
     setAllInvoices((prev) =>
@@ -548,24 +602,7 @@ export const Dashboard: React.FC = () => {
 
   const handleCellBlur = async (
     id: string,
-    field:
-      | "invoice_number"
-      | "total_amount"
-      | "hsn_value"
-      | "invoice_date"
-      | "seller"
-      | "service_category"
-      | "quantity"
-      | "price_per_unit"
-      | "amount"
-      | "tax_rate"
-      | "tax_amount"
-      | "amount_after_tax"
-      | "sub_total"
-      | "sgst_rate"
-      | "sgst_amount"
-      | "cgst_rate"
-      | "cgst_amount",
+    field: EditableInvoiceField,
     value: string,
     lineItemIndex: number | null | undefined,
   ) => {
@@ -584,6 +621,22 @@ export const Dashboard: React.FC = () => {
   };
 
   const invoiceGroups = useMemo(() => GroupInvoicesById(invoices), [invoices]);
+
+  // Real-time JSON editor totals: recomputed on every keystroke so mismatches (and a
+  // missing invoice date) are visible before the user saves, not only after.
+  const jsonEditorExpectedTotal = useMemo(
+    () => CalculateEditorExpectedTotal(jsonEditorLineItems, jsonEditorAdditionalFields),
+    [jsonEditorLineItems, jsonEditorAdditionalFields],
+  );
+  const jsonEditorEnteredTotal = useMemo(
+    () => ParseAmount(jsonEditorForm.total_amount),
+    [jsonEditorForm.total_amount],
+  );
+  const jsonEditorTotalMismatch =
+    jsonEditorExpectedTotal != null &&
+    jsonEditorEnteredTotal != null &&
+    Math.abs(jsonEditorExpectedTotal - jsonEditorEnteredTotal) > 0.02;
+  const jsonEditorDateMissing = !jsonEditorForm.invoice_date.trim();
 
   const handleAddLineItem = async (invoiceId: string) => {
     try {
@@ -636,6 +689,8 @@ export const Dashboard: React.FC = () => {
         account_holder_name: ToText(geminiJson.account_holder_name),
         ifsc_code: ToText(geminiJson.ifsc_code),
         total_amount: ToText(geminiJson.total_amount),
+        po_id: ToText(geminiJson.po_id),
+        term_to_pay: ToText(geminiJson.term_to_pay),
       });
       setJsonEditorLineItems(
         lineItemsRaw.map((item) => {
@@ -644,6 +699,7 @@ export const Dashboard: React.FC = () => {
             hsn_number: ToText(li.hsn_number),
             service: ToText(li.service),
             quantity: ToText(li.quantity),
+            unit: ToText(li.unit),
             price_per_unit: ToText(li.price_per_unit),
             amount: ToText(li.amount),
             tax_rate: ToText(li.tax_rate),
@@ -654,7 +710,7 @@ export const Dashboard: React.FC = () => {
       );
       setJsonEditorAdditionalFields(
         Object.entries(additionalFieldsRaw)
-          .filter(([key]) => !["HITL", "status", "ever_hitl_true"].includes(key))
+          .filter(([key]) => !["HITL", "status", "ever_hitl_true", "hitl_remark", "hitl_remarks"].includes(key))
           .map(([key, value]) => ({ key, value: ToText(value) })),
       );
       setJsonEditorPreviewUrl(
@@ -691,8 +747,10 @@ export const Dashboard: React.FC = () => {
           nextAdditionalFields[lifecycleKey] = prevAdditional[lifecycleKey];
         }
       }
-      const summaryTotalAmount = CalculateEditorSummaryTotalAmount(jsonEditorLineItems);
-      nextAdditionalFields.summary_total_amount = summaryTotalAmount.toFixed(2);
+      const summaryTotalAmount = CalculateEditorExpectedTotal(jsonEditorLineItems, jsonEditorAdditionalFields);
+      if (summaryTotalAmount != null) {
+        nextAdditionalFields.summary_total_amount = summaryTotalAmount.toFixed(2);
+      }
       // Confirmed manual edit: store mandatory comment and clear HITL.
       nextAdditionalFields.human_approved = true;
       nextAdditionalFields.HITL = false;
@@ -711,6 +769,8 @@ export const Dashboard: React.FC = () => {
         account_holder_name: jsonEditorForm.account_holder_name,
         ifsc_code: jsonEditorForm.ifsc_code,
         total_amount: jsonEditorForm.total_amount,
+        po_id: jsonEditorForm.po_id,
+        term_to_pay: jsonEditorForm.term_to_pay,
         line_items: jsonEditorLineItems,
         additional_fields: nextAdditionalFields,
       };
@@ -739,7 +799,42 @@ export const Dashboard: React.FC = () => {
 
   const updateLineItemField = (index: number, field: keyof InvoiceEditorLineItem, value: string) => {
     setJsonEditorLineItems((prev) =>
-      prev.map((item, idx) => (idx === index ? { ...item, [field]: value } : item)),
+      prev.map((item, idx) => {
+        if (idx !== index) return item;
+        const next: InvoiceEditorLineItem = { ...item, [field]: value };
+
+        // Real-time calculation: keep amount and amount_after_tax in sync as the
+        // underlying quantity/rate/tax values change, so mismatches are caught as
+        // the user types rather than only after saving.
+        if (field === "quantity" || field === "price_per_unit") {
+          const qty = ParseAmount(next.quantity);
+          const rate = ParseAmount(next.price_per_unit);
+          if (qty != null && rate != null) {
+            next.amount = (qty * rate).toFixed(2);
+          }
+        }
+
+        if (
+          field === "quantity" ||
+          field === "price_per_unit" ||
+          field === "amount" ||
+          field === "tax_rate" ||
+          field === "tax_amount"
+        ) {
+          const amount = ParseAmount(next.amount);
+          const taxAmount = ParseAmount(next.tax_amount);
+          const taxRate = ParseAmount(next.tax_rate);
+          if (amount != null) {
+            if (taxAmount != null) {
+              next.amount_after_tax = (amount + taxAmount).toFixed(2);
+            } else if (taxRate != null) {
+              next.amount_after_tax = (amount * (1 + taxRate / 100)).toFixed(2);
+            }
+          }
+        }
+
+        return next;
+      }),
     );
   };
 
@@ -750,6 +845,7 @@ export const Dashboard: React.FC = () => {
         hsn_number: "",
         service: "",
         quantity: "",
+        unit: "",
         price_per_unit: "",
         amount: "",
         tax_rate: "",
@@ -777,6 +873,10 @@ export const Dashboard: React.FC = () => {
   return (
     <div className="panel">
       {licenseProfile && <PlanBanner profile={licenseProfile} />}
+
+      {configStatus && !configStatus.configured && (
+        <div className="alert alert-error">{configStatus.message}</div>
+      )}
 
       <div className="panel-header">
         <div>
@@ -1054,28 +1154,57 @@ export const Dashboard: React.FC = () => {
                         </td>
                           {showHitlOnly && (
                             <>
-                              <td>
-                                {inv.hitl
-                                  ? inv.deblurred_applied === true
-                                    ? "file readability confidence is low"
-                                    : "total amount mismatch"
-                                  : "—"}
+                              <td className="hitl-reason-cell" title={inv.hitl_remark ?? undefined}>
+                                {inv.hitl ? (
+                                  inv.hitl_remarks && inv.hitl_remarks.length > 0 ? (
+                                    <ul className="hitl-reason-list">
+                                      {inv.hitl_remarks.map((reason, idx) => (
+                                        <li key={idx}>{reason}</li>
+                                      ))}
+                                    </ul>
+                                  ) : inv.hitl_remark && inv.hitl_remark.trim() ? (
+                                    <ul className="hitl-reason-list">
+                                      {inv.hitl_remark.split(";").map((reason, idx) => (
+                                        <li key={idx}>{reason.trim()}</li>
+                                      ))}
+                                    </ul>
+                                  ) : inv.deblurred_applied === true ? (
+                                    "Low-quality scan - verify values"
+                                  ) : (
+                                    "Total amount mismatch"
+                                  )
+                                ) : (
+                                  "—"
+                                )}
                               </td>
                             </>
                           )}
                         <td>
                           {inv.uploaded_file_path ? (
-                            <img
-                              src={`/api/raw/${PathBasename(inv.uploaded_file_path)}`}
-                              alt="Invoice preview"
-                              className="preview-thumb"
-                              onClick={(e) =>
-                                handleSelectPreview(
-                                  `/api/raw/${PathBasename(inv.uploaded_file_path)}`,
-                                  e.currentTarget,
-                                )
+                            (() => {
+                              const url = `/api/raw/${PathBasename(inv.uploaded_file_path)}`;
+                              const kind = GetPreviewKind(inv.uploaded_file_path);
+                              if (kind === "image") {
+                                return (
+                                  <img
+                                    src={url}
+                                    alt="Invoice preview"
+                                    className="preview-thumb"
+                                    onClick={(e) => handleSelectPreview(url, e.currentTarget)}
+                                  />
+                                );
                               }
-                            />
+                              return (
+                                <button
+                                  type="button"
+                                  className="preview-thumb-file"
+                                  onClick={(e) => handleSelectPreview(url, e.currentTarget)}
+                                  title={PathBasename(inv.uploaded_file_path)}
+                                >
+                                  {kind === "pdf" ? "PDF" : "FILE"}
+                                </button>
+                              );
+                            })()
                           ) : (
                             "—"
                           )}
@@ -1101,6 +1230,7 @@ export const Dashboard: React.FC = () => {
                                 <colgroup>
                                   <col className="col-service" />
                                   <col className="col-qty" />
+                                  <col className="col-unit" />
                                   <col className="col-price" />
                                   <col className="col-amount" />
                                   <col className="col-taxrate" />
@@ -1112,6 +1242,7 @@ export const Dashboard: React.FC = () => {
                                   <tr>
                                     <th>Service</th>
                                     <th>Quantity</th>
+                                    <th>Unit</th>
                                     <th>Price/Unit</th>
                                     <th>Amount</th>
                                     <th>Tax rate</th>
@@ -1141,6 +1272,18 @@ export const Dashboard: React.FC = () => {
                                           field="quantity"
                                           lineItemIndex={li.line_item_index ?? null}
                                           value={li.quantity != null ? String(li.quantity) : ""}
+                                          editing={editing}
+                                          setEditing={setEditing}
+                                          onChange={handleCellChange}
+                                          onCommit={handleCellBlur}
+                                        />
+                                      </td>
+                                      <td className="subtable-num">
+                                        <EditableCell
+                                          id={li.id}
+                                          field="unit"
+                                          lineItemIndex={li.line_item_index ?? null}
+                                          value={li.unit != null ? String(li.unit) : ""}
                                           editing={editing}
                                           setEditing={setEditing}
                                           onChange={handleCellChange}
@@ -1290,6 +1433,58 @@ export const Dashboard: React.FC = () => {
                                       onCommit={handleCellBlur}
                                     />
                                   </div>
+                                  <div className="billing-summary-label">IGST Rate</div>
+                                  <div>
+                                    <EditableCell
+                                      id={group.id}
+                                      field="igst_rate"
+                                      lineItemIndex={null}
+                                      value={inv.igst_rate != null ? String(inv.igst_rate) : ""}
+                                      editing={editing}
+                                      setEditing={setEditing}
+                                      onChange={handleCellChange}
+                                      onCommit={handleCellBlur}
+                                    />
+                                  </div>
+                                  <div className="billing-summary-label">IGST Amount</div>
+                                  <div>
+                                    <EditableCell
+                                      id={group.id}
+                                      field="igst_amount"
+                                      lineItemIndex={null}
+                                      value={inv.igst_amount != null ? String(inv.igst_amount) : ""}
+                                      editing={editing}
+                                      setEditing={setEditing}
+                                      onChange={handleCellChange}
+                                      onCommit={handleCellBlur}
+                                    />
+                                  </div>
+                                  <div className="billing-summary-label">Discount</div>
+                                  <div>
+                                    <EditableCell
+                                      id={group.id}
+                                      field="discount"
+                                      lineItemIndex={null}
+                                      value={inv.discount != null ? String(inv.discount) : ""}
+                                      editing={editing}
+                                      setEditing={setEditing}
+                                      onChange={handleCellChange}
+                                      onCommit={handleCellBlur}
+                                    />
+                                  </div>
+                                  <div className="billing-summary-label">Round Off / Square Off</div>
+                                  <div>
+                                    <EditableCell
+                                      id={group.id}
+                                      field="round_off"
+                                      lineItemIndex={null}
+                                      value={inv.round_off != null ? String(inv.round_off) : ""}
+                                      editing={editing}
+                                      setEditing={setEditing}
+                                      onChange={handleCellChange}
+                                      onCommit={handleCellBlur}
+                                    />
+                                  </div>
                                   <div className="billing-summary-label">Total Amount</div>
                                   <div className="billing-summary-total">
                                     {inv.summary_total_amount != null
@@ -1348,8 +1543,31 @@ export const Dashboard: React.FC = () => {
                 Click a preview thumbnail in the table to view the full invoice here.
               </p>
             )}
-            {previewUrl && (
+            {previewUrl && (GetPreviewKind(previewUrl) === "image" || GetPreviewKind(previewUrl) === "pdf") && (
               <>
+                {GetPreviewKind(previewUrl) === "pdf" && previewPdfPageCount > 1 && (
+                  <div className="preview-pdf-pager">
+                    <button
+                      type="button"
+                      onClick={() => setPreviewPdfPage((p) => Math.max(1, p - 1))}
+                      disabled={previewPdfPage <= 1}
+                      aria-label="Previous page"
+                    >
+                      ‹
+                    </button>
+                    <span>
+                      Page {previewPdfPage} of {previewPdfPageCount}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setPreviewPdfPage((p) => Math.min(previewPdfPageCount, p + 1))}
+                      disabled={previewPdfPage >= previewPdfPageCount}
+                      aria-label="Next page"
+                    >
+                      ›
+                    </button>
+                  </div>
+                )}
                 <div className="preview-controls">
                   <button
                     type="button"
@@ -1380,7 +1598,11 @@ export const Dashboard: React.FC = () => {
                   onMouseLeave={handlePreviewMouseUp}
                 >
                   <img
-                    src={previewUrl}
+                    src={
+                      GetPreviewKind(previewUrl) === "pdf"
+                        ? pdfPageImageUrl(PathBasename(previewUrl), previewPdfPage)
+                        : previewUrl
+                    }
                     alt="Selected invoice"
                     style={{
                       width: `${Math.round(previewZoom * 100)}%`,
@@ -1389,6 +1611,14 @@ export const Dashboard: React.FC = () => {
                   />
                 </div>
               </>
+            )}
+            {previewUrl && GetPreviewKind(previewUrl) === "other" && (
+              <div className="preview-unsupported">
+                <p>Preview isn&apos;t available for this file type.</p>
+                <a href={previewUrl} target="_blank" rel="noreferrer" className="preview-open-link">
+                  Open {PathBasename(previewUrl)}
+                </a>
+              </div>
             )}
           </aside>
         )}
@@ -1422,12 +1652,29 @@ export const Dashboard: React.FC = () => {
                   <input value={jsonEditorForm.invoice_number} onChange={(e) => updateEditorField("invoice_number", e.target.value)} />
                 </label>
                 <label className="json-editor-label">
+                  PO ID
+                  <span className="json-editor-field-hint">
+                    If PO ID is not available, mark PO ID as "Not Applicable".
+                  </span>
+                  <input value={jsonEditorForm.po_id} onChange={(e) => updateEditorField("po_id", e.target.value)} />
+                </label>
+                <label className="json-editor-label">
                   Invoice Date
                   <input value={jsonEditorForm.invoice_date} onChange={(e) => updateEditorField("invoice_date", e.target.value)} />
                 </label>
                 <label className="json-editor-label">
                   Due Date
+                  <span className="json-editor-field-hint">
+                    Provide either Due Date or Term to Pay to clear this flag.
+                  </span>
                   <input value={jsonEditorForm.due_date} onChange={(e) => updateEditorField("due_date", e.target.value)} />
+                </label>
+                <label className="json-editor-label">
+                  Term to Pay
+                  <span className="json-editor-field-hint">
+                    e.g. "Net 30", "30 days", "60 days" — or fill in Due Date instead.
+                  </span>
+                  <input value={jsonEditorForm.term_to_pay} onChange={(e) => updateEditorField("term_to_pay", e.target.value)} />
                 </label>
                 <label className="json-editor-label">
                   Seller
@@ -1466,6 +1713,7 @@ export const Dashboard: React.FC = () => {
                       <th>HSN</th>
                       <th>Service</th>
                       <th>Qty</th>
+                      <th>Unit</th>
                       <th>Price/Unit</th>
                       <th>Amount</th>
                       <th>Tax Rate</th>
@@ -1477,7 +1725,7 @@ export const Dashboard: React.FC = () => {
                   <tbody>
                     {jsonEditorLineItems.length === 0 && (
                       <tr>
-                        <td colSpan={9} className="json-editor-empty-cell">No line items. Add one.</td>
+                        <td colSpan={10} className="json-editor-empty-cell">No line items. Add one.</td>
                       </tr>
                     )}
                     {jsonEditorLineItems.map((li, idx) => (
@@ -1490,6 +1738,13 @@ export const Dashboard: React.FC = () => {
                         </td>
                         <td>
                           <input value={li.quantity} onChange={(e) => updateLineItemField(idx, "quantity", e.target.value)} />
+                        </td>
+                        <td>
+                          <input
+                            value={li.unit}
+                            placeholder="nos/ltr/kg..."
+                            onChange={(e) => updateLineItemField(idx, "unit", e.target.value)}
+                          />
                         </td>
                         <td>
                           <input value={li.price_per_unit} onChange={(e) => updateLineItemField(idx, "price_per_unit", e.target.value)} />
@@ -1522,9 +1777,27 @@ export const Dashboard: React.FC = () => {
                   </tbody>
                 </table>
               </div>
-              <div className="json-editor-summary-total">
-                Summary Total Amount: {CalculateEditorSummaryTotalAmount(jsonEditorLineItems).toFixed(2)}
+              <div
+                className={`json-editor-live-total${
+                  jsonEditorTotalMismatch ? " mismatch" : jsonEditorExpectedTotal != null ? " ok" : ""
+                }`}
+              >
+                <div className="json-editor-live-total-row">
+                  <span>Computed total (line items + tax/discount/round-off)</span>
+                  <strong>{jsonEditorExpectedTotal != null ? jsonEditorExpectedTotal.toFixed(2) : "—"}</strong>
+                </div>
+                {jsonEditorTotalMismatch && jsonEditorExpectedTotal != null && jsonEditorEnteredTotal != null && (
+                  <div className="json-editor-live-total-row">
+                    <span>Total Amount field mismatch</span>
+                    <strong>
+                      {jsonEditorEnteredTotal.toFixed(2)} vs {jsonEditorExpectedTotal.toFixed(2)}
+                    </strong>
+                  </div>
+                )}
               </div>
+              {jsonEditorDateMissing && (
+                <div className="json-editor-live-warning">Invoice date is missing - this will be flagged for review.</div>
+              )}
 
               <div className="json-editor-section-header">
                 <h4>Additional Fields</h4>
@@ -1565,8 +1838,33 @@ export const Dashboard: React.FC = () => {
                 </div>
                 <aside className="json-editor-preview-side">
                   <h4>Reference Preview</h4>
-                  {jsonEditorPreviewUrl ? (
+                  {jsonEditorPreviewUrl &&
+                    (GetPreviewKind(jsonEditorPreviewUrl) === "image" ||
+                      GetPreviewKind(jsonEditorPreviewUrl) === "pdf") && (
                     <>
+                      {GetPreviewKind(jsonEditorPreviewUrl) === "pdf" && jsonEditorPdfPageCount > 1 && (
+                        <div className="preview-pdf-pager">
+                          <button
+                            type="button"
+                            onClick={() => setJsonEditorPdfPage((p) => Math.max(1, p - 1))}
+                            disabled={jsonEditorPdfPage <= 1}
+                            aria-label="Previous page"
+                          >
+                            ‹
+                          </button>
+                          <span>
+                            Page {jsonEditorPdfPage} of {jsonEditorPdfPageCount}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => setJsonEditorPdfPage((p) => Math.min(jsonEditorPdfPageCount, p + 1))}
+                            disabled={jsonEditorPdfPage >= jsonEditorPdfPageCount}
+                            aria-label="Next page"
+                          >
+                            ›
+                          </button>
+                        </div>
+                      )}
                       <div className="json-editor-preview-controls">
                         <button
                           type="button"
@@ -1596,18 +1894,42 @@ export const Dashboard: React.FC = () => {
                           Rotate
                         </button>
                       </div>
+                      {/* Zoom is driven by an explicit width % (not CSS transform: scale) so the
+                          scrollable wrap below actually grows and can be panned/scrolled to see
+                          the zoomed-in area — a bare transform: scale() on this flex-centered,
+                          overflow:auto container just clipped the image with no way to reach the
+                          rest of it. Rotation still uses transform since it doesn't need scroll.
+                          PDFs are rendered server-side to a PNG per page (see pdfPageImageUrl)
+                          instead of an <iframe> — the app's own X-Frame-Options: DENY security
+                          header was blocking the iframe from displaying the PDF at all, and this
+                          also lets Prev/Next reuse the same zoom/pan viewer as JPEG/PNG. */}
                       <div className="json-editor-preview-image-wrap">
                         <img
-                          src={jsonEditorPreviewUrl}
+                          src={
+                            GetPreviewKind(jsonEditorPreviewUrl) === "pdf"
+                              ? pdfPageImageUrl(PathBasename(jsonEditorPreviewUrl), jsonEditorPdfPage)
+                              : jsonEditorPreviewUrl
+                          }
                           alt="Invoice reference"
                           className="json-editor-preview-image"
                           style={{
-                            transform: `scale(${jsonEditorPreviewZoom}) rotate(${jsonEditorPreviewRotate}deg)`,
+                            width: `${Math.round(jsonEditorPreviewZoom * 100)}%`,
+                            maxHeight: "none",
+                            transform: `rotate(${jsonEditorPreviewRotate}deg)`,
                           }}
                         />
                       </div>
                     </>
-                  ) : (
+                  )}
+                  {jsonEditorPreviewUrl && GetPreviewKind(jsonEditorPreviewUrl) === "other" && (
+                    <div className="json-editor-preview-empty">
+                      <p>Preview isn&apos;t available for this file type.</p>
+                      <a href={jsonEditorPreviewUrl} target="_blank" rel="noreferrer" className="preview-open-link">
+                        Open {PathBasename(jsonEditorPreviewUrl)}
+                      </a>
+                    </div>
+                  )}
+                  {!jsonEditorPreviewUrl && (
                     <div className="json-editor-preview-empty">No preview image available.</div>
                   )}
                 </aside>
@@ -1672,117 +1994,30 @@ export const Dashboard: React.FC = () => {
 
 function EditableCell(props: {
   id: string;
-  field:
-    | "invoice_number"
-    | "total_amount"
-    | "hsn_value"
-    | "invoice_date"
-    | "seller"
-    | "service_category"
-    | "quantity"
-    | "price_per_unit"
-    | "amount"
-    | "tax_rate"
-    | "tax_amount"
-    | "amount_after_tax"
-    | "sub_total"
-    | "sgst_rate"
-    | "sgst_amount"
-    | "cgst_rate"
-    | "cgst_amount";
+  field: EditableInvoiceField;
   lineItemIndex: number | null | undefined;
   value: string;
   editing: {
     id: string;
-    field:
-      | "invoice_number"
-      | "total_amount"
-      | "hsn_value"
-      | "invoice_date"
-      | "seller"
-      | "service_category"
-      | "quantity"
-      | "price_per_unit"
-      | "amount"
-      | "tax_rate"
-      | "tax_amount"
-      | "amount_after_tax"
-      | "sub_total"
-      | "sgst_rate"
-      | "sgst_amount"
-      | "cgst_rate"
-      | "cgst_amount";
+    field: EditableInvoiceField;
     lineItemIndex: number | null | undefined;
   } | null;
   setEditing: React.Dispatch<
     React.SetStateAction<{
       id: string;
-      field:
-        | "invoice_number"
-        | "total_amount"
-        | "hsn_value"
-        | "invoice_date"
-        | "seller"
-        | "service_category"
-        | "quantity"
-        | "price_per_unit"
-        | "amount"
-        | "tax_rate"
-        | "tax_amount"
-        | "amount_after_tax"
-        | "sub_total"
-        | "sgst_rate"
-        | "sgst_amount"
-        | "cgst_rate"
-        | "cgst_amount";
+      field: EditableInvoiceField;
       lineItemIndex: number | null | undefined;
     } | null>
   >;
   onChange: (
     id: string,
-    field: keyof Pick<
-      InvoiceSummary,
-      | "invoice_number"
-      | "total_amount"
-      | "hsn_value"
-      | "invoice_date"
-      | "seller"
-      | "service_category"
-      | "quantity"
-      | "price_per_unit"
-      | "amount"
-      | "tax_rate"
-      | "tax_amount"
-      | "amount_after_tax"
-      | "sub_total"
-      | "sgst_rate"
-      | "sgst_amount"
-      | "cgst_rate"
-      | "cgst_amount"
-    >,
+    field: keyof Pick<InvoiceSummary, EditableInvoiceField>,
     value: string,
     lineItemIndex?: number | null,
   ) => void;
   onCommit: (
     id: string,
-    field:
-      | "invoice_number"
-      | "total_amount"
-      | "hsn_value"
-      | "invoice_date"
-      | "seller"
-      | "service_category"
-      | "quantity"
-      | "price_per_unit"
-      | "amount"
-      | "tax_rate"
-      | "tax_amount"
-      | "amount_after_tax"
-      | "sub_total"
-      | "sgst_rate"
-      | "sgst_amount"
-      | "cgst_rate"
-      | "cgst_amount",
+    field: EditableInvoiceField,
     value: string,
     lineItemIndex: number | null | undefined,
   ) => Promise<void>;
@@ -1792,6 +2027,19 @@ function EditableCell(props: {
       {props.value || "—"}
     </div>
   );
+}
+
+type PreviewKind = "image" | "pdf" | "other";
+
+const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png"]);
+
+function GetPreviewKind(path: string | null | undefined): PreviewKind {
+  const name = PathBasename(path).toLowerCase();
+  const dot = name.lastIndexOf(".");
+  const ext = dot >= 0 ? name.slice(dot) : "";
+  if (IMAGE_EXTENSIONS.has(ext)) return "image";
+  if (ext === ".pdf") return "pdf";
+  return "other";
 }
 
 function PathBasename(path: string | null | undefined): string {
@@ -1857,13 +2105,75 @@ function ToText(value: unknown): string {
   return String(value);
 }
 
-function CalculateEditorSummaryTotalAmount(items: InvoiceEditorLineItem[]): number {
-  let total = 0;
+function FindAdditionalFieldValue(
+  fields: InvoiceEditorAdditionalField[],
+  keys: string[],
+): number | null {
+  for (const key of keys) {
+    const row = fields.find((f) => f.key === key);
+    if (row) {
+      const parsed = ParseAmount(row.value);
+      if (parsed != null) return parsed;
+    }
+  }
+  return null;
+}
+
+// Mirrors backend/hitl_status.py:compute_expected_total - discount, round-off/square-off,
+// and CGST/SGST/IGST can each live either inside the line items (amount_after_tax) or as
+// invoice-level billing-summary fields; this avoids double-counting tax already embedded
+// per line while still applying invoice-wide discount/round-off on top.
+function CalculateEditorExpectedTotal(
+  items: InvoiceEditorLineItem[],
+  additionalFields: InvoiceEditorAdditionalField[],
+): number | null {
+  let amountAfterTaxSum = 0;
+  let hasAmountAfterTax = false;
   for (const item of items) {
     const parsed = ParseAmount(item.amount_after_tax);
-    if (parsed != null) total += parsed;
+    if (parsed != null) {
+      amountAfterTaxSum += parsed;
+      hasAmountAfterTax = true;
+    }
   }
-  return total;
+
+  let base: number | null;
+  if (hasAmountAfterTax) {
+    base = amountAfterTaxSum;
+  } else {
+    let amountSum = 0;
+    let hasAmount = false;
+    for (const item of items) {
+      const parsed = ParseAmount(item.amount);
+      if (parsed != null) {
+        amountSum += parsed;
+        hasAmount = true;
+      }
+    }
+    base = hasAmount
+      ? amountSum
+      : FindAdditionalFieldValue(additionalFields, ["sub_total", "subtotal_after_discount"]);
+    if (base != null) {
+      const sgst = FindAdditionalFieldValue(additionalFields, ["sgst_amount"]) ?? 0;
+      const cgst = FindAdditionalFieldValue(additionalFields, ["cgst_amount"]) ?? 0;
+      const igst = FindAdditionalFieldValue(additionalFields, ["igst_amount", "total_igst_amount"]) ?? 0;
+      base = base + sgst + cgst + igst;
+    }
+  }
+
+  if (base == null) return null;
+
+  const discount = FindAdditionalFieldValue(additionalFields, ["discount", "discount_amount", "total_discount"]) ?? 0;
+  const roundOff =
+    FindAdditionalFieldValue(additionalFields, [
+      "round_off",
+      "roundoff",
+      "round_off_amount",
+      "square_off",
+      "square_off_amount",
+      "rounding",
+    ]) ?? 0;
+  return base - discount + roundOff;
 }
 
 function ApplyLocalFilters(

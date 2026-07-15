@@ -65,6 +65,144 @@ body {
   color: #f9fafb;
 }
 
+.app-header-right {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.account-menu {
+  position: relative;
+}
+
+.account-menu-trigger {
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(148, 163, 184, 0.15);
+  color: #e5e7eb;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+}
+
+.account-menu-trigger:hover {
+  background: rgba(148, 163, 184, 0.28);
+}
+
+.account-menu-panel {
+  position: absolute;
+  top: calc(100% + 0.6rem);
+  right: 0;
+  width: 320px;
+  max-width: calc(100vw - 2rem);
+  background: #0b1120;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 0.85rem;
+  box-shadow: 0 20px 50px rgba(2, 6, 23, 0.75);
+  z-index: 1300;
+  padding: 0.75rem;
+}
+
+.account-menu-tabs {
+  display: flex;
+  gap: 0.4rem;
+  margin-bottom: 0.65rem;
+}
+
+.account-menu-tab {
+  flex: 1 1 auto;
+  padding: 0.4rem 0.6rem;
+  border-radius: 0.55rem;
+  font-size: 0.85rem;
+  background: rgba(148, 163, 184, 0.1);
+  color: #cbd5e1;
+}
+
+.account-menu-tab.is-active {
+  background: linear-gradient(135deg, #6366f1, #a855f7);
+  color: #f9fafb;
+}
+
+.account-menu-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.account-menu-pane-title {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #cbd5e1;
+}
+
+.account-profile-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.account-profile-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.82rem;
+}
+
+.account-profile-label {
+  color: #94a3b8;
+}
+
+.account-profile-value {
+  color: #f1f5f9;
+  text-align: right;
+}
+
+.account-menu-field-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.account-menu-field-label {
+  font-size: 0.78rem;
+  color: #94a3b8;
+}
+
+.account-menu-radio {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+}
+
+.account-menu-input {
+  width: 100%;
+  padding: 0.4rem 0.55rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: #020617;
+  color: #f1f5f9;
+}
+
+.account-menu-status {
+  font-size: 0.78rem;
+}
+
+.account-menu-status-ok {
+  color: #4ade80;
+}
+
+.account-menu-status-warn {
+  color: #fbbf24;
+}
+
+.account-menu-save {
+  align-self: flex-end;
+  padding: 0.35rem 0.9rem;
+}
+
 .app-main {
   flex: 1 1 auto;
   min-height: 0;
@@ -247,6 +385,67 @@ body {
 .preview-thumb:hover {
   transform: translateY(-1px) scale(1.02);
   box-shadow: 0 8px 18px rgba(15, 23, 42, 0.9);
+}
+
+.preview-thumb-file {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 40px;
+  border-radius: 0.4rem;
+  background: rgba(99, 102, 241, 0.18);
+  color: #c7d2fe;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: transform 0.12s ease-out, box-shadow 0.12s ease-out;
+}
+
+.preview-thumb-file:hover {
+  transform: translateY(-1px) scale(1.02);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.9);
+}
+
+.preview-pdf-pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  margin-top: 0.35rem;
+  font-size: 0.78rem;
+  color: #cbd5e1;
+}
+
+.preview-pdf-pager button {
+  padding: 0.15rem 0.6rem;
+  font-size: 0.85rem;
+}
+
+.preview-pdf-pager button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.preview-unsupported {
+  margin-top: 0.5rem;
+  padding: 1rem;
+  border-radius: 0.75rem;
+  border: 1px solid rgba(31, 41, 55, 0.9);
+  background: #020617;
+  font-size: 0.85rem;
+  color: #cbd5e1;
+  text-align: center;
+}
+
+.preview-unsupported p {
+  margin: 0 0 0.6rem;
+}
+
+.preview-open-link {
+  color: #a5b4fc;
+  text-decoration: underline;
 }
 
 .preview-controls {
@@ -688,28 +887,33 @@ td {
 }
 
 .json-editor-preview-image {
-  width: 100%;
+  /* width is set inline as a zoom percentage; do not force width:100% here or
+     zooming in has nothing to expand against inside the scrollable wrap. */
+  display: block;
+  height: auto;
   border-radius: 0.5rem;
   border: 1px solid rgba(55, 65, 81, 0.75);
   background: #020617;
-  object-fit: contain;
-  max-height: 70vh;
   transform-origin: center center;
-  transition: transform 0.15s ease-out;
+  transition: width 0.15s ease-out, transform 0.15s ease-out;
 }
 
 .json-editor-preview-image-wrap {
+  /* display:block (not flex-centered) — a flex-centered scroll container clips
+     the overflow on the leading edge instead of letting you scroll to it, so
+     zooming past 100% left the extra image area unreachable. Block layout
+     scrolls in both directions like the working invoice-preview popover does. */
   border: 1px solid rgba(55, 65, 81, 0.75);
   border-radius: 0.55rem;
   background: #020617;
   min-height: 280px;
   max-height: 70vh;
   overflow: auto;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  display: block;
   padding: 0.35rem;
+  cursor: grab;
 }
+
 
 .json-editor-preview-controls {
   display: flex;
@@ -770,6 +974,13 @@ td {
   font-size: 0.8rem;
   color: #cbd5e1;
   margin-bottom: 0.6rem;
+}
+
+.json-editor-field-hint {
+  font-size: 0.72rem;
+  font-weight: 400;
+  font-style: italic;
+  color: #9ca3af;
 }
 
 .json-editor-label input {
@@ -1002,10 +1213,13 @@ td {
 }
 
 .col-service {
-  width: 34%;
+  width: 28%;
 }
 .col-qty {
-  width: 9%;
+  width: 8%;
+}
+.col-unit {
+  width: 8%;
 }
 .col-price {
   width: 12%;
@@ -1727,5 +1941,54 @@ tbody tr:nth-child(even) {
 .error-text {
   margin: 0 0 1rem 0;
   color: #fca5a5;
+}
+
+.hitl-reason-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  list-style: disc;
+}
+
+.hitl-reason-list li {
+  margin: 0 0 0.2rem 0;
+  font-size: 0.85em;
+  line-height: 1.3;
+}
+
+.hitl-reason-list li:last-child {
+  margin-bottom: 0;
+}
+
+.json-editor-live-total {
+  margin-top: 0.5rem;
+  padding: 0.6rem 0.8rem;
+  border-radius: 6px;
+  font-size: 0.9em;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.json-editor-live-total.mismatch {
+  border-color: rgba(248, 113, 113, 0.6);
+  background: rgba(248, 113, 113, 0.08);
+  color: #fca5a5;
+}
+
+.json-editor-live-total.ok {
+  border-color: rgba(74, 222, 128, 0.5);
+  background: rgba(74, 222, 128, 0.06);
+  color: #86efac;
+}
+
+.json-editor-live-total-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.json-editor-live-warning {
+  margin-top: 0.35rem;
+  font-size: 0.85em;
+  color: #fbbf24;
 }
 

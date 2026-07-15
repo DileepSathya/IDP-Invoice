@@ -90,10 +90,19 @@ if (-not (Test-Path $envTarget)) {
     Write-Host "Kept existing dist .env (not overwritten)."
 }
 
+Write-Host "`nResetting stored data (MongoDB data dir, invoice files, logs) for a clean build..."
+Write-Host "Make sure IDP Invoice / mongod are not running against $DistRoot before continuing."
+foreach ($staleDir in @("data", "invoices_data", "logs")) {
+    $stalePath = Join-Path $DistRoot $staleDir
+    if (Test-Path $stalePath) {
+        Remove-Item -Recurse -Force $stalePath
+    }
+}
+
 foreach ($dir in @(
         "logs", "data\db", "invoices_data",
         "invoices_data\to_be_processed", "invoices_data\_api_staging",
-        "invoices_data\HITL_pending",
+        "invoices_data\HITL_pending", "invoices_data\gemini_api_error",
         "invoices_data\ERROR", "invoices_data\Completed"
     )) {
     New-Item -ItemType Directory -Force -Path (Join-Path $DistRoot $dir) | Out-Null

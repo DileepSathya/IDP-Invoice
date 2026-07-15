@@ -144,6 +144,30 @@ export const AnalyticsDashboard: React.FC = () => {
           </section>
 
           <section className="analytics-section">
+            <h3>Gemini API errors</h3>
+            <div className="pipeline-stats-grid">
+              <StatusCard
+                label="Quota exceeded"
+                value={status.gemini_quota_error_count ?? 0}
+                hint="Cumulative Gemini quota/rate-limit failures"
+                tone="danger"
+              />
+              <StatusCard
+                label="Network errors"
+                value={status.network_error_count ?? 0}
+                hint="Cumulative connectivity failures during OCR/Gemini"
+                tone="danger"
+              />
+              <StatusCard
+                label="Awaiting Gemini retry"
+                value={status.gemini_api_error ?? 0}
+                hint="File(s) currently queued in gemini_api_error, pending API key recovery"
+                tone="warning"
+              />
+            </div>
+          </section>
+
+          <section className="analytics-section">
             <h3>Stored records (MongoDB)</h3>
             <div className="analytics-metrics-grid">
               <div className="analytics-metric">
