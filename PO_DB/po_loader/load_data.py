@@ -35,6 +35,7 @@ skipped, but be mindful of foreign-key order):
 import argparse
 import configparser
 import csv
+import io
 import logging
 import os
 import sys
@@ -56,6 +57,11 @@ class TableSpec:
     # columns that should be parsed as int / float instead of left as text
     int_columns: List[str] = field(default_factory=list)
     float_columns: List[str] = field(default_factory=list)
+    # text/varchar columns and their Postgres VARCHAR(n) limit, so an
+    # oversized value is caught here with a clear message instead of
+    # surfacing as a generic Postgres error after the whole batch is sent.
+    # Keep in sync with PO_DB/sql/create_po_database.sql.
+    varchar_limits: Dict[str, int] = field(default_factory=dict)
     # if set, ensures the referenced parent row exists (creating a minimal
     # stub if necessary) before this table's rows are upserted
     fk_stub: Optional[dict] = None
@@ -67,17 +73,41 @@ TABLE_SPECS: List[TableSpec] = [
         table="vendor_master",
         pk_columns=["vendor_id"],
         int_columns=["pin_code"],
+        varchar_limits={
+            "vendor_id": 50,
+            "vendor_name": 100,
+            "gst_tax_number": 25,
+            "tin_number": 25,
+            "vendor_address_1": 255,
+            "vendor_address_2": 255,
+            "vendor_address_3": 255,
+            "city": 20,
+            "state": 20,
+            "country": 20,
+            "primary_ph_number": 15,
+            "email_primary": 255,
+            "bank_ac_number": 34,
+            "bank_name": 125,
+        },
     ),
     TableSpec(
         csv_file="item_master.csv",
         table="item_master",
         pk_columns=["item_id"],
         float_columns=["rate"],
+        varchar_limits={"item_id": 25, "category": 50, "units": 10},
     ),
     TableSpec(
         csv_file="po_header.csv",
         table="po_header",
         pk_columns=["po_id", "business_unit"],
+        varchar_limits={
+            "po_id": 25,
+            "business_unit": 25,
+            "vendor_id": 50,
+            "po_status": 15,
+            "po_type": 20,
+        },
         fk_stub={
             "fk_column": "vendor_id",
             "parent_table": "vendor_master",
@@ -92,6 +122,7 @@ TABLE_SPECS: List[TableSpec] = [
         pk_columns=["po_id", "business_unit", "item_id"],
         int_columns=["line_number"],
         float_columns=["rate", "qty", "total"],
+        varchar_limits={"po_id": 25, "business_unit": 25, "item_id": 25, "units": 10},
         fk_stub={
             "fk_column": "item_id",
             "parent_table": "item_master",
@@ -143,7 +174,22 @@ def clean_value(value: Optional[str], col_type: str):
 
 
 def load_csv_rows(spec: TableSpec, path: str):
-    with open(path, newline="", encoding="utf-8-sig") as f:
+    # Read as bytes first and strip any embedded NUL bytes. These show up when a
+    # CSV was saved/re-saved with a tool that null-pads the file (seen in practice
+    # with some Excel "Save As CSV" + Windows editor round-trips) - Python's csv
+    # module refuses to parse a line containing NUL at all, so this has to be
+    # cleaned up before csv.DictReader ever sees the data.
+    raw_bytes = open(path, "rb").read()
+    nul_count = raw_bytes.count(b"\x00")
+    if nul_count:
+        log.warning(
+            "  %-15s -> stripped %d embedded NUL byte(s) from %s (corrupted export?)",
+            spec.table, nul_count, spec.csv_file,
+        )
+        raw_bytes = raw_bytes.replace(b"\x00", b"")
+
+    text = raw_bytes.decode("utf-8-sig")
+    with io.StringIO(text, newline="") as f:
         reader = csv.DictReader(f)
         if reader.fieldnames is None:
             raise ValueError(f"{path} has no header row")
@@ -152,7 +198,7 @@ def load_csv_rows(spec: TableSpec, path: str):
 
         rows = []
         skipped_blank = 0
-        for raw_row in reader:
+        for line_no, raw_row in enumerate(reader, start=2):  # header is line 1
             # Skip fully blank lines (e.g. a trailing newline at EOF)
             if not any((v or "").strip() for v in raw_row.values()):
                 skipped_blank += 1
@@ -166,16 +212,27 @@ def load_csv_rows(spec: TableSpec, path: str):
                     else "text"
                 )
                 try:
-                    row.append(clean_value(raw_row.get(col), col_type))
+                    value = clean_value(raw_row.get(col), col_type)
                 except ValueError as e:
                     raise ValueError(
-                        f"{path}: bad value for column '{col}' in row {raw_row}: {e}"
+                        f"{path} line {line_no}: bad value for column '{col}' in row {raw_row}: {e}"
                     )
+
+                limit = spec.varchar_limits.get(col)
+                if limit is not None and isinstance(value, str) and len(value) > limit:
+                    raise ValueError(
+                        f"{path} line {line_no}: column '{col}' value {value!r} is "
+                        f"{len(value)} characters, but the database column is "
+                        f"VARCHAR({limit}). Shorten this value (or widen the column "
+                        f"in PO_DB/sql/create_po_database.sql) and try again."
+                    )
+
+                row.append(value)
 
             row = tuple(row)
             if any(row[i] is None for i in pk_idx):
                 raise ValueError(
-                    f"{path}: row has a null primary key column {spec.pk_columns}: {raw_row}"
+                    f"{path} line {line_no}: row has a null primary key column {spec.pk_columns}: {raw_row}"
                 )
             rows.append(row)
 

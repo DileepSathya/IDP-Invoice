@@ -58,7 +58,10 @@ dist/IDP-Invoice/
 1. Copy `.env.example` → `.env`
 2. Set `GEMINI_API_KEY`
 3. Keep `MONGO_URI=mongodb://localhost:27017` to use bundled MongoDB
-4. Double-click **Start IDP Invoice.exe**
+4. (Optional) To enable ERP/PO matching, fill in `POSTGRES_HOST`, `POSTGRES_USER`, and
+   `POSTGRES_PASSWORD` with your own Postgres credentials — these ship blank on
+   purpose, so ERP matching stays off until you set them yourself.
+5. Double-click **Start IDP Invoice.exe**
 5. Browser opens at `http://localhost:8000`
 6. Drop invoice files in `invoices_data/to_be_processed/` (or upload via the UI)
 

@@ -131,4 +131,7 @@ def collect_pipeline_status(*, overview: dict[str, Any]) -> dict[str, Any]:
         "human_approved_files": int(overview.get("human_approved_files", 0)),
         "gemini_quota_error_count": int(overview.get("gemini_quota_error_count", 0)),
         "network_error_count": int(overview.get("network_error_count", 0)),
+        "erp_configured": bool(overview.get("erp_configured", False)),
+        "erp_matched_files": int(overview.get("erp_matched_files", 0)),
+        "erp_pending_files": int(overview.get("erp_pending_files", 0)),
     }

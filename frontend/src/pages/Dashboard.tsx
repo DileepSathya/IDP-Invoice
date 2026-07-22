@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   InvoiceSummary,
   InvoiceListResponse,
@@ -86,6 +87,7 @@ type EditableInvoiceField =
   | "round_off";
 
 export const Dashboard: React.FC = () => {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [allInvoices, setAllInvoices] = useState<InvoiceSummary[]>([]);
   const [invoices, setInvoices] = useState<InvoiceSummary[]>([]);
   const [loading, setLoading] = useState(false);
@@ -726,6 +728,26 @@ export const Dashboard: React.FC = () => {
       setJsonEditorLoading(false);
     }
   };
+
+  // Deep-link support: other pages (e.g. the ERP table's Edit button) link here with
+  // ?edit=<invoiceId> to jump straight into the JSON editor for that invoice. Clear the
+  // param once handled so a refresh or back-navigation doesn't reopen it.
+  useEffect(() => {
+    const editId = searchParams.get("edit");
+    if (!editId) return;
+    void handleOpenJsonEditor(editId);
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete("edit");
+        return next;
+      },
+      { replace: true },
+    );
+    // Intentionally only re-runs when the URL's search params change, not on every render
+    // (handleOpenJsonEditor is redefined each render but isn't a meaningful dependency here).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   const handleSaveJsonEditor = async () => {
     if (!jsonEditorInvoiceId) return;
@@ -2264,4 +2286,4 @@ function FormatAdditionalFieldLabel(key: string): string {
     .join(" ");
 }
 
-export { Dashboard as Home };
+export { Dashboard as Home, GroupInvoicesById, PathBasename, ParseAmount, SumInvoicesTotalAmount };

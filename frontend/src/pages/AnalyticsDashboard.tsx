@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import {
   fetchLicenseProfile,
   fetchPipelineStatus,
@@ -204,6 +205,31 @@ export const AnalyticsDashboard: React.FC = () => {
               </div>
             </div>
           </section>
+
+          {status.erp_configured && (
+            <section className="analytics-section">
+              <div className="section-header">
+                <h3>ERP — PO_DB Matching</h3>
+                <Link to="/erp" className="button-link">
+                  Open ERP page
+                </Link>
+              </div>
+              <div className="pipeline-stats-grid">
+                <StatusCard
+                  label="Processed for ERP"
+                  value={status.erp_matched_files ?? 0}
+                  hint="Vendor, PO, and line items all matched against PO_DB"
+                  tone="success"
+                />
+                <StatusCard
+                  label="Waiting for human modification"
+                  value={status.erp_pending_files ?? 0}
+                  hint="Vendor/item/PO mismatch — needs a correction or a PO_DB update"
+                  tone="warning"
+                />
+              </div>
+            </section>
+          )}
         </>
       )}
     </div>

@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   AgentSettings,
   LicenseProfile,
@@ -29,8 +30,9 @@ function formatPlanType(plan: string): string {
 }
 
 export const AccountMenu: React.FC = () => {
+  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<"profile" | "settings">("profile");
+  const [activeTab, setActiveTab] = useState<"profile" | "ai">("profile");
   const [profile, setProfile] = useState<LicenseProfile | null>(null);
   const [profileError, setProfileError] = useState<string | null>(null);
   const [agentSettings, setAgentSettings] = useState<AgentSettings | null>(null);
@@ -70,6 +72,11 @@ export const AccountMenu: React.FC = () => {
       }
       return next;
     });
+  };
+
+  const goToErp = () => {
+    setOpen(false);
+    navigate("/erp/settings");
   };
 
   useEffect(() => {
@@ -127,7 +134,7 @@ export const AccountMenu: React.FC = () => {
 
       {open && (
         <div className="account-menu-panel" role="menu">
-          <div className="account-menu-tabs">
+          <div className="account-menu-tabs account-menu-tabs-stacked">
             <button
               type="button"
               className={`account-menu-tab${activeTab === "profile" ? " is-active" : ""}`}
@@ -137,10 +144,20 @@ export const AccountMenu: React.FC = () => {
             </button>
             <button
               type="button"
-              className={`account-menu-tab${activeTab === "settings" ? " is-active" : ""}`}
-              onClick={() => setActiveTab("settings")}
+              className={`account-menu-tab${activeTab === "ai" ? " is-active" : ""}`}
+              onClick={() => setActiveTab("ai")}
             >
-              Settings
+              AI
+            </button>
+            <button
+              type="button"
+              className="account-menu-tab account-menu-tab-link"
+              onClick={goToErp}
+            >
+              ERP
+              <span className="account-menu-tab-arrow" aria-hidden="true">
+                →
+              </span>
             </button>
           </div>
 
@@ -169,7 +186,7 @@ export const AccountMenu: React.FC = () => {
             </div>
           )}
 
-          {activeTab === "settings" && (
+          {activeTab === "ai" && (
             <div className="account-menu-section">
               <h4 className="account-menu-pane-title">AI agent</h4>
               {agentError && <div className="alert alert-error">{agentError}</div>}

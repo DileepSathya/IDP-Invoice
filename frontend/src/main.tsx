@@ -3,6 +3,8 @@ import ReactDOM from "react-dom/client";
 import { BrowserRouter, Route, Routes, NavLink, useLocation } from "react-router-dom";
 import { Home } from "./pages/Dashboard";
 import { AnalyticsDashboard } from "./pages/AnalyticsDashboard";
+import { Erp } from "./pages/Erp";
+import { ErpSettings } from "./pages/ErpSettings";
 import { Chat } from "./pages/Chat";
 import { Settings } from "./pages/Settings";
 import { AccountMenu } from "./components/AccountMenu";
@@ -22,6 +24,7 @@ const AppLayout: React.FC = () => {
               Home
             </NavLink>
             <NavLink to="/dashboard">Dashboard</NavLink>
+            <NavLink to="/erp">ERP</NavLink>
             <NavLink to="/chat">Chatbot</NavLink>
             <NavLink to="/settings">Settings</NavLink>
           </nav>
@@ -32,6 +35,8 @@ const AppLayout: React.FC = () => {
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/dashboard" element={<AnalyticsDashboard />} />
+          <Route path="/erp" element={<Erp />} />
+          <Route path="/erp/settings" element={<ErpSettings />} />
           <Route path="/chat" element={<Chat />} />
           <Route path="/settings" element={<Settings />} />
         </Routes>

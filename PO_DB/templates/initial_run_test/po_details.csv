@@ -1,0 +1,4 @@
+po_id,business_unit,item_id,line_number,rate,qty,units,comments,total
+PO1001,BU01,I0001,1,499,28,Nos,Urgent delivery needed,13972
+PO1002,BU02,I0002,1,39603,124,days,,158412
+PO1002,BU02,I0003,2,27796,1465,days,,1313585

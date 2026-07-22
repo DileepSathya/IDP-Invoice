@@ -146,6 +146,8 @@ def _collect_telemetry_overview_counts() -> TelemetryOverviewResponse:
     hitl_processed = 0
     system_processed = 0
     human_approved_files = 0
+    erp_matched_files = 0
+    erp_pending_files = 0
 
     for doc in coll.find({}):
         total_uploaded_files += 1
@@ -181,7 +183,20 @@ def _collect_telemetry_overview_counts() -> TelemetryOverviewResponse:
         if _to_bool(additional_fields.get("human_approved")):
             human_approved_files += 1
 
+        # backend/erp_matching.py stamps `erp_hitl_reasons` on every invoice it has ever
+        # matched against PO_DB (an empty list means it matched cleanly). Docs that were
+        # never matched (no seller/PO/line items, or matched before PO_DB was configured)
+        # don't have this key and are excluded from both counts below.
+        erp_reasons = additional_fields.get("erp_hitl_reasons")
+        if isinstance(erp_reasons, list):
+            if erp_reasons:
+                erp_pending_files += 1
+            else:
+                erp_matched_files += 1
+
     error_counts = get_pipeline_error_counts()
+
+    from backend import erp_db
 
     return TelemetryOverviewResponse(
         generated_at=datetime.utcnow().isoformat() + "Z",
@@ -195,6 +210,9 @@ def _collect_telemetry_overview_counts() -> TelemetryOverviewResponse:
         human_approved_files=human_approved_files,
         gemini_quota_error_count=error_counts.get("gemini_quota_error_count", 0),
         network_error_count=error_counts.get("network_error_count", 0),
+        erp_configured=erp_db.is_configured(),
+        erp_matched_files=erp_matched_files,
+        erp_pending_files=erp_pending_files,
     )
 
 
@@ -812,6 +830,16 @@ class InvoiceSummary(BaseModel):
     hitl_remarks: Optional[List[str]] = None
     deblurred_applied: Optional[bool] = None
     human_approved: Optional[bool] = None
+    # ERP / PO_DB (Postgres) fuzzy-match results — see backend/erp_matching.py.
+    # Populated only when POSTGRES_HOST is configured; null/None otherwise.
+    po_id: Optional[str] = None
+    vendor_id: Optional[str] = None
+    vendor_match_score: Optional[Any] = None
+    vendor_match_name: Optional[str] = None
+    po_match_score: Optional[Any] = None
+    po_business_unit: Optional[str] = None
+    item_id: Optional[str] = None
+    item_match_score: Optional[Any] = None
 
 
 class InvoiceListResponse(BaseModel):
@@ -890,6 +918,9 @@ class TelemetryOverviewResponse(BaseModel):
     human_approved_files: int
     gemini_quota_error_count: int = 0
     network_error_count: int = 0
+    erp_configured: bool = False
+    erp_matched_files: int = 0
+    erp_pending_files: int = 0
 
 
 class PipelineStatusResponse(BaseModel):
@@ -914,6 +945,9 @@ class PipelineStatusResponse(BaseModel):
     human_approved_files: int
     gemini_quota_error_count: int = 0
     network_error_count: int = 0
+    erp_configured: bool = False
+    erp_matched_files: int = 0
+    erp_pending_files: int = 0
 
 
 class InvoiceUpdate(BaseModel):
@@ -1024,6 +1058,12 @@ def _invoice_summary_row_from_doc(doc: dict[str, Any], *, line_item_index: Optio
     except Exception:
         hitl_value = None
 
+    li_for_erp: dict[str, Any] = {}
+    if isinstance(line_items, list) and line_item_index is not None and 0 <= line_item_index < len(line_items):
+        candidate = line_items[line_item_index]
+        if isinstance(candidate, dict):
+            li_for_erp = candidate
+
     deblurred_applied_value: Optional[bool] = None
     try:
         deblurred_applied_value = _to_bool(additional_fields.get("deblurred_applied"))
@@ -1072,6 +1112,14 @@ def _invoice_summary_row_from_doc(doc: dict[str, Any], *, line_item_index: Optio
         hitl_remarks=(additional_fields.get("hitl_remarks") if isinstance(additional_fields.get("hitl_remarks"), list) else None),
         deblurred_applied=deblurred_applied_value,
         human_approved=human_approved_value,
+        po_id=gemini_json.get("po_id"),
+        vendor_id=additional_fields.get("vendor_id"),
+        vendor_match_score=additional_fields.get("vendor_match_score"),
+        vendor_match_name=additional_fields.get("vendor_match_name"),
+        po_match_score=additional_fields.get("po_match_score"),
+        po_business_unit=additional_fields.get("po_business_unit"),
+        item_id=li_for_erp.get("item_id"),
+        item_match_score=li_for_erp.get("item_match_score"),
     )
 
 
@@ -1117,6 +1165,7 @@ def _sync_hitl_and_status(
     *,
     mark_human_processed: bool = False,
     uploaded_file_path: Optional[str] = None,
+    run_erp_matching_now: bool = True,
 ) -> tuple[bool, int]:
     additional_fields = gemini_json.get("additional_fields") or {}
     if not isinstance(additional_fields, dict):
@@ -1125,7 +1174,7 @@ def _sync_hitl_and_status(
 
     existing_human_approved = _to_bool(additional_fields.get("human_approved"))
 
-    hitl_value = _calculate_hitl_flag(gemini_json)
+    hitl_value = _calculate_hitl_flag(gemini_json, run_erp_matching_now=run_erp_matching_now)
     additional_fields = gemini_json.get("additional_fields") or {}
     existing_hitl = additional_fields.get("HITL", additional_fields.get("HIT"))
     existing_hitl_bool = _to_bool(existing_hitl)
@@ -1162,6 +1211,27 @@ def _sync_hitl_and_status(
     new_human_approved = _to_bool(additional_fields.get("human_approved"))
     if new_human_approved != existing_human_approved:
         update_doc["gemini.json.additional_fields.human_approved"] = new_human_approved
+
+    # ERP/PO_DB match results (backend/erp_matching.py) — when run_erp_matching_now=True,
+    # _calculate_hitl_flag() above mutates additional_fields (and gemini_json["line_items"]
+    # item_id/item_match_score) in place, so persist those alongside HITL so edits (e.g.
+    # correcting the seller name or PO ID in the JSON editor) re-match and stick.
+    # `erp_hitl_reasons` is the cache read-only callers (e.g. the polled invoice list) reuse
+    # instead of re-querying Postgres — see calculate_hitl_flag(run_erp_matching_now=...).
+    # Skip rewriting line_items on read-only passes: nothing changed, so it'd just be a
+    # no-op Mongo write on every poll for every invoice.
+    for erp_key in (
+        "vendor_id",
+        "vendor_match_name",
+        "vendor_match_score",
+        "po_match_score",
+        "po_business_unit",
+        "erp_hitl_reasons",
+    ):
+        if erp_key in additional_fields:
+            update_doc[f"gemini.json.additional_fields.{erp_key}"] = additional_fields.get(erp_key)
+    if run_erp_matching_now and isinstance(gemini_json.get("line_items"), list):
+        update_doc["gemini.json.line_items"] = gemini_json.get("line_items")
 
     if update_doc:
         try:
@@ -1200,6 +1270,22 @@ async def _app_lifespan(app: FastAPI):
     from backend.agent_settings import load_agent_settings_into_env
 
     load_agent_settings_into_env()
+
+    from backend.erp_scheduler import start_erp_scheduler
+
+    start_erp_scheduler()
+
+    # Kick off one ERP/PO_DB re-sync on every app start so "Last synced"/"Next sync" on the
+    # ERP page reflect reality immediately, instead of waiting out whatever was configured
+    # before the restart (which could be minutes to hours, depending on frequency). No-ops
+    # harmlessly if PO_DB isn't configured (see erp_sync.run_erp_sync) and runs on a
+    # background thread so app startup itself isn't blocked on it.
+    from backend import erp_db
+    from backend.erp_sync import run_erp_sync_async
+
+    if erp_db.is_configured():
+        run_erp_sync_async()
+
     yield
 
 
@@ -1410,6 +1496,79 @@ def get_config_status() -> ConfigStatusResponse:
         "Open the account menu → Settings → AI agent to finish setup before uploading invoices."
     )
     return ConfigStatusResponse(configured=False, missing=missing, message=message)
+
+
+class ErpSyncSettingsResponse(BaseModel):
+    mode: str
+    frequency_minutes: int
+    last_synced_at: Optional[str] = None
+    last_sync_result: Optional[dict[str, Any]] = None
+    syncing: bool = False
+    configured: bool = False
+    # Computed server-side (see erp_settings.next_sync_baseline) from whichever is more
+    # recent of the last completed sync or the last settings save, so saving a shorter
+    # frequency doesn't make "next sync" look like it's already overdue in the past.
+    next_sync_at: Optional[str] = None
+
+
+class ErpSyncSettingsUpdate(BaseModel):
+    mode: str
+    frequency_minutes: int
+
+
+def _erp_sync_settings_response() -> ErpSyncSettingsResponse:
+    from datetime import timedelta
+
+    from backend import erp_db
+    from backend.erp_settings import get_erp_sync_settings, next_sync_baseline
+
+    s = get_erp_sync_settings()
+
+    next_sync_at = None
+    if s["mode"] == "scheduled" and not s.get("syncing"):
+        baseline = next_sync_baseline(s)
+        if baseline is not None:
+            next_sync_at = baseline + timedelta(minutes=s["frequency_minutes"])
+
+    return ErpSyncSettingsResponse(
+        mode=s["mode"],
+        frequency_minutes=s["frequency_minutes"],
+        last_synced_at=_iso(s.get("last_synced_at")),
+        last_sync_result=s.get("last_sync_result"),
+        syncing=s.get("syncing", False),
+        configured=erp_db.is_configured(),
+        next_sync_at=_iso(next_sync_at),
+    )
+
+
+@app.get("/erp/settings", response_model=ErpSyncSettingsResponse)
+def get_erp_settings_route() -> ErpSyncSettingsResponse:
+    return _erp_sync_settings_response()
+
+
+@app.put("/erp/settings", response_model=ErpSyncSettingsResponse)
+def put_erp_settings_route(payload: ErpSyncSettingsUpdate) -> ErpSyncSettingsResponse:
+    from backend.erp_settings import save_erp_sync_settings
+
+    try:
+        save_erp_sync_settings(mode=payload.mode, frequency_minutes=payload.frequency_minutes)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return _erp_sync_settings_response()
+
+
+@app.post("/erp/sync", response_model=ErpSyncSettingsResponse)
+def force_erp_sync_route() -> ErpSyncSettingsResponse:
+    from backend import erp_db
+    from backend.erp_sync import run_erp_sync_async
+
+    if not erp_db.is_configured():
+        raise HTTPException(
+            status_code=400,
+            detail="PO_DB is not configured (POSTGRES_HOST is not set) - nothing to sync.",
+        )
+    run_erp_sync_async()
+    return _erp_sync_settings_response()
 
 
 @app.post("/v1/files", response_model=ApiUploadResponse, status_code=202)
@@ -1694,8 +1853,14 @@ def list_invoices(
                 except Exception:
                     pass
 
-        # Keep HITL and lifecycle status synced.
-        hitl_value, status_value = _sync_hitl_and_status(coll, doc.get("_id"), gemini_json)
+        # Keep HITL and lifecycle status synced. This endpoint is polled every few seconds
+        # by the UI (Dashboard/ERP pages), so skip re-running the Postgres-backed ERP match
+        # here - it reuses whatever vendor/item/PO reasons the last real match run found
+        # (ingest, edit, human-approve, or the next Force Sync / scheduled batch) instead of
+        # hitting PO_DB on every single poll.
+        hitl_value, status_value = _sync_hitl_and_status(
+            coll, doc.get("_id"), gemini_json, run_erp_matching_now=False
+        )
         invoice_total_amount = (
             gemini_json.get("total_amount")
             or gemini_json.get("grand_total")
@@ -1802,6 +1967,14 @@ def list_invoices(
                         ),
                         deblurred_applied=_to_bool((gemini_json.get("additional_fields") or {}).get("deblurred_applied")),
                         human_approved=_to_bool((gemini_json.get("additional_fields") or {}).get("human_approved")),
+                        po_id=gemini_json.get("po_id"),
+                        vendor_id=(gemini_json.get("additional_fields") or {}).get("vendor_id"),
+                        vendor_match_score=(gemini_json.get("additional_fields") or {}).get("vendor_match_score"),
+                        vendor_match_name=(gemini_json.get("additional_fields") or {}).get("vendor_match_name"),
+                        po_match_score=(gemini_json.get("additional_fields") or {}).get("po_match_score"),
+                        po_business_unit=(gemini_json.get("additional_fields") or {}).get("po_business_unit"),
+                        item_id=li.get("item_id") if isinstance(li, dict) else None,
+                        item_match_score=li.get("item_match_score") if isinstance(li, dict) else None,
                     )
                 )
         else:
@@ -1863,6 +2036,12 @@ def list_invoices(
                     ),
                     deblurred_applied=_to_bool((gemini_json.get("additional_fields") or {}).get("deblurred_applied")),
                     human_approved=_to_bool((gemini_json.get("additional_fields") or {}).get("human_approved")),
+                    po_id=gemini_json.get("po_id"),
+                    vendor_id=(gemini_json.get("additional_fields") or {}).get("vendor_id"),
+                    vendor_match_score=(gemini_json.get("additional_fields") or {}).get("vendor_match_score"),
+                    vendor_match_name=(gemini_json.get("additional_fields") or {}).get("vendor_match_name"),
+                    po_match_score=(gemini_json.get("additional_fields") or {}).get("po_match_score"),
+                    po_business_unit=(gemini_json.get("additional_fields") or {}).get("po_business_unit"),
                 )
             )
 
@@ -1983,13 +2162,18 @@ def update_invoice_json_editor(invoice_id: str, payload: InvoiceJsonEditorUpdate
 
     coll.update_one({"_id": oid}, {"$set": {"gemini.json": gemini_json}})
 
-    # Ensure HITL lifecycle flags are updated after manual JSON edits.
+    # Ensure HITL lifecycle flags are updated after manual JSON edits. In "scheduled" ERP
+    # sync mode, skip the synchronous PO_DB re-match here - it'll be picked up by the next
+    # scheduled sync (or Force Sync) instead of hitting Postgres on every save.
+    from backend.erp_settings import should_match_immediately
+
     _sync_hitl_and_status(
         coll,
         oid,
         gemini_json,
         mark_human_processed=True,
         uploaded_file_path=doc.get("uploaded_file_path"),
+        run_erp_matching_now=should_match_immediately(),
     )
     doc = coll.find_one({"_id": oid}) or doc
 
@@ -2439,15 +2623,19 @@ def update_invoice(invoice_id: str, payload: InvoiceUpdate) -> InvoiceSummary:
             coll.update_one({"_id": oid}, {"$set": update_summary_doc})
             doc = coll.find_one({"_id": oid}) or doc
 
-    # Sync HITL/status after any edits.
+    # Sync HITL/status after any edits. In "scheduled" ERP sync mode, skip the synchronous
+    # PO_DB re-match here - it'll be picked up by the next scheduled sync (or Force Sync).
     gemini_json = (doc.get("gemini") or {}).get("json") or {}
     if isinstance(gemini_json, dict):
+        from backend.erp_settings import should_match_immediately
+
         _sync_hitl_and_status(
             coll,
             oid,
             gemini_json,
             mark_human_processed=True,
             uploaded_file_path=doc.get("uploaded_file_path"),
+            run_erp_matching_now=should_match_immediately(),
         )
         doc = coll.find_one({"_id": oid}) or doc
 
@@ -2500,15 +2688,19 @@ def add_invoice_line_item(invoice_id: str, payload: LineItemCreate) -> InvoiceSu
         coll.update_one({"_id": oid}, {"$set": update_doc_summary})
         doc = coll.find_one({"_id": oid}) or doc
 
-    # Sync HITL/status after any line-item add.
+    # Sync HITL/status after any line-item add. In "scheduled" ERP sync mode, skip the
+    # synchronous PO_DB re-match here - it'll be picked up by the next scheduled sync.
     gemini_json = (doc.get("gemini") or {}).get("json") or {}
     if isinstance(gemini_json, dict):
+        from backend.erp_settings import should_match_immediately
+
         _sync_hitl_and_status(
             coll,
             oid,
             gemini_json,
             mark_human_processed=True,
             uploaded_file_path=doc.get("uploaded_file_path"),
+            run_erp_matching_now=should_match_immediately(),
         )
         doc = coll.find_one({"_id": oid}) or doc
 
@@ -2563,15 +2755,19 @@ def delete_invoice_line_item(invoice_id: str, line_item_index: int) -> InvoiceLi
     if not doc:
         raise HTTPException(status_code=404, detail="Invoice not found after update.")
 
-    # Sync HITL/status after any line-item deletion.
+    # Sync HITL/status after any line-item deletion. In "scheduled" ERP sync mode, skip the
+    # synchronous PO_DB re-match here - it'll be picked up by the next scheduled sync.
     gemini_json = (doc.get("gemini") or {}).get("json") or {}
     if isinstance(gemini_json, dict):
+        from backend.erp_settings import should_match_immediately
+
         _sync_hitl_and_status(
             coll,
             oid,
             gemini_json,
             mark_human_processed=True,
             uploaded_file_path=doc.get("uploaded_file_path"),
+            run_erp_matching_now=should_match_immediately(),
         )
         doc = coll.find_one({"_id": oid}) or doc
 

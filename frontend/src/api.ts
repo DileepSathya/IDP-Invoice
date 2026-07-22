@@ -34,6 +34,15 @@ export type InvoiceSummary = {
   hitl_remarks?: string[] | null;
   deblurred_applied?: boolean | null;
   human_approved?: boolean | null;
+  // ERP / PO_DB (Postgres) fuzzy-match results — see backend/erp_matching.py.
+  po_id?: string | null;
+  vendor_id?: string | null;
+  vendor_match_score?: number | null;
+  vendor_match_name?: string | null;
+  po_match_score?: number | null;
+  po_business_unit?: string | null;
+  item_id?: string | null;
+  item_match_score?: number | null;
 };
 
 export type InvoiceListResponse = {
@@ -104,6 +113,9 @@ export type PipelineStatus = {
   human_approved_files: number;
   gemini_quota_error_count?: number;
   network_error_count?: number;
+  erp_configured?: boolean;
+  erp_matched_files?: number;
+  erp_pending_files?: number;
 };
 
 export type InvoiceJsonEditorResponse = {
@@ -343,6 +355,59 @@ export async function fetchPipelineStatus(): Promise<PipelineStatus> {
   return res.json();
 }
 
+export type ErpSyncMode = "immediate" | "scheduled";
+
+export type ErpSyncResult = {
+  scanned: number;
+  updated: number;
+  errored: number;
+};
+
+export type ErpSyncSettings = {
+  mode: ErpSyncMode;
+  frequency_minutes: number;
+  last_synced_at: string | null;
+  last_sync_result: ErpSyncResult | null;
+  syncing: boolean;
+  configured: boolean;
+  // Computed server-side from whichever is more recent of the last completed sync or
+  // the last settings save - see backend/erp_settings.py: next_sync_baseline().
+  next_sync_at: string | null;
+};
+
+export async function fetchErpSyncSettings(): Promise<ErpSyncSettings> {
+  const res = await fetch("/api/erp/settings");
+  if (!res.ok) {
+    throw new Error(`Failed to load ERP sync settings (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function saveErpSyncSettings(
+  mode: ErpSyncMode,
+  frequencyMinutes: number,
+): Promise<ErpSyncSettings> {
+  const res = await fetch("/api/erp/settings", {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ mode, frequency_minutes: frequencyMinutes }),
+  });
+  if (!res.ok) {
+    const msg = await res.text();
+    throw new Error(msg || `Failed to save ERP sync settings (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function forceErpSync(): Promise<ErpSyncSettings> {
+  const res = await fetch("/api/erp/sync", { method: "POST" });
+  if (!res.ok) {
+    const msg = await res.text();
+    throw new Error(msg || `Failed to start ERP sync (${res.status})`);
+  }
+  return res.json();
+}
+
 const CHAT_SESSION_KEY = "idp_chat_session_id";
 
 export function getChatSessionId(): string | null {
@@ -456,4 +521,3 @@ export async function saveInvoiceJsonEditor(
   }
   return (await res.json()) as InvoiceSummary;
 }
-

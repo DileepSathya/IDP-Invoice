@@ -315,7 +315,7 @@ def evaluate_line_items(line_items: Any) -> tuple[bool, list[str]]:
     return flagged, reasons
 
 
-def calculate_hitl_flag(gemini_json: dict[str, Any]) -> bool:
+def calculate_hitl_flag(gemini_json: dict[str, Any], *, run_erp_matching_now: bool = True) -> bool:
     additional_fields = gemini_json.get("additional_fields") or {}
     if not isinstance(additional_fields, dict):
         additional_fields = {}
@@ -378,6 +378,32 @@ def calculate_hitl_flag(gemini_json: dict[str, Any]) -> bool:
     line_items_flagged, line_item_reasons = evaluate_line_items(line_items)
     reasons.extend(line_item_reasons)
 
+    # PO_DB (Postgres) vendor / item / PO cross-checks. Optional - a no-op that
+    # returns [] whenever PO_DB isn't configured (see backend/erp_db.is_configured),
+    # so installs that haven't set up Postgres are unaffected. Wrapped defensively
+    # so a PO_DB outage or bad data never breaks the rest of HITL evaluation.
+    #
+    # `run_erp_matching_now=False` skips hitting Postgres altogether and instead reuses
+    # whatever reasons the *last real* match run found (stored on the doc). This matters
+    # because calculate_hitl_flag() also runs on hot read paths (the invoice list endpoint,
+    # polled every few seconds by the UI; chat/analytics scans over every invoice) - without
+    # this, an unreachable/misconfigured Postgres would get hammered on every single poll
+    # instead of matching once at ingest/edit time and again only on the next Force Sync or
+    # scheduled batch (backend/erp_sync.py).
+    erp_reasons: list[str] = []
+    if run_erp_matching_now:
+        try:
+            from backend.erp_matching import run_erp_matching
+
+            erp_reasons = run_erp_matching(gemini_json)
+        except Exception:
+            erp_reasons = []
+        additional_fields["erp_hitl_reasons"] = erp_reasons
+    else:
+        cached = additional_fields.get("erp_hitl_reasons")
+        erp_reasons = list(cached) if isinstance(cached, list) else []
+    reasons.extend(erp_reasons)
+
     hitl_value = bool(
         date_missing
         or total_mismatch
@@ -385,6 +411,7 @@ def calculate_hitl_flag(gemini_json: dict[str, Any]) -> bool:
         or line_items_flagged
         or po_id_missing
         or payment_term_missing
+        or erp_reasons
     )
 
     additional_fields["hitl_remarks"] = reasons
