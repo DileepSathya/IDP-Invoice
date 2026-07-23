@@ -9,7 +9,7 @@ Works identically for:
   - Every incremental run afterwards (customer sends only new/changed rows)
 
 Existing primary keys are UPDATED, new primary keys are INSERTED.
-Nothing is ever deleted.
+Nothing is ever deleted from the database.
 
 po_header and po_details can be loaded even when vendor_master.csv /
 item_master.csv are missing or empty. Any vendor_id / item_id referenced
@@ -19,6 +19,27 @@ satisfied. Stub rows are clearly flagged (e.g. vendor_name = 'PENDING
 VENDOR MASTER DATA') and are automatically overwritten with real data
 the next time the actual master file is loaded, since upserts use
 ON CONFLICT DO UPDATE.
+
+ATOMICITY
+---------
+Two layers of all-or-nothing behavior:
+
+1. Database: every CSV in a single run is loaded inside ONE Postgres
+   transaction. If any file fails validation or any statement errors,
+   the whole transaction is rolled back - either every row from every
+   file in this run lands in Postgres, or none of them do.
+
+2. Filesystem: source files are only touched *after* the database
+   outcome is known.
+     - On success (commit succeeds): every source CSV that was part of
+       this run is DELETED from the data directory.
+     - On failure (validation error or DB error, transaction rolled
+       back): every source CSV that was part of this run is MOVED,
+       untouched, into a timestamped subfolder under data_error/,
+       alongside an error.txt describing exactly what went wrong.
+   Files are never left half-deleted or silently dropped - each run
+   ends with the input files either fully consumed (success) or fully
+   preserved for inspection (failure).
 
 Usage:
     python load_data.py --data-dir ./data --config config.ini
@@ -30,6 +51,10 @@ skipped, but be mindful of foreign-key order):
     item_master.csv
     po_header.csv
     po_details.csv
+
+On failure, look in:
+    <data-dir>/data_error/<timestamp>/error.txt
+    <data-dir>/data_error/<timestamp>/<the CSVs that were in this run>
 """
 
 import argparse
@@ -38,8 +63,11 @@ import csv
 import io
 import logging
 import os
+import shutil
 import sys
+import traceback
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Dict, List, Optional
 
 import psycopg2
@@ -131,6 +159,8 @@ TABLE_SPECS: List[TableSpec] = [
         },
     ),
 ]
+
+DATA_ERROR_DIRNAME = "data_error"
 
 
 logging.basicConfig(
@@ -317,11 +347,56 @@ def upsert(conn, spec: TableSpec, columns: List[str], rows: List[tuple], dry_run
     return len(rows)
 
 
+def delete_loaded_files(paths: List[str]):
+    """Called only after a successful commit. Removes the source CSVs so a
+    file that has already landed in Postgres isn't reloaded next cycle."""
+    for path in paths:
+        try:
+            os.remove(path)
+            log.info("Deleted source file after successful load: %s", os.path.basename(path))
+        except OSError as e:
+            log.warning("Load succeeded but could not delete %s: %s", path, e)
+
+
+def move_files_to_error(data_dir: str, paths: List[str], error_message: str) -> str:
+    """Called only after a rolled-back transaction / a validation failure
+    that happened before any DB work. Moves every source CSV that was part
+    of this run - untouched - into data_dir/data_error/<timestamp>/, next
+    to an error.txt describing what went wrong. Nothing is deleted from the
+    database and nothing is left half-processed on disk."""
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    dest_dir = os.path.join(data_dir, DATA_ERROR_DIRNAME, stamp)
+    os.makedirs(dest_dir, exist_ok=True)
+
+    moved = []
+    for path in paths:
+        if os.path.exists(path):
+            dest = os.path.join(dest_dir, os.path.basename(path))
+            shutil.move(path, dest)
+            moved.append(os.path.basename(path))
+
+    error_path = os.path.join(dest_dir, "error.txt")
+    with open(error_path, "w") as f:
+        f.write(f"Load failed at: {datetime.now().isoformat()}\n")
+        f.write(f"Files in this run: {', '.join(moved) if moved else '(none found on disk)'}\n")
+        f.write("\nNothing was written to the database - the transaction was rolled back.\n")
+        f.write("\nError detail:\n")
+        f.write(error_message)
+        if not error_message.endswith("\n"):
+            f.write("\n")
+
+    log.error(
+        "Load failed. Moved %d file(s) to %s (see error.txt).",
+        len(moved), dest_dir,
+    )
+    return dest_dir
+
+
 def main():
     parser = argparse.ArgumentParser(description="Load/upsert PO_DB CSV files.")
     parser.add_argument("--data-dir", required=True, help="Folder containing the CSV files")
     parser.add_argument("--config", default="config.ini", help="Path to DB config file")
-    parser.add_argument("--dry-run", action="store_true", help="Validate and preview only, no DB writes")
+    parser.add_argument("--dry-run", action="store_true", help="Validate and preview only, no DB writes, no file deletion/moving")
     args = parser.parse_args()
 
     db_conf = read_db_config(args.config)
@@ -335,6 +410,11 @@ def main():
             sys.exit(1)
 
     total = 0
+    # Every source file that exists and is part of this run - tracked so we
+    # know exactly what to delete (on success) or move to data_error (on
+    # failure). This list is filled in as files are discovered below.
+    run_paths: List[str] = []
+
     try:
         log.info("Starting load from: %s", args.data_dir)
         for spec in TABLE_SPECS:
@@ -343,22 +423,35 @@ def main():
                 log.warning("  %-15s -> file not found (%s), skipped", spec.table, spec.csv_file)
                 continue
 
+            run_paths.append(path)
             columns, rows = load_csv_rows(spec, path)
             ensure_fk_stubs(conn, spec, columns, rows, args.dry_run)
             total += upsert(conn, spec, columns, rows, args.dry_run)
 
         if conn:
             conn.commit()
+
         log.info(
             "Done. %d row(s) processed. %s",
             total,
-            "(dry run - nothing written)" if args.dry_run else "Committed.",
+            "(dry run - nothing written, no files touched)" if args.dry_run else "Committed.",
         )
+
+        # Filesystem side of the atomicity guarantee: only now that the DB
+        # transaction has actually committed do we touch the source files.
+        if not args.dry_run and run_paths:
+            delete_loaded_files(run_paths)
 
     except Exception as e:
         if conn:
             conn.rollback()
-        log.error("Load failed, rolled back. Reason: %s", e)
+        log.error("Load failed, DB transaction rolled back. Reason: %s", e)
+
+        if not args.dry_run and run_paths:
+            move_files_to_error(args.data_dir, run_paths, traceback.format_exc())
+        elif args.dry_run:
+            log.info("Dry run: files left in place despite the failure above.")
+
         sys.exit(1)
     finally:
         if conn:
