@@ -80,6 +80,7 @@ a = Analysis(
         "backend.hitl_status",
         "backend.erp_db",
         "backend.erp_matching",
+        "backend.erp_match_status",
         "backend.erp_settings",
         "backend.erp_sync",
         "backend.erp_scheduler",

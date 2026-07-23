@@ -43,6 +43,8 @@ export type InvoiceSummary = {
   po_business_unit?: string | null;
   item_id?: string | null;
   item_match_score?: number | null;
+  /** True when PO_DB matching is current and left no vendor/item/PO gaps. */
+  erp_matching_complete?: boolean;
 };
 
 export type InvoiceListResponse = {
@@ -499,6 +501,18 @@ export async function fetchInvoiceJsonEditor(
   if (!res.ok) {
     const msg = await res.text();
     throw new Error(msg || `Failed to load invoice editor data (${res.status})`);
+  }
+  return (await res.json()) as InvoiceJsonEditorResponse;
+}
+
+/** ERP page download only — blocked until PO_DB matching is complete for this invoice. */
+export async function fetchInvoiceErpExport(
+  id: string,
+): Promise<InvoiceJsonEditorResponse> {
+  const res = await fetch(`/api/invoices/${id}/erp-export`);
+  if (!res.ok) {
+    const msg = await res.text();
+    throw new Error(msg || `Failed to export invoice JSON (${res.status})`);
   }
   return (await res.json()) as InvoiceJsonEditorResponse;
 }

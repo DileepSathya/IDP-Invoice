@@ -22,6 +22,7 @@ from typing import Any
 
 from backend import erp_db, erp_settings
 from backend.agents.database import get_invoices_collection
+from backend.erp_match_status import ERP_MATCH_PENDING_KEY
 from backend.hitl_status import calculate_hitl_flag, calculate_status_from_hitl, to_bool
 from backend.invoice_files import relocate_after_hitl_processed
 
@@ -59,6 +60,7 @@ def _sync_one_invoice(coll: Any, doc: dict[str, Any]) -> bool:
 
     hitl_value = calculate_hitl_flag(gemini_json)
     additional_fields = gemini_json.get("additional_fields") or {}
+    additional_fields[ERP_MATCH_PENDING_KEY] = False
     status_value = calculate_status_from_hitl(hitl_value=hitl_value, human_processed=human_processed)
 
     update_doc: dict[str, Any] = {
@@ -66,6 +68,7 @@ def _sync_one_invoice(coll: Any, doc: dict[str, Any]) -> bool:
         "gemini.json.additional_fields.status": status_value,
         "gemini.json.additional_fields.hitl_remark": additional_fields.get("hitl_remark", ""),
         "gemini.json.additional_fields.hitl_remarks": additional_fields.get("hitl_remarks", []),
+        f"gemini.json.additional_fields.{ERP_MATCH_PENDING_KEY}": False,
     }
     for key in (
         "vendor_id",

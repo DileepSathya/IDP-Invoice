@@ -840,6 +840,8 @@ class InvoiceSummary(BaseModel):
     po_business_unit: Optional[str] = None
     item_id: Optional[str] = None
     item_match_score: Optional[Any] = None
+    # True when PO_DB matching is current and left no vendor/item/PO gaps (see erp_match_status.py).
+    erp_matching_complete: bool = False
 
 
 class InvoiceListResponse(BaseModel):
@@ -1002,7 +1004,26 @@ class InvoiceJsonEditorUpdate(BaseModel):
     line_items: Optional[List[dict[str, Any]]] = None
 
 
-def _invoice_summary_row_from_doc(doc: dict[str, Any], *, line_item_index: Optional[int]) -> InvoiceSummary:
+def _invoice_json_editor_response(doc: dict[str, Any]) -> InvoiceJsonEditorResponse:
+    gemini_json = (doc.get("gemini") or {}).get("json") or {}
+    if not isinstance(gemini_json, dict):
+        gemini_json = {}
+    line_items = gemini_json.get("line_items") if isinstance(gemini_json.get("line_items"), list) else []
+    safe_line_items = [li for li in line_items if isinstance(li, dict)]
+    return InvoiceJsonEditorResponse(
+        id=str(doc.get("_id")),
+        uploaded_file_path=doc.get("uploaded_file_path"),
+        gemini_json=gemini_json,
+        line_items=safe_line_items,
+    )
+
+
+def _invoice_summary_row_from_doc(
+    doc: dict[str, Any],
+    *,
+    line_item_index: Optional[int],
+    erp_sync_settings: Optional[dict[str, Any]] = None,
+) -> InvoiceSummary:
     gemini_json = (doc.get("gemini") or {}).get("json") or {}
     additional_fields = gemini_json.get("additional_fields") or {}
     invoice_number = gemini_json.get("invoice_number") or gemini_json.get("invoice")
@@ -1076,6 +1097,8 @@ def _invoice_summary_row_from_doc(doc: dict[str, Any], *, line_item_index: Optio
     except Exception:
         human_approved_value = None
 
+    from backend.erp_match_status import invoice_erp_matching_complete
+
     return InvoiceSummary(
         id=str(doc.get("_id")),
         file_path=doc.get("file_path"),
@@ -1120,6 +1143,7 @@ def _invoice_summary_row_from_doc(doc: dict[str, Any], *, line_item_index: Optio
         po_business_unit=additional_fields.get("po_business_unit"),
         item_id=li_for_erp.get("item_id"),
         item_match_score=li_for_erp.get("item_match_score"),
+        erp_matching_complete=invoice_erp_matching_complete(gemini_json, erp_sync_settings),
     )
 
 
@@ -1166,6 +1190,7 @@ def _sync_hitl_and_status(
     mark_human_processed: bool = False,
     uploaded_file_path: Optional[str] = None,
     run_erp_matching_now: bool = True,
+    mark_erp_match_pending: bool = False,
 ) -> tuple[bool, int]:
     additional_fields = gemini_json.get("additional_fields") or {}
     if not isinstance(additional_fields, dict):
@@ -1176,6 +1201,12 @@ def _sync_hitl_and_status(
 
     hitl_value = _calculate_hitl_flag(gemini_json, run_erp_matching_now=run_erp_matching_now)
     additional_fields = gemini_json.get("additional_fields") or {}
+    from backend.erp_match_status import ERP_MATCH_PENDING_KEY
+
+    if run_erp_matching_now:
+        additional_fields[ERP_MATCH_PENDING_KEY] = False
+    elif mark_erp_match_pending:
+        additional_fields[ERP_MATCH_PENDING_KEY] = True
     existing_hitl = additional_fields.get("HITL", additional_fields.get("HIT"))
     existing_hitl_bool = _to_bool(existing_hitl)
 
@@ -1227,6 +1258,7 @@ def _sync_hitl_and_status(
         "po_match_score",
         "po_business_unit",
         "erp_hitl_reasons",
+        ERP_MATCH_PENDING_KEY,
     ):
         if erp_key in additional_fields:
             update_doc[f"gemini.json.additional_fields.{erp_key}"] = additional_fields.get(erp_key)
@@ -1813,6 +1845,10 @@ def list_invoices(
     file_status: Optional[str] = None,
 ) -> InvoiceListResponse:
     coll = get_invoices_collection()
+    from backend.erp_match_status import invoice_erp_matching_complete
+    from backend.erp_settings import get_erp_sync_settings
+
+    erp_sync_settings = get_erp_sync_settings()
 
     # Date strings in the DB can be in various human formats, so we apply most
     # filters in Python rather than in Mongo.
@@ -1861,6 +1897,7 @@ def list_invoices(
         hitl_value, status_value = _sync_hitl_and_status(
             coll, doc.get("_id"), gemini_json, run_erp_matching_now=False
         )
+        erp_matching_complete = invoice_erp_matching_complete(gemini_json, erp_sync_settings)
         invoice_total_amount = (
             gemini_json.get("total_amount")
             or gemini_json.get("grand_total")
@@ -1975,6 +2012,7 @@ def list_invoices(
                         po_business_unit=(gemini_json.get("additional_fields") or {}).get("po_business_unit"),
                         item_id=li.get("item_id") if isinstance(li, dict) else None,
                         item_match_score=li.get("item_match_score") if isinstance(li, dict) else None,
+                        erp_matching_complete=erp_matching_complete,
                     )
                 )
         else:
@@ -2042,6 +2080,7 @@ def list_invoices(
                     vendor_match_name=(gemini_json.get("additional_fields") or {}).get("vendor_match_name"),
                     po_match_score=(gemini_json.get("additional_fields") or {}).get("po_match_score"),
                     po_business_unit=(gemini_json.get("additional_fields") or {}).get("po_business_unit"),
+                    erp_matching_complete=erp_matching_complete,
                 )
             )
 
@@ -2124,17 +2163,36 @@ def get_invoice_json_editor(invoice_id: str) -> InvoiceJsonEditorResponse:
     if not doc:
         raise HTTPException(status_code=404, detail="Invoice not found.")
 
+    return _invoice_json_editor_response(doc)
+
+
+@app.get("/invoices/{invoice_id}/erp-export", response_model=InvoiceJsonEditorResponse)
+def export_invoice_erp_json(invoice_id: str) -> InvoiceJsonEditorResponse:
+    """Gated JSON export for ERP downloads — editing uses /json-editor without this check."""
+    coll = get_invoices_collection()
+    try:
+        oid = ObjectId(invoice_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid invoice id.")
+
+    doc = coll.find_one({"_id": oid})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Invoice not found.")
+
     gemini_json = (doc.get("gemini") or {}).get("json") or {}
     if not isinstance(gemini_json, dict):
         gemini_json = {}
-    line_items = gemini_json.get("line_items") if isinstance(gemini_json.get("line_items"), list) else []
-    safe_line_items = [li for li in line_items if isinstance(li, dict)]
-    return InvoiceJsonEditorResponse(
-        id=str(doc.get("_id")),
-        uploaded_file_path=doc.get("uploaded_file_path"),
-        gemini_json=gemini_json,
-        line_items=safe_line_items,
-    )
+
+    from backend.erp_match_status import invoice_erp_matching_complete
+    from backend.erp_settings import get_erp_sync_settings
+
+    if not invoice_erp_matching_complete(gemini_json, get_erp_sync_settings()):
+        raise HTTPException(
+            status_code=403,
+            detail="Invoice download is unavailable until PO_DB matching completes with no unmatched vendor, PO, or line items.",
+        )
+
+    return _invoice_json_editor_response(doc)
 
 
 @app.put("/invoices/{invoice_id}/json-editor", response_model=InvoiceSummary)
@@ -2167,13 +2225,15 @@ def update_invoice_json_editor(invoice_id: str, payload: InvoiceJsonEditorUpdate
     # scheduled sync (or Force Sync) instead of hitting Postgres on every save.
     from backend.erp_settings import should_match_immediately
 
+    match_now = should_match_immediately()
     _sync_hitl_and_status(
         coll,
         oid,
         gemini_json,
         mark_human_processed=True,
         uploaded_file_path=doc.get("uploaded_file_path"),
-        run_erp_matching_now=should_match_immediately(),
+        run_erp_matching_now=match_now,
+        mark_erp_match_pending=not match_now,
     )
     doc = coll.find_one({"_id": oid}) or doc
 
@@ -2629,13 +2689,15 @@ def update_invoice(invoice_id: str, payload: InvoiceUpdate) -> InvoiceSummary:
     if isinstance(gemini_json, dict):
         from backend.erp_settings import should_match_immediately
 
+        match_now = should_match_immediately()
         _sync_hitl_and_status(
             coll,
             oid,
             gemini_json,
             mark_human_processed=True,
             uploaded_file_path=doc.get("uploaded_file_path"),
-            run_erp_matching_now=should_match_immediately(),
+            run_erp_matching_now=match_now,
+            mark_erp_match_pending=not match_now,
         )
         doc = coll.find_one({"_id": oid}) or doc
 
@@ -2694,13 +2756,15 @@ def add_invoice_line_item(invoice_id: str, payload: LineItemCreate) -> InvoiceSu
     if isinstance(gemini_json, dict):
         from backend.erp_settings import should_match_immediately
 
+        match_now = should_match_immediately()
         _sync_hitl_and_status(
             coll,
             oid,
             gemini_json,
             mark_human_processed=True,
             uploaded_file_path=doc.get("uploaded_file_path"),
-            run_erp_matching_now=should_match_immediately(),
+            run_erp_matching_now=match_now,
+            mark_erp_match_pending=not match_now,
         )
         doc = coll.find_one({"_id": oid}) or doc
 
@@ -2761,17 +2825,24 @@ def delete_invoice_line_item(invoice_id: str, line_item_index: int) -> InvoiceLi
     if isinstance(gemini_json, dict):
         from backend.erp_settings import should_match_immediately
 
+        match_now = should_match_immediately()
         _sync_hitl_and_status(
             coll,
             oid,
             gemini_json,
             mark_human_processed=True,
             uploaded_file_path=doc.get("uploaded_file_path"),
-            run_erp_matching_now=should_match_immediately(),
+            run_erp_matching_now=match_now,
+            mark_erp_match_pending=not match_now,
         )
         doc = coll.find_one({"_id": oid}) or doc
 
     gemini_json = (doc.get("gemini") or {}).get("json") or {}
+    from backend.erp_match_status import invoice_erp_matching_complete
+    from backend.erp_settings import get_erp_sync_settings
+
+    erp_sync_settings = get_erp_sync_settings()
+    erp_matching_complete = invoice_erp_matching_complete(gemini_json, erp_sync_settings)
     invoice_total_amount = (
         gemini_json.get("total_amount")
         or gemini_json.get("grand_total")
@@ -2841,6 +2912,7 @@ def delete_invoice_line_item(invoice_id: str, line_item_index: int) -> InvoiceLi
                         if isinstance(additional_fields.get("hitl_remarks"), list)
                         else None
                     ),
+                    erp_matching_complete=erp_matching_complete,
                 )
             )
     else:

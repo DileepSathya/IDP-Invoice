@@ -6,7 +6,7 @@ import {
   ErpSyncSettings,
   fetchInvoices,
   fetchErpSyncSettings,
-  fetchInvoiceJsonEditor,
+  fetchInvoiceErpExport,
 } from "../api";
 import { GroupInvoicesById, ParseAmount, SumInvoicesTotalAmount } from "./Dashboard";
 
@@ -36,29 +36,16 @@ const MatchBadge: React.FC<{
 const DownloadButton: React.FC<{
   invoiceId: string;
   invoiceNumber: unknown;
-  syncSuccessful: boolean;
-  hitlPending: boolean;
-}> = ({ invoiceId, invoiceNumber, syncSuccessful, hitlPending }) => {
+  downloadAllowed: boolean;
+}> = ({ invoiceId, invoiceNumber, downloadAllowed }) => {
   const [downloading, setDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState(false);
 
-  if (!syncSuccessful) {
+  if (!downloadAllowed) {
     return (
       <span
         className="download-thumb download-thumb-disabled"
-        title="Download is available once the ERP sync completes successfully."
-        aria-disabled="true"
-      >
-        ⬇
-      </span>
-    );
-  }
-
-  if (hitlPending) {
-    return (
-      <span
-        className="download-thumb download-thumb-disabled"
-        title="Download is available once HITL review is complete."
+        title="Download is available once PO_DB matching completes with no unmatched vendor, PO, or line items."
         aria-disabled="true"
       >
         ⬇
@@ -70,7 +57,7 @@ const DownloadButton: React.FC<{
     try {
       setDownloading(true);
       setDownloadError(false);
-      const data = await fetchInvoiceJsonEditor(invoiceId);
+      const data = await fetchInvoiceErpExport(invoiceId);
       const payload = { ...data.gemini_json, line_items: data.line_items };
       const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
@@ -176,16 +163,8 @@ export const Erp: React.FC = () => {
     return () => window.clearInterval(intervalId);
   }, [loadErpSettings]);
 
-  // Downloads are only allowed once PO_DB is configured and the most recent sync finished
-  // with no errors — otherwise the file could be linked to stale/incorrect ERP match data.
-  const erpSyncSuccessful = useMemo(
-    () =>
-      !!erpSettings?.configured &&
-      !erpSettings?.syncing &&
-      !!erpSettings?.last_sync_result &&
-      erpSettings.last_sync_result.errored === 0,
-    [erpSettings],
-  );
+  // Downloads are only allowed once this invoice's PO_DB match is current and complete.
+  // The API exposes erp_matching_complete per row; downloads use /erp-export (gated server-side).
 
   const toggleExpanded = (invoiceId: string) => {
     setExpandedInvoiceIds((prev) =>
@@ -244,17 +223,14 @@ export const Erp: React.FC = () => {
       {erpSettings && !erpSettings.configured && (
         <div className="alert">
           PO_DB is not configured yet (POSTGRES_HOST is not set) — matching will show every
-          invoice as unmatched, and invoice downloads are disabled until a sync succeeds.{" "}
+          invoice as unmatched, and invoice downloads stay disabled until PO_DB matching completes.{" "}
           <Link to="/erp/settings">Go to ERP Sync Settings</Link>.
         </div>
       )}
-      {erpSettings?.configured && !erpSyncSuccessful && (
+      {erpSettings?.configured && erpSettings.syncing && (
         <div className="alert">
-          {erpSettings.syncing
-            ? "ERP sync in progress — invoice downloads unlock once it finishes cleanly."
-            : erpSettings.last_sync_result && erpSettings.last_sync_result.errored > 0
-            ? `The last sync finished with ${erpSettings.last_sync_result.errored} error(s) — invoice downloads stay disabled until a clean sync completes.`
-            : "No successful sync yet — invoice downloads are disabled until one completes."}
+          ERP sync in progress — invoice downloads unlock row-by-row once matching completes for
+          each invoice.
         </div>
       )}
 
@@ -416,8 +392,7 @@ export const Erp: React.FC = () => {
                           <DownloadButton
                             invoiceId={inv.id}
                             invoiceNumber={inv.invoice_number}
-                            syncSuccessful={erpSyncSuccessful}
-                            hitlPending={inv.status === 1}
+                            downloadAllowed={!!inv.erp_matching_complete}
                           />
                         </td>
                       </tr>
