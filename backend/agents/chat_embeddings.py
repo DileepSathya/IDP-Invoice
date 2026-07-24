@@ -47,15 +47,14 @@ class _FastEmbedProvider:
 
 class _GeminiEmbedProvider:
     def __init__(self, model_name: str) -> None:
-        import google.generativeai as genai
+        from backend.agents.gemini_client import get_client
 
         load_app_dotenv()
         api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
         if not api_key:
             raise RuntimeError("GEMINI_API_KEY is required for Gemini embeddings.")
         self._model_name = model_name
-        genai.configure(api_key=api_key)
-        self._genai = genai
+        self._client = get_client(api_key=api_key)
         probe = self._embed_one("dimension probe")
         self._dimension = len(probe)
 
@@ -71,12 +70,12 @@ class _GeminiEmbedProvider:
         model = self._model_name
         if not model.startswith("models/"):
             model = f"models/{model}"
-        result = self._genai.embed_content(model=model, content=text)
-        values = result.get("embedding") if isinstance(result, dict) else getattr(result, "embedding", None)
-        if values is None and isinstance(result, dict):
-            values = (result.get("embedding") or {}).get("values")
-        if values is None:
-            values = getattr(getattr(result, "embedding", None), "values", None)
+        # google-genai's embed_content returns an EmbedContentResponse with an
+        # `.embeddings` list of ContentEmbedding objects (one per input) - unlike the
+        # old google.generativeai SDK, which returned a single dict-like `{"embedding": {...}}`.
+        result = self._client.models.embed_content(model=model, contents=text)
+        embeddings = getattr(result, "embeddings", None) or []
+        values = embeddings[0].values if embeddings else None
         if not values:
             raise RuntimeError(f"Gemini embedding returned no vector for model {model}.")
         return [float(v) for v in values]

@@ -37,7 +37,7 @@ a = Analysis(
         "watchdog.observers.polling",
         "bson",
         "pymongo",
-        "google.generativeai",
+        "google.genai",
         "backend",
         "backend.app_paths",
         "backend.app_logging",

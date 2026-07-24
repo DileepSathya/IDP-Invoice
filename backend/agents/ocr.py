@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-import google.generativeai as genai
+from backend.agents.gemini_client import get_model
 from backend.app_paths import load_app_dotenv
 
 from backend.app_logging import configure_logging
@@ -272,8 +272,7 @@ def _gemini_extract_invoice_json(
     )
 
     try:
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(model_name)
+        model = get_model(api_key=api_key, model_name=model_name)
     except Exception as e:
         logger.error("[Gemini] Initialization failed ❌: %s", e)
         raise

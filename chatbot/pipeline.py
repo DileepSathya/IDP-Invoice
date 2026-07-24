@@ -9,7 +9,7 @@ import logging
 import json
 import re
 from datetime import datetime, timezone, timedelta
-import google.generativeai as genai
+from google import genai
 from pymongo import MongoClient
 from config import (
     MONGO_URI, MONGO_DB, MONGO_COLLECTION,
@@ -20,8 +20,24 @@ logger = logging.getLogger(__name__)
 # SETUP
 # ─────────────────────────────────────────────────────────────────────────────
 
-genai.configure(api_key=GEMINI_API_KEY)
-_gemini = genai.GenerativeModel(GEMINI_MODEL)
+
+class _GeminiModelShim:
+    """google-genai (replacing the deprecated google.generativeai) dropped
+    `genai.GenerativeModel(name).generate_content(...)` in favor of
+    `client.models.generate_content(model=name, contents=...)`. This shim keeps
+    the rest of this file's `_gemini.generate_content(prompt)` call sites (and
+    the `response.text` they read back) unchanged."""
+
+    def __init__(self, client, model_name):
+        self._client = client
+        self._model_name = model_name
+
+    def generate_content(self, contents):
+        return self._client.models.generate_content(model=self._model_name, contents=contents)
+
+
+_gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+_gemini = _GeminiModelShim(_gemini_client, GEMINI_MODEL)
 _mongo  = MongoClient(MONGO_URI)
 _col    = _mongo[MONGO_DB][MONGO_COLLECTION]
 

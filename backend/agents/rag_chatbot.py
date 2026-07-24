@@ -10,7 +10,7 @@ from backend.app_paths import load_app_dotenv
 from pymongo import MongoClient
 
 # Gemini / LLM
-import google.generativeai as genai
+from backend.agents.gemini_client import get_model
 
 from backend.agents.database import get_invoices_collection
 from backend.app_logging import configure_logging
@@ -264,8 +264,7 @@ def _get_gemini_answer(prompt: str) -> str:
         "[RAG chatbot] Step 3 — Calling Gemini (%s) with the built prompt (network call).",
         model_name,
     )
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel(model_name)
+    model = get_model(api_key=api_key, model_name=model_name)
     response = model.generate_content(prompt)
     return str(response.text or "").strip()
 

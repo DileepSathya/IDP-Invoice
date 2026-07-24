@@ -51,7 +51,7 @@ a = Analysis(
         "starlette",
         "bson",
         "pymongo",
-        "google.generativeai",
+        "google.genai",
         "watchdog",
         "watchdog.observers",
         "watchdog.observers.polling",

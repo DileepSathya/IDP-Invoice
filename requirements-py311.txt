@@ -11,7 +11,7 @@ lmdb
 tqdm
 rapidfuzz
 visualdl
-google-generativeai
+google-genai
 watchdog
 pymupdf
 python-docx
