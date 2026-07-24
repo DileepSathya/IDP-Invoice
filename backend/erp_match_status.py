@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from backend import erp_db
+from backend.hitl_status import to_bool
 
 ERP_MATCH_PENDING_KEY = "erp_match_pending"
 
@@ -21,8 +22,9 @@ def invoice_erp_matching_complete(
     erp_sync_settings: Optional[dict[str, Any]] = None,
 ) -> bool:
     """True when PO_DB is configured, no sync is in progress, this invoice is not
-    waiting for a deferred scheduled re-match, and the last ERP match run left no
-    unmatched vendor/item/PO reasons."""
+    waiting for a deferred scheduled re-match, the invoice's overall HITL flag is
+    False (i.e. every validation check - not just PO_DB matching - currently passes),
+    and the last ERP match run left no unmatched vendor/item/PO reasons."""
     if not erp_db.is_configured():
         return False
 
@@ -36,6 +38,16 @@ def invoice_erp_matching_complete(
 
     additional_fields = _additional_fields(gemini_json)
     if additional_fields.get(ERP_MATCH_PENDING_KEY):
+        return False
+
+    # The overall HITL flag also covers validation issues that have nothing to do with
+    # PO_DB matching specifically - missing invoice date, missing PO ID, missing payment
+    # term, invoice total vs. sum-of-line-items mismatch, per-line quantity x rate math
+    # errors, and low-quality/deblurred scans. Downloads must wait for those to clear
+    # too, not just for vendor/item/PO matching - otherwise an invoice still sitting in
+    # HITL_pending for one of those reasons could still show as "fully matched" here.
+    hitl_raw = additional_fields.get("HITL", additional_fields.get("HIT"))
+    if to_bool(hitl_raw):
         return False
 
     erp_reasons = additional_fields.get("erp_hitl_reasons")

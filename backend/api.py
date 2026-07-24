@@ -2126,12 +2126,20 @@ def human_approve_invoice(invoice_id: str) -> InvoiceSummary:
     additional_fields["human_approved"] = True
     gemini_json["additional_fields"] = additional_fields
 
+    # Respect "scheduled" ERP sync mode like the edit/add-line-item/delete-line-item
+    # endpoints do - don't hit Postgres synchronously on every approve click if the
+    # configured mode says re-matching should wait for the next scheduled sync/Force Sync.
+    from backend.erp_settings import should_match_immediately
+
+    match_now = should_match_immediately()
     hitl_value, _ = _sync_hitl_and_status(
         coll,
         oid,
         gemini_json,
         mark_human_processed=True,
         uploaded_file_path=doc.get("uploaded_file_path"),
+        run_erp_matching_now=match_now,
+        mark_erp_match_pending=not match_now,
     )
 
     try:

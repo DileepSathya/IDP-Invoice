@@ -108,6 +108,10 @@ def match_item(description: Any) -> dict[str, Any]:
         "matched": matched,
         "item_id": best_row.get("item_id") if matched else None,
         "item_name": best_row.get("item_name") if matched else None,
+        # Canonical unit-of-measure and category from item_master, for downstream ERP export
+        # (see erp_unit / erp_item_group in _match_items_into) - only meaningful when matched.
+        "units": best_row.get("units") if matched else None,
+        "category": best_row.get("category") if matched else None,
         "score": score,
         "best_candidate_name": best_row.get("item_name") if best_row else None,
     }
@@ -188,9 +192,14 @@ def run_erp_matching(gemini_json: dict[str, Any]) -> list[str]:
 def _match_vendor_into(gemini_json: dict[str, Any], additional_fields: dict[str, Any]) -> list[str]:
     seller = gemini_json.get("seller")
     if not _clean(seller):
-        # Seller is missing entirely — not this module's concern (nothing to match).
+        # Seller is missing entirely - clear any stale match data and flag it explicitly.
+        # Previously this returned [] here with no reason, so an invoice with no seller at
+        # all could still show as "fully ERP-matched" (nothing to disagree with) and unlock
+        # download despite vendor matching never actually having run.
         additional_fields.pop("vendor_id", None)
-        return []
+        additional_fields.pop("erp_vendor_name", None)
+        additional_fields["vendor_match_score"] = 0.0
+        return ["Seller/vendor name is missing - cannot match against vendor_master"]
 
     gst_number = (
         additional_fields.get("gst_number")
@@ -206,10 +215,15 @@ def _match_vendor_into(gemini_json: dict[str, Any], additional_fields: dict[str,
     if result["matched"]:
         additional_fields["vendor_id"] = result["vendor_id"]
         additional_fields["vendor_match_name"] = result["vendor_name"]
+        # Canonical vendor_master.vendor_name, kept separate from the OCR-extracted
+        # `seller` field so future ERP/Tally export can use the exact master-data
+        # spelling without losing what was actually printed on the invoice.
+        additional_fields["erp_vendor_name"] = result["vendor_name"]
         return []
 
     additional_fields["vendor_id"] = None
     additional_fields["vendor_match_name"] = None
+    additional_fields["erp_vendor_name"] = None
     best_name = result.get("best_candidate_name")
     hint = f" (closest match: '{best_name}', score {result['score']:.0f})" if best_name else " (no vendors in vendor_master)"
     return [f"Vendor '{seller}' not found in vendor_master{hint}"]
@@ -226,6 +240,17 @@ def _match_items_into(gemini_json: dict[str, Any]) -> list[str]:
             continue
         description = li.get("service") or li.get("description")
         if not _clean(description):
+            # No service/description to match against item_master at all - clear any
+            # stale match data and flag it, rather than silently skipping. Previously
+            # this line item was skipped entirely with no HITL reason, so an invoice
+            # could look "fully ERP-matched" while one of its line items was never
+            # actually checked against Postgres.
+            li["item_match_score"] = 0.0
+            li["item_id"] = None
+            li["erp_item_name"] = None
+            li["erp_unit"] = None
+            li["erp_item_group"] = None
+            reasons.append(f"Item {idx + 1}: no service/description to match against item_master")
             continue
 
         result = match_item(description)
@@ -233,9 +258,19 @@ def _match_items_into(gemini_json: dict[str, Any]) -> list[str]:
 
         if result["matched"]:
             li["item_id"] = result["item_id"]
+            # Canonical item_master values, kept separate from the OCR-extracted
+            # `service`/`unit` so future ERP/Tally export can use master-data spelling
+            # (item name, unit of measure, category/item group) without disturbing the
+            # originally extracted invoice text or any quantity/rate/amount/HSN/tax field.
+            li["erp_item_name"] = result["item_name"]
+            li["erp_unit"] = result["units"]
+            li["erp_item_group"] = result["category"]
             continue
 
         li["item_id"] = None
+        li["erp_item_name"] = None
+        li["erp_unit"] = None
+        li["erp_item_group"] = None
         label = f"Item {idx + 1} ('{description}')"
         best_name = result.get("best_candidate_name")
         hint = f" (closest match: '{best_name}', score {result['score']:.0f})" if best_name else " (no items in item_master)"

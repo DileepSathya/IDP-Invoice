@@ -46,9 +46,16 @@ def _sync_one_invoice(coll: Any, doc: dict[str, Any]) -> bool:
         "HITL": additional_fields.get("HITL"),
         "hitl_remark": additional_fields.get("hitl_remark"),
         "vendor_id": additional_fields.get("vendor_id"),
+        "erp_vendor_name": additional_fields.get("erp_vendor_name"),
         "po_business_unit": additional_fields.get("po_business_unit"),
         "line_items": [
-            (li.get("item_id"), li.get("item_match_score"))
+            (
+                li.get("item_id"),
+                li.get("item_match_score"),
+                li.get("erp_item_name"),
+                li.get("erp_unit"),
+                li.get("erp_item_group"),
+            )
             for li in (gemini_json.get("line_items") or [])
             if isinstance(li, dict)
         ],
@@ -74,6 +81,7 @@ def _sync_one_invoice(coll: Any, doc: dict[str, Any]) -> bool:
         "vendor_id",
         "vendor_match_name",
         "vendor_match_score",
+        "erp_vendor_name",
         "po_match_score",
         "po_business_unit",
         "erp_hitl_reasons",
@@ -84,7 +92,13 @@ def _sync_one_invoice(coll: Any, doc: dict[str, Any]) -> bool:
         update_doc["gemini.json.line_items"] = gemini_json.get("line_items")
 
     after_line_items = [
-        (li.get("item_id"), li.get("item_match_score"))
+        (
+            li.get("item_id"),
+            li.get("item_match_score"),
+            li.get("erp_item_name"),
+            li.get("erp_unit"),
+            li.get("erp_item_group"),
+        )
         for li in (gemini_json.get("line_items") or [])
         if isinstance(li, dict)
     ]
@@ -92,6 +106,7 @@ def _sync_one_invoice(coll: Any, doc: dict[str, Any]) -> bool:
         before["HITL"] != hitl_value
         or before["hitl_remark"] != additional_fields.get("hitl_remark")
         or before["vendor_id"] != additional_fields.get("vendor_id")
+        or before["erp_vendor_name"] != additional_fields.get("erp_vendor_name")
         or before["po_business_unit"] != additional_fields.get("po_business_unit")
         or before["line_items"] != after_line_items
     )
