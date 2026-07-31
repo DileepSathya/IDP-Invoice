@@ -177,6 +177,13 @@ def run_erp_sync() -> dict[str, Any]:
     logger.info(
         "[erp_sync] Sync complete: scanned=%d updated=%d errored=%d", scanned, updated, errored
     )
+
+    from backend.tally_integration.config import is_push_on_erp_sync_enabled, is_tally_configured
+    from backend.tally_sync import run_tally_sync_async
+
+    if is_tally_configured() and is_push_on_erp_sync_enabled():
+        run_tally_sync_async()
+
     return {"scanned": scanned, "updated": updated, "errored": errored}
 
 

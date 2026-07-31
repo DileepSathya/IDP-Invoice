@@ -46,6 +46,14 @@ def ensure_layout(root: Path) -> None:
         shutil.copy(example_path, env_path)
         print(f"Created {env_path} from .env.example — set GEMINI_API_KEY before processing invoices.")
 
+    tally_bridge_dir = root / "tally-bridge"
+    tally_bridge_dir.mkdir(parents=True, exist_ok=True)
+    tally_env = tally_bridge_dir / ".env"
+    tally_example = tally_bridge_dir / ".env.example"
+    if not tally_env.exists() and tally_example.exists():
+        shutil.copy(tally_example, tally_env)
+        print(f"Created {tally_env} from .env.example — set TALLY_COMPANY before pushing to Tally.")
+
 
 def _read_env_value(root: Path, key: str, default: str) -> str:
     env_path = root / ".env"
@@ -118,6 +126,28 @@ def wait_for_api(port: int, timeout: float = 180.0) -> bool:
     return False
 
 
+def wait_for_tally_bridge(port: int, timeout: float = 60.0) -> bool:
+    url = f"http://127.0.0.1:{port}/health"
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=3) as resp:
+                if resp.status < 500:
+                    return True
+        except (urllib.error.URLError, TimeoutError, OSError):
+            time.sleep(1.0)
+    return False
+
+
+def _tally_enabled(root: Path) -> bool:
+    return _read_env_value(root, "TALLY_ENABLED", "false").strip().lower() in {
+        "true",
+        "1",
+        "yes",
+        "on",
+    }
+
+
 def _popen_cmd(cmd: list[str], cwd: Path) -> subprocess.Popen:
     creationflags = 0
     if sys.platform == "win32":
@@ -172,8 +202,12 @@ def main() -> None:
     ensure_layout(root)
 
     api_port = int(os.environ.get("IDP_API_PORT", _read_env_value(root, "IDP_API_PORT", "8000")))
+    tally_bridge_port = int(
+        os.environ.get("TALLY_BRIDGE_PORT", _read_env_value(root, "TALLY_BRIDGE_PORT", "8001"))
+    )
     api_exe = root / "idp-api" / "idp-api.exe"
     watcher_exe = root / "idp-watcher" / "idp-watcher.exe"
+    tally_bridge_exe = root / "tally-bridge" / "tally-bridge.exe"
 
     if not api_exe.is_file():
         print(f"[ERROR] API executable not found: {api_exe}")
@@ -196,6 +230,18 @@ def main() -> None:
             processes.append(_popen_cmd([str(watcher_exe)], root))
         else:
             print(f"[WARN] Watcher not found (skipping): {watcher_exe}")
+
+        if _tally_enabled(root):
+            if tally_bridge_exe.is_file():
+                print(f"Starting Tally bridge: {tally_bridge_exe}")
+                processes.append(_popen_cmd([str(tally_bridge_exe)], root / "tally-bridge"))
+                print(f"Waiting for Tally bridge on port {tally_bridge_port}...")
+                if wait_for_tally_bridge(tally_bridge_port):
+                    print("Tally bridge is ready.")
+                else:
+                    print("[WARN] Tally bridge did not respond in time. ERP push may fail until it is up.")
+            else:
+                print(f"[WARN] Tally enabled but bridge not found (skipping): {tally_bridge_exe}")
 
         print(f"Starting API: {api_exe}")
         processes.append(_popen_cmd([str(api_exe)], root))

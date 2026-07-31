@@ -41,7 +41,7 @@ if "%VENVVER%"=="" goto :need_install
 if not "%VENVVER%"=="3.11" goto :wrong_venv_python
 
 REM ---- Ensure dependencies ----
-"%VENV_PY%" -c "import watchdog, pymongo, dotenv, fastapi, uvicorn, multipart; import llama_index.core; import llama_index.embeddings.huggingface; import llama_index.llms.ollama" >nul 2>&1
+"%VENV_PY%" -c "import watchdog, pymongo, dotenv, fastapi, uvicorn, multipart, requests; import llama_index.core; import llama_index.embeddings.huggingface; import llama_index.llms.ollama" >nul 2>&1
 if errorlevel 1 goto :need_install
 
 goto :start_watcher
@@ -137,6 +137,7 @@ exit /b 0
 
 :run_api_only
 echo(
+call :start_tally_bridge
 echo Starting FastAPI API server in this window ...
 "%VENV_PY%" -m uvicorn backend.api:app --host 0.0.0.0 --port 8000
 
@@ -152,7 +153,7 @@ echo Starting watcher in a new window ...
 start "watcher" cmd /k ""%cd%\%VENV_PY%" "%cd%\backend\agents\watch_raw.py""
 
 echo(
-echo Starting FastAPI API server in this window ...
+call :start_tally_bridge
 call :ensure_frontend
 
 start "frontend" cmd /k "cd /d %~dp0frontend && npm run dev"
@@ -178,6 +179,23 @@ if exist "node_modules" (
   call npm install
 )
 popd
+goto :eof
+
+:ensure_tally_bridge_env
+if not exist "TALLY INTEGRATION\.env" (
+  if exist "TALLY INTEGRATION\.env.example" (
+    copy /y "TALLY INTEGRATION\.env.example" "TALLY INTEGRATION\.env" >nul
+  )
+)
+goto :eof
+
+:start_tally_bridge
+if not exist "TALLY INTEGRATION\api_server.py" goto :eof
+call :ensure_tally_bridge_env
+findstr /i "TALLY_ENABLED=true" .env >nul 2>&1
+if errorlevel 1 goto :eof
+echo Starting Tally bridge on port 8001 ^(requires TallyPrime on port 9000^) ...
+start "tally-bridge" cmd /k "cd /d %~dp0 && %VENV_PY% -m backend.run_tally_bridge"
 goto :eof
 
 :python_missing

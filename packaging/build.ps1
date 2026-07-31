@@ -46,7 +46,7 @@ if (-not $SkipPyInstaller) {
     Write-Host "`n[2/5] Installing PyInstaller..."
     & $Py -m pip install --upgrade pyinstaller
 
-    Write-Host "`n[3/5] Running PyInstaller (API, watcher, launcher)..."
+    Write-Host "`n[3/5] Running PyInstaller (API, watcher, launcher, tally-bridge)..."
     New-Item -ItemType Directory -Force -Path $DistRoot, $BuildWork | Out-Null
 
     $commonArgs = @(
@@ -60,6 +60,9 @@ if (-not $SkipPyInstaller) {
 
     & $Py -m PyInstaller @commonArgs (Join-Path $Root "packaging\idp_watcher.spec")
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed for idp_watcher.spec" }
+
+    & $Py -m PyInstaller @commonArgs (Join-Path $Root "packaging\idp_tally_bridge.spec")
+    if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed for idp_tally_bridge.spec" }
 
     & $Py -m PyInstaller @commonArgs (Join-Path $Root "packaging\idp_launcher.spec")
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed for idp_launcher.spec" }
@@ -103,9 +106,28 @@ foreach ($dir in @(
         "logs", "data\db", "invoices_data",
         "invoices_data\to_be_processed", "invoices_data\_api_staging",
         "invoices_data\HITL_pending", "invoices_data\gemini_api_error",
-        "invoices_data\ERROR", "invoices_data\Completed"
+        "invoices_data\ERROR", "invoices_data\Completed",
+        "tally-bridge\xml_scripts"
     )) {
     New-Item -ItemType Directory -Force -Path (Join-Path $DistRoot $dir) | Out-Null
+}
+
+$tallyBridgeRoot = Join-Path $DistRoot "tally-bridge"
+$tallyXmlSrc = Join-Path $Root "TALLY INTEGRATION\xml_scripts"
+$tallyXmlDst = Join-Path $tallyBridgeRoot "xml_scripts"
+if (Test-Path $tallyXmlSrc) {
+    if (Test-Path $tallyXmlDst) { Remove-Item -Recurse -Force $tallyXmlDst }
+    Copy-Item -Recurse $tallyXmlSrc $tallyXmlDst
+}
+$tallyEnvExampleSrc = Join-Path $Root "TALLY INTEGRATION\.env.example"
+$tallyEnvExampleDst = Join-Path $tallyBridgeRoot ".env.example"
+$tallyEnvDst = Join-Path $tallyBridgeRoot ".env"
+if (Test-Path $tallyEnvExampleSrc) {
+    Copy-Item -Force $tallyEnvExampleSrc $tallyEnvExampleDst
+    if (-not (Test-Path $tallyEnvDst)) {
+        Copy-Item -Force $tallyEnvExampleDst $tallyEnvDst
+        Write-Host "Created tally-bridge\.env from .env.example (set TALLY_COMPANY and TALLY_URL)."
+    }
 }
 
 if (-not $SkipMongoDB) {
@@ -131,4 +153,5 @@ Write-Host "`nBefore first use:"
 Write-Host "  1. Edit dist\IDP-Invoice\.env and set GEMINI_API_KEY."
 Write-Host "  2. (Optional) Fill in POSTGRES_HOST/POSTGRES_USER/POSTGRES_PASSWORD in .env to enable ERP matching - they ship blank on purpose."
 Write-Host "  3. Place license.lic next to Start IDP Invoice.exe (see licensing\README.md)."
+Write-Host "  4. (Optional) Set TALLY_ENABLED=true in .env and configure tally-bridge\.env (TALLY_URL, TALLY_COMPANY)."
 Write-Host "Bundled MongoDB starts automatically when MONGO_URI points to localhost."

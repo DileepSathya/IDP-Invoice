@@ -42,6 +42,9 @@ dist/IDP-Invoice/
   data/db/                 ← MongoDB data files (created on first run)
   idp-api/idp-api.exe
   idp-watcher/idp-watcher.exe
+  tally-bridge/tally-bridge.exe   ← Tally voucher bridge (port 8001)
+  tally-bridge/xml_scripts/       ← voucher XML template
+  tally-bridge/.env.example       ← TallyPrime URL + company name
   frontend/                ← built React UI
   .env.example
   invoices_data/
@@ -61,9 +64,17 @@ dist/IDP-Invoice/
 4. (Optional) To enable ERP/PO matching, fill in `POSTGRES_HOST`, `POSTGRES_USER`, and
    `POSTGRES_PASSWORD` with your own Postgres credentials — these ship blank on
    purpose, so ERP matching stays off until you set them yourself.
-5. Double-click **Start IDP Invoice.exe**
-5. Browser opens at `http://localhost:8000`
-6. Drop invoice files in `invoices_data/to_be_processed/` (or upload via the UI)
+5. (Optional) To push matched invoices to TallyPrime, set `TALLY_ENABLED=true` in `.env`
+   and edit `tally-bridge\.env`:
+   - `TALLY_URL=http://localhost:9000` (TallyPrime HTTP port)
+   - `TALLY_COMPANY=` exact company name open in TallyPrime
+   - Use the same `MONGO_URI` / `MONGO_DB` as the main app
+6. Double-click **Start IDP Invoice.exe**
+7. Browser opens at `http://localhost:8000`
+8. Drop invoice files in `invoices_data/to_be_processed/` (or upload via the UI)
+
+When `TALLY_ENABLED=true`, the launcher also starts `tally-bridge.exe` on port 8001.
+TallyPrime must be running separately with the target company open.
 
 The launcher starts bundled MongoDB automatically when:
 
@@ -82,6 +93,14 @@ cd frontend && npm run build
 cd ..
 venv\Scripts\python.exe -m backend.run_api
 ```
+
+Tally bridge (separate terminal, when `TALLY_ENABLED=true`):
+
+```powershell
+venv\Scripts\python.exe -m backend.run_tally_bridge
+```
+
+Or use `run_production.bat` option 5 — it starts the bridge automatically when `TALLY_ENABLED=true` in `.env`.
 
 The API serves `frontend/dist` when present and maps `/api/*` to backend routes.
 

@@ -45,6 +45,10 @@ export type InvoiceSummary = {
   item_match_score?: number | null;
   /** True when PO_DB matching is current and left no vendor/item/PO gaps. */
   erp_matching_complete?: boolean;
+  /** Tally push outcome shown in ERP-Remark column. */
+  erp_remark?: string | null;
+  tally_push_status?: string | null;
+  tally_error_reason?: string | null;
 };
 
 export type InvoiceListResponse = {
@@ -365,6 +369,13 @@ export type ErpSyncResult = {
   errored: number;
 };
 
+export type TallySyncResult = {
+  scanned: number;
+  pushed: number;
+  skipped: number;
+  errored: number;
+};
+
 export type ErpSyncSettings = {
   mode: ErpSyncMode;
   frequency_minutes: number;
@@ -375,7 +386,36 @@ export type ErpSyncSettings = {
   // Computed server-side from whichever is more recent of the last completed sync or
   // the last settings save - see backend/erp_settings.py: next_sync_baseline().
   next_sync_at: string | null;
+  tally_configured?: boolean;
+  last_tally_synced_at?: string | null;
+  last_tally_sync_result?: TallySyncResult | null;
 };
+
+export type TallyPushResponse = {
+  success: boolean;
+  invoice_id: string;
+  invoice_number?: string | null;
+  erp_remark: string;
+  error_reason?: string | null;
+  tally_company?: string | null;
+  pushed_at?: string | null;
+  skipped?: boolean;
+};
+
+export async function pushInvoiceToTally(
+  invoiceId: string,
+  force = false,
+): Promise<TallyPushResponse> {
+  const qs = force ? "?force=true" : "";
+  const res = await fetch(`/api/tally/push/${encodeURIComponent(invoiceId)}${qs}`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    const msg = await res.text();
+    throw new Error(msg || `Failed to push invoice to Tally (${res.status})`);
+  }
+  return res.json();
+}
 
 export async function fetchErpSyncSettings(): Promise<ErpSyncSettings> {
   const res = await fetch("/api/erp/settings");

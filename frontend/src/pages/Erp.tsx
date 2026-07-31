@@ -7,6 +7,7 @@ import {
   fetchInvoices,
   fetchErpSyncSettings,
   fetchInvoiceErpExport,
+  pushInvoiceToTally,
 } from "../api";
 import { GroupInvoicesById, ParseAmount, SumInvoicesTotalAmount } from "./Dashboard";
 
@@ -113,6 +114,54 @@ function FormatNextSync(settings: ErpSyncSettings | null): string {
   return next.toLocaleString();
 }
 
+const ErpRemarkCell: React.FC<{
+  inv: InvoiceSummary;
+}> = ({ inv }) => {
+  const [retrying, setRetrying] = useState(false);
+  const remark = inv.erp_remark ?? "—";
+  const isSuccess = remark === "Successful" || inv.tally_push_status === "success";
+  const isFailed =
+    remark.startsWith("Unsuccessful") ||
+    inv.tally_push_status === "failed";
+  const isPending = remark === "Pending Tally push";
+
+  const handleRetry = async () => {
+    try {
+      setRetrying(true);
+      await pushInvoiceToTally(inv.id, true);
+    } catch {
+      // Poll will refresh the row
+    } finally {
+      setRetrying(false);
+    }
+  };
+
+  return (
+    <div className="erp-remark-cell">
+      <span
+        className={`erp-remark-badge${
+          isSuccess ? " erp-remark-success" : isFailed ? " erp-remark-failed" : isPending ? " erp-remark-pending" : ""
+        }`}
+        title={inv.tally_error_reason ?? undefined}
+      >
+        {remark}
+      </span>
+      {isFailed && inv.erp_matching_complete && (
+        <button
+          type="button"
+          className="erp-remark-retry"
+          onClick={() => void handleRetry()}
+          disabled={retrying}
+          title="Retry Tally push"
+          aria-label="Retry Tally push"
+        >
+          {retrying ? "…" : "↻"}
+        </button>
+      )}
+    </div>
+  );
+};
+
 export const Erp: React.FC = () => {
   const [allInvoices, setAllInvoices] = useState<InvoiceSummary[]>([]);
   const [loading, setLoading] = useState(false);
@@ -215,6 +264,21 @@ export const Erp: React.FC = () => {
             )}
           </span>
           <span className="erp-settings-next-synced">Next sync: {FormatNextSync(erpSettings)}</span>
+          {erpSettings.tally_configured && erpSettings.last_tally_synced_at && (
+            <span className="erp-settings-last-synced">
+              Last Tally push: {FormatTimestamp(erpSettings.last_tally_synced_at)}
+              {erpSettings.last_tally_sync_result && (
+                <>
+                  {" "}
+                  ({erpSettings.last_tally_sync_result.pushed ?? 0} pushed
+                  {(erpSettings.last_tally_sync_result.errored ?? 0) > 0
+                    ? `, ${erpSettings.last_tally_sync_result.errored} failed`
+                    : ""}
+                  )
+                </>
+              )}
+            </span>
+          )}
         </div>
       )}
 
@@ -290,12 +354,13 @@ export const Erp: React.FC = () => {
                   <th>Status</th>
                   <th>Match Reason</th>
                   <th>Download</th>
+                  <th>ERP-Remark</th>
                 </tr>
               </thead>
               <tbody>
                 {invoiceGroups.length === 0 && !loading && (
                   <tr>
-                    <td colSpan={7} className="empty-state">
+                    <td colSpan={8} className="empty-state">
                       No invoices match these filters.
                     </td>
                   </tr>
@@ -395,11 +460,14 @@ export const Erp: React.FC = () => {
                             downloadAllowed={!!inv.erp_matching_complete}
                           />
                         </td>
+                        <td>
+                          <ErpRemarkCell inv={inv} />
+                        </td>
                       </tr>
 
                       {isExpanded && (
                         <tr className="invoice-subtable-row">
-                          <td colSpan={7}>
+                          <td colSpan={8}>
                             <div className="invoice-subtable-wrapper">
                               <div className="invoice-subtable-header">
                                 <div className="invoice-subtable-title">Line items — item_master match</div>
@@ -446,7 +514,7 @@ export const Erp: React.FC = () => {
                   <tr className="table-footer">
                     <td>Total</td>
                     <td>{SumInvoicesTotalAmount(invoiceGroups).toFixed(2)}</td>
-                    <td colSpan={5}></td>
+                    <td colSpan={6}></td>
                   </tr>
                 )}
               </tbody>

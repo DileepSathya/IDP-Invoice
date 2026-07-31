@@ -72,6 +72,22 @@ if errorlevel 1 (
   exit /b 1
 )
 
+if exist "TALLY INTEGRATION\requirements.txt" (
+  echo Installing Tally bridge dependencies ...
+  "%PY%" -m pip install -r "TALLY INTEGRATION\requirements.txt"
+  if errorlevel 1 (
+    echo [ERROR] Tally bridge pip install failed.
+    exit /b 1
+  )
+)
+
+if not exist "TALLY INTEGRATION\.env" (
+  if exist "TALLY INTEGRATION\.env.example" (
+    echo Creating TALLY INTEGRATION\.env from .env.example ...
+    copy /y "TALLY INTEGRATION\.env.example" "TALLY INTEGRATION\.env" >nul
+  )
+)
+
 echo(
 echo [OK] Install complete.
 if /i "%~1"=="--no-pause" exit /b 0

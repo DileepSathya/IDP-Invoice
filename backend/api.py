@@ -842,6 +842,10 @@ class InvoiceSummary(BaseModel):
     item_match_score: Optional[Any] = None
     # True when PO_DB matching is current and left no vendor/item/PO gaps (see erp_match_status.py).
     erp_matching_complete: bool = False
+    # Tally push status — bridge to TALLY INTEGRATION service (backend/tally_integration/)
+    erp_remark: Optional[str] = None
+    tally_push_status: Optional[str] = None
+    tally_error_reason: Optional[str] = None
 
 
 class InvoiceListResponse(BaseModel):
@@ -1099,6 +1103,12 @@ def _invoice_summary_row_from_doc(
 
     from backend.erp_match_status import invoice_erp_matching_complete
 
+    erp_complete = invoice_erp_matching_complete(gemini_json, erp_sync_settings)
+    additional_for_remark = gemini_json.get("additional_fields") or {}
+    if not isinstance(additional_for_remark, dict):
+        additional_for_remark = {}
+    from backend.tally_integration.pipeline import display_erp_remark
+
     return InvoiceSummary(
         id=str(doc.get("_id")),
         file_path=doc.get("file_path"),
@@ -1143,7 +1153,12 @@ def _invoice_summary_row_from_doc(
         po_business_unit=additional_fields.get("po_business_unit"),
         item_id=li_for_erp.get("item_id"),
         item_match_score=li_for_erp.get("item_match_score"),
-        erp_matching_complete=invoice_erp_matching_complete(gemini_json, erp_sync_settings),
+        erp_matching_complete=erp_complete,
+        erp_remark=display_erp_remark(
+            additional_for_remark, erp_matching_complete=erp_complete
+        ),
+        tally_push_status=additional_for_remark.get("tally_push_status"),
+        tally_error_reason=additional_for_remark.get("tally_error_reason"),
     )
 
 
@@ -1281,6 +1296,26 @@ def _sync_hitl_and_status(
                 )
             except Exception:
                 pass
+
+    from backend.erp_match_status import invoice_erp_matching_complete
+    from backend.tally_integration.config import is_push_on_erp_sync_enabled, is_tally_configured
+
+    if (
+        is_tally_configured()
+        and is_push_on_erp_sync_enabled()
+        and run_erp_matching_now
+    ):
+        from backend.erp_settings import get_erp_sync_settings, should_match_immediately
+
+        erp_settings = get_erp_sync_settings()
+        if should_match_immediately(erp_settings) and invoice_erp_matching_complete(
+            gemini_json, erp_settings
+        ):
+            additional = gemini_json.get("additional_fields") or {}
+            if isinstance(additional, dict) and additional.get("tally_push_status") != "success":
+                from backend.tally_sync import push_invoice_tally_async
+
+                push_invoice_tally_async(str(oid))
 
     return hitl_value, status_value
 
@@ -1541,6 +1576,32 @@ class ErpSyncSettingsResponse(BaseModel):
     # recent of the last completed sync or the last settings save, so saving a shorter
     # frequency doesn't make "next sync" look like it's already overdue in the past.
     next_sync_at: Optional[str] = None
+    tally_configured: bool = False
+    last_tally_synced_at: Optional[str] = None
+    last_tally_sync_result: Optional[dict[str, Any]] = None
+
+
+class TallyStatusResponse(BaseModel):
+    configured: bool
+    reachable: bool = False
+    company: Optional[str] = None
+    error: Optional[str] = None
+
+
+class TallyPushResponse(BaseModel):
+    success: bool
+    invoice_id: str
+    invoice_number: Optional[str] = None
+    erp_remark: str
+    error_reason: Optional[str] = None
+    tally_company: Optional[str] = None
+    pushed_at: Optional[str] = None
+    skipped: bool = False
+
+
+class TallySyncStartResponse(BaseModel):
+    started: bool
+    message: str
 
 
 class ErpSyncSettingsUpdate(BaseModel):
@@ -1553,6 +1614,7 @@ def _erp_sync_settings_response() -> ErpSyncSettingsResponse:
 
     from backend import erp_db
     from backend.erp_settings import get_erp_sync_settings, next_sync_baseline
+    from backend.tally_integration.config import is_tally_configured
 
     s = get_erp_sync_settings()
 
@@ -1562,6 +1624,14 @@ def _erp_sync_settings_response() -> ErpSyncSettingsResponse:
         if baseline is not None:
             next_sync_at = baseline + timedelta(minutes=s["frequency_minutes"])
 
+    tally_settings_doc: dict[str, Any] = {}
+    try:
+        from backend.agents.database import get_db
+
+        tally_settings_doc = get_db()["erp_settings"].find_one({"_id": "erp_sync"}) or {}
+    except Exception:
+        pass
+
     return ErpSyncSettingsResponse(
         mode=s["mode"],
         frequency_minutes=s["frequency_minutes"],
@@ -1570,6 +1640,9 @@ def _erp_sync_settings_response() -> ErpSyncSettingsResponse:
         syncing=s.get("syncing", False),
         configured=erp_db.is_configured(),
         next_sync_at=_iso(next_sync_at),
+        tally_configured=is_tally_configured(),
+        last_tally_synced_at=_iso(tally_settings_doc.get("last_tally_synced_at")),
+        last_tally_sync_result=tally_settings_doc.get("last_tally_sync_result"),
     )
 
 
@@ -1601,6 +1674,75 @@ def force_erp_sync_route() -> ErpSyncSettingsResponse:
         )
     run_erp_sync_async()
     return _erp_sync_settings_response()
+
+
+@app.get("/tally/status", response_model=TallyStatusResponse)
+def get_tally_status_route() -> TallyStatusResponse:
+    from backend.tally_integration.config import is_tally_configured
+    from backend.tally_integration.bridge_client import ping_bridge
+
+    if not is_tally_configured():
+        return TallyStatusResponse(configured=False, reachable=False)
+
+    reachable, err = ping_bridge()
+    return TallyStatusResponse(
+        configured=True,
+        reachable=reachable,
+        company=None,
+        error=err,
+    )
+
+
+@app.post("/tally/push/{invoice_id}", response_model=TallyPushResponse)
+def push_invoice_to_tally_route(
+    invoice_id: str,
+    force: bool = False,
+) -> TallyPushResponse:
+    from backend.tally_integration.config import is_tally_configured
+    from backend.tally_sync import push_single_invoice_by_id
+
+    if not is_tally_configured():
+        raise HTTPException(
+            status_code=400,
+            detail="Tally is not configured (set TALLY_ENABLED=true and TALLY_BRIDGE_URL in .env).",
+        )
+
+    try:
+        result = push_single_invoice_by_id(invoice_id, force=force)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e)) from e
+
+    return TallyPushResponse(
+        success=result["success"],
+        invoice_id=result["invoice_id"],
+        invoice_number=result.get("invoice_number"),
+        erp_remark=result["erp_remark"],
+        error_reason=result.get("error_reason"),
+        tally_company=result.get("tally_company"),
+        pushed_at=result.get("pushed_at"),
+        skipped=result.get("skipped", False),
+    )
+
+
+@app.post("/tally/sync", response_model=TallySyncStartResponse)
+def force_tally_sync_route() -> TallySyncStartResponse:
+    from backend.tally_integration.config import is_tally_configured
+    from backend.tally_sync import run_tally_sync_async
+
+    if not is_tally_configured():
+        raise HTTPException(
+            status_code=400,
+            detail="Tally is not configured (set TALLY_ENABLED=true and TALLY_BRIDGE_URL in .env).",
+        )
+
+    started = run_tally_sync_async(force=True)
+    if not started:
+        return TallySyncStartResponse(started=False, message="Tally sync already in progress.")
+    return TallySyncStartResponse(started=True, message="Tally sync started in background.")
 
 
 @app.post("/v1/files", response_model=ApiUploadResponse, status_code=202)
@@ -1898,6 +2040,13 @@ def list_invoices(
             coll, doc.get("_id"), gemini_json, run_erp_matching_now=False
         )
         erp_matching_complete = invoice_erp_matching_complete(gemini_json, erp_sync_settings)
+        from backend.tally_integration.pipeline import display_erp_remark
+
+        erp_remark_value = display_erp_remark(
+            additional_fields, erp_matching_complete=erp_matching_complete
+        )
+        tally_push_status_value = additional_fields.get("tally_push_status")
+        tally_error_reason_value = additional_fields.get("tally_error_reason")
         invoice_total_amount = (
             gemini_json.get("total_amount")
             or gemini_json.get("grand_total")
@@ -2013,6 +2162,9 @@ def list_invoices(
                         item_id=li.get("item_id") if isinstance(li, dict) else None,
                         item_match_score=li.get("item_match_score") if isinstance(li, dict) else None,
                         erp_matching_complete=erp_matching_complete,
+                        erp_remark=erp_remark_value,
+                        tally_push_status=tally_push_status_value,
+                        tally_error_reason=tally_error_reason_value,
                     )
                 )
         else:
@@ -2081,6 +2233,9 @@ def list_invoices(
                     po_match_score=(gemini_json.get("additional_fields") or {}).get("po_match_score"),
                     po_business_unit=(gemini_json.get("additional_fields") or {}).get("po_business_unit"),
                     erp_matching_complete=erp_matching_complete,
+                    erp_remark=erp_remark_value,
+                    tally_push_status=tally_push_status_value,
+                    tally_error_reason=tally_error_reason_value,
                 )
             )
 
