@@ -1,0 +1,5 @@
+po_id,business_unit,vendor_id,po_status,po_type,po_date
+PO1001,BU01,V0001,Open,goods,1/11/2025 0:00
+PO1002,BU02,V0002,Open,service,23/12/2025 0:00
+PO1004,BU01,V0004,Open,goods,31/07/2026 0:00
+PO1005,BU01,V0005,Open,service,25/07/2026 0:00
