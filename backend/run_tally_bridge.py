@@ -25,6 +25,14 @@ def _configure_bridge_env(bridge_root: Path) -> None:
     if template.is_file():
         os.environ.setdefault("TALLY_VOUCHER_TEMPLATE", str(template))
 
+    # Pin the outgoing-payload dump to one predictable place. Left to its own
+    # default it lands next to whichever bridge folder is active, so the source
+    # run and the packaged build write to two different last_payload.xml files
+    # and the one you happen to be watching looks like it stopped updating.
+    from backend.app_paths import logs_dir
+
+    os.environ.setdefault("TALLY_LAST_PAYLOAD_PATH", str(logs_dir() / "last_payload.xml"))
+
     if str(bridge_root) not in sys.path:
         sys.path.insert(0, str(bridge_root))
 
