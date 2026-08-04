@@ -1,5 +1,9 @@
 # IDP-Invoice
 
+To build the application from parent folder run
+
+./packaging/build.ps1
+
 In dist/ you can see the IDP Executable version
 
 in .env file the user supposed to configure
