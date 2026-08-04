@@ -44,6 +44,8 @@ a = Analysis(
         "backend.run_watcher",
         "backend.agents.watch_raw",
         "backend.agents.ocr",
+        "backend.agents.gemini_client",
+        "backend.pipeline_errors",
         "backend.agents.database",
         "backend.agents.preprocess_2",
         "backend.invoice_files",

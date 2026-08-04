@@ -354,7 +354,12 @@ OCR TEXT:
         total_tokens = usage["total_token_count"]
         thoughts_tokens = usage["thoughts_token_count"]
         cached_content_tokens = usage["cached_content_token_count"]
-        logger.info("[Gemini] Response received ✅ (chars=%s)", len(raw))
+        actual_model = model.model_name
+        logger.info(
+            "[Gemini] Response received ✅ (chars=%s, model=%s)",
+            len(raw),
+            actual_model,
+        )
     except Exception as e:
         logger.error("[Gemini] API call failed ❌: %s", e)
         wrapped = wrap_pipeline_error(e)
@@ -372,13 +377,13 @@ OCR TEXT:
     try:
         parsed = json.loads(cleaned)
         logger.info("[Gemini] JSON parsed successfully ✅")
-        return raw, parsed, prompt_tokens, output_tokens, total_tokens, thoughts_tokens, cached_content_tokens, model_name
+        return raw, parsed, prompt_tokens, output_tokens, total_tokens, thoughts_tokens, cached_content_tokens, actual_model
     except Exception:
         logger.warning(
             "[Gemini] Invalid JSON → returning raw output (chars=%s)",
             len(raw),
         )
-        return raw, None, prompt_tokens, output_tokens, total_tokens, thoughts_tokens, cached_content_tokens, model_name
+        return raw, None, prompt_tokens, output_tokens, total_tokens, thoughts_tokens, cached_content_tokens, actual_model
 
 
 def process_file(file_path: str, *, run_id: str | None = None) -> OcrResult:

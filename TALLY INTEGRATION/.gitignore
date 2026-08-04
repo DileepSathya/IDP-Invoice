@@ -1,0 +1,12 @@
+.env
+.venv/
+logs/
+__pycache__/
+*.pyc
+last_payload.xml
+tally_pipeline_item_invoice.log
+invoices_data/
+/test.py
+/test_2.py
+/test_3.py
+/test_4.py

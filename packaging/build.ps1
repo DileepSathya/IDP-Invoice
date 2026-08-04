@@ -46,6 +46,11 @@ if (-not $SkipPyInstaller) {
     Write-Host "`n[2/5] Installing PyInstaller..."
     & $Py -m pip install --upgrade pyinstaller
 
+    $tallyBridgeSrc = Join-Path $Root "TALLY INTEGRATION\api_server.py"
+    if (-not (Test-Path $tallyBridgeSrc)) {
+        throw "TALLY INTEGRATION source not found ($tallyBridgeSrc). Clone or restore the Tally bridge folder before building."
+    }
+
     Write-Host "`n[3/5] Running PyInstaller (API, watcher, launcher, tally-bridge)..."
     New-Item -ItemType Directory -Force -Path $DistRoot, $BuildWork | Out-Null
 
