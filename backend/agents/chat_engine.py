@@ -217,7 +217,7 @@ def chat(
                 for m in (session.get("messages") or [])
                 if isinstance(m, dict)
             ]
-            answer = run_pipeline(q, chat_history=history)
+            answer = run_pipeline(q, chat_history=history, session_id=sid)
             mode = "pipeline"
         except Exception as exc:
             logger.error("[Chat engine] Gemini pipeline error: %s", exc)

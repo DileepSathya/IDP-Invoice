@@ -22,24 +22,26 @@ ON CONFLICT DO UPDATE.
 
 ATOMICITY
 ---------
-Two layers of all-or-nothing behavior:
+Database: every CSV in a single run is loaded inside ONE Postgres
+transaction. If any file fails validation or any statement errors, the
+whole transaction is rolled back - either every row from every file in
+this run lands in Postgres, or none of them do.
 
-1. Database: every CSV in a single run is loaded inside ONE Postgres
-   transaction. If any file fails validation or any statement errors,
-   the whole transaction is rolled back - either every row from every
-   file in this run lands in Postgres, or none of them do.
+FILESYSTEM
+----------
+This script never deletes or moves the source CSVs itself - it only
+reads them. Sorting the files out of the data directory after a run
+(into a "completed" folder on success, or an "ERROR" folder on failure)
+is the job of the separate watch_data_folder.py watcher, which invokes
+this script as a subprocess and checks its exit code (0 = success,
+non-zero = failure) to decide where each file goes. That keeps file
+movement in exactly one place and guarantees a source CSV is never
+deleted, only ever relocated.
 
-2. Filesystem: source files are only touched *after* the database
-   outcome is known.
-     - On success (commit succeeds): every source CSV that was part of
-       this run is DELETED from the data directory.
-     - On failure (validation error or DB error, transaction rolled
-       back): every source CSV that was part of this run is MOVED,
-       untouched, into a timestamped subfolder under data_error/,
-       alongside an error.txt describing exactly what went wrong.
-   Files are never left half-deleted or silently dropped - each run
-   ends with the input files either fully consumed (success) or fully
-   preserved for inspection (failure).
+On failure, this script does write a small error.txt directly into
+--data-dir (not into a subfolder, so it doesn't interfere with the
+watcher's move step) describing exactly what went wrong, for the next
+person who looks at the failed run.
 
 Usage:
     python load_data.py --data-dir ./data --config config.ini
@@ -51,10 +53,6 @@ skipped, but be mindful of foreign-key order):
     item_master.csv
     po_header.csv
     po_details.csv
-
-On failure, look in:
-    <data-dir>/data_error/<timestamp>/error.txt
-    <data-dir>/data_error/<timestamp>/<the CSVs that were in this run>
 """
 
 import argparse
@@ -63,7 +61,6 @@ import csv
 import io
 import logging
 import os
-import shutil
 import sys
 import traceback
 from dataclasses import dataclass, field
@@ -130,7 +127,7 @@ TABLE_SPECS: List[TableSpec] = [
         table="po_header",
         pk_columns=["po_id", "business_unit"],
         varchar_limits={
-            "po_id": 25,
+            "po_id": 500,
             "business_unit": 25,
             "vendor_id": 50,
             "po_status": 15,
@@ -150,7 +147,7 @@ TABLE_SPECS: List[TableSpec] = [
         pk_columns=["po_id", "business_unit", "item_id"],
         int_columns=["line_number"],
         float_columns=["rate", "qty", "total"],
-        varchar_limits={"po_id": 25, "business_unit": 25, "item_id": 25, "units": 10},
+        varchar_limits={"po_id": 500, "business_unit": 25, "item_id": 25, "units": 10},
         fk_stub={
             "fk_column": "item_id",
             "parent_table": "item_master",
@@ -159,8 +156,6 @@ TABLE_SPECS: List[TableSpec] = [
         },
     ),
 ]
-
-DATA_ERROR_DIRNAME = "data_error"
 
 
 logging.basicConfig(
@@ -223,7 +218,21 @@ def load_csv_rows(spec: TableSpec, path: str):
         reader = csv.DictReader(f)
         if reader.fieldnames is None:
             raise ValueError(f"{path} has no header row")
-        columns = [c.strip() for c in reader.fieldnames]
+        raw_columns = [c.strip() for c in reader.fieldnames]
+        # A trailing comma (or two) in the header row - a common artifact of
+        # CSVs saved/re-saved from Excel - makes csv.DictReader invent blank
+        # ('') field names for the extra empty column(s). Left in, those
+        # blank names get joined straight into the INSERT column list and
+        # produce invalid SQL (dangling commas). They carry no real data
+        # (there's no table column for them to map to), so just drop them.
+        columns = [c for c in raw_columns if c != ""]
+        blank_count = len(raw_columns) - len(columns)
+        if blank_count:
+            log.warning(
+                "  %-15s -> ignored %d blank/unnamed column(s) in the header of %s "
+                "(trailing comma in header row?)",
+                spec.table, blank_count, spec.csv_file,
+            )
         pk_idx = [columns.index(c) for c in spec.pk_columns if c in columns]
 
         rows = []
@@ -347,56 +356,36 @@ def upsert(conn, spec: TableSpec, columns: List[str], rows: List[tuple], dry_run
     return len(rows)
 
 
-def delete_loaded_files(paths: List[str]):
-    """Called only after a successful commit. Removes the source CSVs so a
-    file that has already landed in Postgres isn't reloaded next cycle."""
-    for path in paths:
-        try:
-            os.remove(path)
-            log.info("Deleted source file after successful load: %s", os.path.basename(path))
-        except OSError as e:
-            log.warning("Load succeeded but could not delete %s: %s", path, e)
-
-
-def move_files_to_error(data_dir: str, paths: List[str], error_message: str) -> str:
-    """Called only after a rolled-back transaction / a validation failure
-    that happened before any DB work. Moves every source CSV that was part
-    of this run - untouched - into data_dir/data_error/<timestamp>/, next
-    to an error.txt describing what went wrong. Nothing is deleted from the
-    database and nothing is left half-processed on disk."""
+def write_error_note(data_dir: str, paths: List[str], error_message: str) -> str:
+    """Called only after a rolled-back transaction / a validation failure.
+    Writes a small, uniquely-named error.txt directly into data_dir (NOT a
+    subfolder, and the source CSVs are left exactly where they are) so the
+    next person to look at data_dir can see what went wrong. This script
+    never moves or deletes the source CSVs itself - that's watch_data_folder.py's
+    job, based on this process's exit code."""
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    dest_dir = os.path.join(data_dir, DATA_ERROR_DIRNAME, stamp)
-    os.makedirs(dest_dir, exist_ok=True)
+    note_path = os.path.join(data_dir, f"load_error_{stamp}.txt")
 
-    moved = []
-    for path in paths:
-        if os.path.exists(path):
-            dest = os.path.join(dest_dir, os.path.basename(path))
-            shutil.move(path, dest)
-            moved.append(os.path.basename(path))
-
-    error_path = os.path.join(dest_dir, "error.txt")
-    with open(error_path, "w") as f:
+    present = [os.path.basename(p) for p in paths if os.path.exists(p)]
+    with open(note_path, "w") as f:
         f.write(f"Load failed at: {datetime.now().isoformat()}\n")
-        f.write(f"Files in this run: {', '.join(moved) if moved else '(none found on disk)'}\n")
+        f.write(f"Files in this run: {', '.join(present) if present else '(none found on disk)'}\n")
         f.write("\nNothing was written to the database - the transaction was rolled back.\n")
+        f.write("Source CSVs were left untouched in this folder.\n")
         f.write("\nError detail:\n")
         f.write(error_message)
         if not error_message.endswith("\n"):
             f.write("\n")
 
-    log.error(
-        "Load failed. Moved %d file(s) to %s (see error.txt).",
-        len(moved), dest_dir,
-    )
-    return dest_dir
+    log.error("Load failed. Wrote error detail to %s. Source file(s) left in place: %s", note_path, present)
+    return note_path
 
 
 def main():
     parser = argparse.ArgumentParser(description="Load/upsert PO_DB CSV files.")
     parser.add_argument("--data-dir", required=True, help="Folder containing the CSV files")
     parser.add_argument("--config", default="config.ini", help="Path to DB config file")
-    parser.add_argument("--dry-run", action="store_true", help="Validate and preview only, no DB writes, no file deletion/moving")
+    parser.add_argument("--dry-run", action="store_true", help="Validate and preview only, no DB writes")
     args = parser.parse_args()
 
     db_conf = read_db_config(args.config)
@@ -410,9 +399,9 @@ def main():
             sys.exit(1)
 
     total = 0
-    # Every source file that exists and is part of this run - tracked so we
-    # know exactly what to delete (on success) or move to data_error (on
-    # failure). This list is filled in as files are discovered below.
+    # Every source file that exists and is part of this run - tracked only
+    # so a failure's error.txt can list exactly which files were involved.
+    # This script never deletes or moves them; see module docstring.
     run_paths: List[str] = []
 
     try:
@@ -434,13 +423,11 @@ def main():
         log.info(
             "Done. %d row(s) processed. %s",
             total,
-            "(dry run - nothing written, no files touched)" if args.dry_run else "Committed.",
+            "(dry run - nothing written)" if args.dry_run else "Committed.",
         )
-
-        # Filesystem side of the atomicity guarantee: only now that the DB
-        # transaction has actually committed do we touch the source files.
-        if not args.dry_run and run_paths:
-            delete_loaded_files(run_paths)
+        # Source CSVs are intentionally left in data_dir here. The watcher
+        # (watch_data_folder.py) sees this process exit 0 and moves them
+        # into the "completed" folder itself.
 
     except Exception as e:
         if conn:
@@ -448,9 +435,12 @@ def main():
         log.error("Load failed, DB transaction rolled back. Reason: %s", e)
 
         if not args.dry_run and run_paths:
-            move_files_to_error(args.data_dir, run_paths, traceback.format_exc())
+            write_error_note(args.data_dir, run_paths, traceback.format_exc())
         elif args.dry_run:
-            log.info("Dry run: files left in place despite the failure above.")
+            log.info("Dry run: no error note written.")
+        # Source CSVs are intentionally left in data_dir here too. The
+        # watcher sees this process exit non-zero and moves them into the
+        # "ERROR" folder itself.
 
         sys.exit(1)
     finally:

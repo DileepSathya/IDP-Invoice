@@ -155,6 +155,45 @@ def get_pipeline_metrics_collection() -> Collection:
     return coll
 
 
+def get_gemini_metrics_collection() -> Collection:
+    load_app_dotenv()
+    coll_name = os.environ.get("MONGO_GEMINI_METRICS_COLLECTION", "Gemini_metrics")
+    coll = get_db()[coll_name]
+    coll.create_index([("ts", -1)])
+    coll.create_index([("source", 1), ("ts", -1)])
+    coll.create_index([("run_id", 1)])
+    coll.create_index([("file_id", 1)])
+    coll.create_index([("session_id", 1)])
+    coll.create_index([("model", 1), ("ts", -1)])
+    coll.create_index([("operation", 1), ("ts", -1)])
+    return coll
+
+
+def record_gemini_metrics(doc: dict[str, Any]) -> Optional[str]:
+    """Persist one Gemini API call record into IDP.Gemini_metrics."""
+    try:
+        coll = get_gemini_metrics_collection()
+        now = datetime.utcnow()
+        payload = dict(doc)
+        payload.setdefault("ts", now)
+        payload.setdefault("created_at", now)
+        result = coll.insert_one(payload)
+        return str(result.inserted_id)
+    except Exception as e:
+        logger.warning("[MongoDB] Failed to persist Gemini metrics: %s", e)
+        return None
+
+
+def link_gemini_metrics_run(*, run_id: str | None, **fields: Any) -> None:
+    """Attach pipeline context (e.g. file_id, tenant_id) to prior Gemini_metrics rows."""
+    if not run_id or not fields:
+        return
+    try:
+        get_gemini_metrics_collection().update_many({"run_id": run_id}, {"$set": dict(fields)})
+    except Exception as e:
+        logger.warning("[MongoDB] Failed to link Gemini metrics for run_id=%s: %s", run_id, e)
+
+
 def get_pipeline_error_counts() -> dict[str, int]:
     """
     Cumulative (all-time) pipeline failure counts by error_stage, sourced from pipeline_runs.

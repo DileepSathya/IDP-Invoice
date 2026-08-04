@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import datetime
 from functools import lru_cache
 from typing import Protocol, Sequence
 
@@ -67,13 +68,52 @@ class _GeminiEmbedProvider:
         return self._dimension
 
     def _embed_one(self, text: str) -> list[float]:
+        from backend.agents.database import record_gemini_metrics
+        from backend.agents.gemini_client import extract_usage_metadata
+
         model = self._model_name
         if not model.startswith("models/"):
             model = f"models/{model}"
-        # google-genai's embed_content returns an EmbedContentResponse with an
-        # `.embeddings` list of ContentEmbedding objects (one per input) - unlike the
-        # old google.generativeai SDK, which returned a single dict-like `{"embedding": {...}}`.
-        result = self._client.models.embed_content(model=model, contents=text)
+        started_at = datetime.utcnow()
+        try:
+            result = self._client.models.embed_content(model=model, contents=text)
+            ended_at = datetime.utcnow()
+            record_gemini_metrics(
+                {
+                    "operation": "embed_content",
+                    "source": "chat_embedding",
+                    "model": self._model_name,
+                    "started_at": started_at,
+                    "ended_at": ended_at,
+                    "latency_seconds": (ended_at - started_at).total_seconds(),
+                    "status": "success",
+                    "usage": extract_usage_metadata(result),
+                    "request_meta": {
+                        "prompt_chars": len(text),
+                        "response_chars": 0,
+                    },
+                }
+            )
+        except Exception as exc:
+            ended_at = datetime.utcnow()
+            record_gemini_metrics(
+                {
+                    "operation": "embed_content",
+                    "source": "chat_embedding",
+                    "model": self._model_name,
+                    "started_at": started_at,
+                    "ended_at": ended_at,
+                    "latency_seconds": (ended_at - started_at).total_seconds(),
+                    "status": "error",
+                    "usage": None,
+                    "error_message": str(exc),
+                    "request_meta": {
+                        "prompt_chars": len(text),
+                        "response_chars": 0,
+                    },
+                }
+            )
+            raise
         embeddings = getattr(result, "embeddings", None) or []
         values = embeddings[0].values if embeddings else None
         if not values:

@@ -13,11 +13,17 @@ Design goals (kept simple so this is easy to reconfigure later):
     this works identically on Windows/Mac/Linux and inside containers/
     network shares where inotify-style watching is unreliable.
   - Triggers a load whenever at least one watched CSV is present in the
-    data folder. No separate "have things changed" bookkeeping is needed
-    because load_data.py itself always clears the files it was handed:
-    on success it deletes them, on failure it moves them into
-    data_dir/data_error/<timestamp>/ alongside an error.txt. So if a CSV
-    is sitting in data_dir, it is by definition unprocessed and new.
+    data folder.
+  - After the loader subprocess finishes, the watcher itself sorts the
+    watched CSVs out of the data folder:
+      * on success       -> moved into data_dir/completed/<timestamp>/
+      * on failure       -> moved into data_dir/ERROR/<timestamp>/
+    Both folders are created automatically if they don't exist yet. This
+    means a CSV sitting directly in data_dir is always unprocessed/new,
+    since the watcher clears it out one way or the other right after each
+    run. (If load_data.py also does its own file cleanup internally, the
+    watcher's move step simply finds nothing left to move and logs that -
+    see the note on move_files() below.)
   - Calls load_data.py as a subprocess (not by importing its internals),
     so the two scripts stay decoupled and load_data.py can still be run
     by hand exactly as before.
@@ -30,6 +36,7 @@ Usage:
     python watch_data_folder.py --interval 300 --data-dir ../data
     python watch_data_folder.py --once            # single check, then exit
     python watch_data_folder.py --dry-run          # passes --dry-run through
+    python watch_data_folder.py --completed-dir ../done --error-dir ../failed
 
 Stop with Ctrl+C.
 """
@@ -38,6 +45,7 @@ import argparse
 import configparser
 import logging
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -59,6 +67,11 @@ DEFAULT_LOADER = os.path.join(THIS_DIR, "load_data.py")
 DEFAULT_CONFIG = os.path.join(THIS_DIR, "config.ini")
 DEFAULT_INTERVAL_SECONDS = 5 * 60  # 5 minutes
 
+# Sub-folder names created inside --data-dir by default (can be overridden
+# with --completed-dir / --error-dir to point somewhere else entirely).
+DEFAULT_COMPLETED_DIRNAME = "completed"
+DEFAULT_ERROR_DIRNAME = "ERROR"
+
 WATCHED_FILES = [
     "vendor_master.csv",
     "item_master.csv",
@@ -71,10 +84,40 @@ def files_present(data_dir: str) -> List[str]:
     """Return the watched CSV filenames currently sitting in data_dir.
 
     Only looks at the 4 known filenames directly inside data_dir - it never
-    descends into data_error/, so files load_data.py has already moved
-    there (after a failed run) are not picked back up.
+    descends into completed/ or ERROR/, so files already sorted there are
+    not picked back up.
     """
     return [f for f in WATCHED_FILES if os.path.exists(os.path.join(data_dir, f))]
+
+
+def move_files(file_names: List[str], data_dir: str, dest_root: str) -> List[str]:
+    """Move any of file_names that still exist in data_dir into a fresh
+    timestamped subfolder under dest_root, creating dest_root (and the
+    timestamped subfolder) if they don't exist yet.
+
+    Only files that are still actually present get moved - if load_data.py
+    already deleted or relocated a file itself before exiting, it's simply
+    skipped here (nothing to move). Returns the list of files that were
+    actually moved.
+    """
+    to_move = [f for f in file_names if os.path.exists(os.path.join(data_dir, f))]
+    if not to_move:
+        return []
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    dest_dir = os.path.join(dest_root, timestamp)
+    os.makedirs(dest_dir, exist_ok=True)
+
+    moved = []
+    for f in to_move:
+        src = os.path.join(data_dir, f)
+        dst = os.path.join(dest_dir, f)
+        try:
+            shutil.move(src, dst)
+            moved.append(f)
+        except OSError as e:
+            log.error("Could not move %s to %s: %s", src, dst, e)
+    return moved
 
 
 def get_interval_seconds(config_path: str, cli_value: Optional[int]) -> int:
@@ -155,15 +198,34 @@ def check_once(args) -> bool:
     log.info("Found file(s) %s in %s, triggering load.", present, args.data_dir)
     success = run_loader(args.loader, args.data_dir, args.config, args.dry_run)
 
-    # No manual bookkeeping needed here: on success load_data.py deletes the
-    # source files itself; on failure it moves them into data_error/ with an
-    # error.txt. Either way data_dir no longer holds these same files, so
-    # the next tick's files_present() check naturally reflects reality.
-    if not success:
-        log.warning(
-            "Loader reported failure - check %s for the moved files and error.txt.",
-            os.path.join(args.data_dir, "data_error"),
-        )
+    if args.dry_run:
+        # Validate-only mode: nothing should be touched on disk either way.
+        log.info("Dry run - leaving %s in place (not moving to completed/ERROR).", present)
+        return True
+
+    if success:
+        moved = move_files(present, args.data_dir, args.completed_dir)
+        if moved:
+            log.info("Moved %s to completed folder: %s", moved, args.completed_dir)
+        else:
+            log.info(
+                "Loader succeeded but %s were already gone from %s (nothing to move).",
+                present, args.data_dir,
+            )
+    else:
+        moved = move_files(present, args.data_dir, args.error_dir)
+        if moved:
+            log.warning(
+                "Loader reported failure - moved %s to error folder: %s",
+                moved, args.error_dir,
+            )
+        else:
+            log.warning(
+                "Loader reported failure, but %s were already gone from %s "
+                "(check load_data.py's own error handling too).",
+                present, args.data_dir,
+            )
+
     return True
 
 
@@ -180,6 +242,14 @@ def main():
             f"falling back to {DEFAULT_INTERVAL_SECONDS // 60} minute(s) if that's not set."
         ),
     )
+    parser.add_argument(
+        "--completed-dir", default=None,
+        help="Folder to move CSVs into after a successful load (default: <data-dir>/completed)",
+    )
+    parser.add_argument(
+        "--error-dir", default=None,
+        help="Folder to move CSVs into after a failed load (default: <data-dir>/ERROR)",
+    )
     parser.add_argument("--dry-run", action="store_true", help="Pass --dry-run through to load_data.py (validate only, no DB writes, no files touched)")
     parser.add_argument("--once", action="store_true", help="Check a single time and exit (useful for testing / cron instead of the built-in loop)")
     args = parser.parse_args()
@@ -188,11 +258,21 @@ def main():
     args.loader = os.path.abspath(args.loader)
     args.config = os.path.abspath(args.config)
     args.interval = get_interval_seconds(args.config, args.interval)
+    args.completed_dir = (
+        os.path.abspath(args.completed_dir) if args.completed_dir
+        else os.path.join(args.data_dir, DEFAULT_COMPLETED_DIRNAME)
+    )
+    args.error_dir = (
+        os.path.abspath(args.error_dir) if args.error_dir
+        else os.path.join(args.data_dir, DEFAULT_ERROR_DIRNAME)
+    )
 
     log.info("Watching data dir : %s", args.data_dir)
     log.info("Loader script     : %s", args.loader)
     log.info("Config file       : %s", args.config)
     log.info("Check interval    : %d second(s)", args.interval)
+    log.info("Completed dir     : %s", args.completed_dir)
+    log.info("Error dir         : %s", args.error_dir)
 
     if args.once:
         check_once(args)

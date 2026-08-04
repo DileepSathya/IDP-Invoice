@@ -120,7 +120,7 @@ def _reload_env_and_track_gemini_key() -> str:
     return file_key
 
 
-def _process_file_with_network_retries(path: Path):
+def _process_file_with_network_retries(path: Path, *, run_id: str | None = None):
     last_exc: Exception | None = None
     for attempt in range(1, NETWORK_MAX_RETRIES + 1):
         try:
@@ -128,7 +128,7 @@ def _process_file_with_network_retries(path: Path):
 
             set_pipeline_active("watch_raw", path)
             try:
-                return process_file(str(path))
+                return process_file(str(path), run_id=run_id)
             finally:
                 clear_pipeline_active()
         except NetworkPipelineError as exc:
@@ -177,9 +177,17 @@ def _process_file_with_network_retries(path: Path):
     raise NetworkPipelineError(f"Network failure while processing {path.name}")
 
 
-def _store_invoice_result(path: Path, r, gemini_json: dict, file_status: str) -> None:
+def _store_invoice_result(
+    path: Path,
+    r,
+    gemini_json: dict,
+    file_status: str,
+    *,
+    run_id: str | None = None,
+) -> None:
     from backend.agents.database import (
         get_invoices_collection,
+        link_gemini_metrics_run,
         record_pipeline_telemetry,
         store_invoice_result,
     )
@@ -218,6 +226,7 @@ def _store_invoice_result(path: Path, r, gemini_json: dict, file_status: str) ->
         gemini_raw_text=r.gemini_raw_text,
         file_status=file_status,
     )
+    link_gemini_metrics_run(run_id=run_id, file_id=inserted_id)
     logger.info(
         "[Folder watcher → MongoDB] Insert completed. Document id: %s | file=%s",
         inserted_id,
@@ -231,7 +240,7 @@ def _store_invoice_result(path: Path, r, gemini_json: dict, file_status: str) ->
         pass
     record_pipeline_telemetry(
         {
-            "run_id": str(uuid4()),
+            "run_id": run_id or str(uuid4()),
             "source": "watch_raw",
             "file_id": inserted_id,
             "file_name": final_path.name,
@@ -251,6 +260,8 @@ def _store_invoice_result(path: Path, r, gemini_json: dict, file_status: str) ->
             "gemini_prompt_tokens": r.gemini_prompt_tokens,
             "gemini_output_tokens": r.gemini_output_tokens,
             "gemini_total_tokens": r.gemini_total_tokens,
+            "gemini_thoughts_tokens": r.gemini_thoughts_tokens,
+            "gemini_cached_content_tokens": r.gemini_cached_content_tokens,
             "gemini_model": r.gemini_model,
             "total_pipeline_latency": (db_insert_time - file_received_time).total_seconds(),
             "status": "success",
@@ -340,7 +351,8 @@ def _process_invoice_path(path: Path) -> None:
         "[Folder watcher → worker] Starting OCR + Gemini pipeline: %s",
         path,
     )
-    r = _process_file_with_network_retries(path)
+    run_id = str(uuid4())
+    r = _process_file_with_network_retries(path, run_id=run_id)
 
     gemini_json = r.gemini_json or {}
     if not isinstance(gemini_json, dict):
@@ -358,7 +370,7 @@ def _process_invoice_path(path: Path) -> None:
         return
 
     try:
-        _store_invoice_result(path, r, gemini_json, file_status)
+        _store_invoice_result(path, r, gemini_json, file_status, run_id=run_id)
     except Exception as e:
         logger.exception(
             "[Folder watcher → MongoDB] Failed to store invoice for %s: %s",

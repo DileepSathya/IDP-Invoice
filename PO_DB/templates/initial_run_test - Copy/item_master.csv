@@ -1,10 +1,20 @@
 item_id,item_name,description,category,units,rate
-I0001,Waltr A Monthly Subscription,Water Level & Usage Monitor 1/12/25 to 31/12/25,Water bill,Nos,499
+I0001,Waltr A Monthly Subscription Water Level & Usage Monitor 1/12/25 to 31/12/25,,Water bill,ltr,499
 I0002,Security Supervisor,,security service,days,39603
 I0003,Security Guard,,security service,days,27796
-I0005,Transformer Oil top up,,services,Litres,150
+I0004,PHASE 1 DEVELOPMENT,,services,Nos,779364.81
+I0005,Transformer Oil top up charges (Billing on Actuals),,services,Litres,150
 I0006,Transformer silicagel breather set 0.5kg,,services,Nos,2500
 I0007,Transformer silicagel breather set 1kg,,services,Nos,3800
 I0008,Transformer silicagel breather set 2kg,,services,Nos,4500
-I0009,Lv bushing oil leaks arresting gas cut charges,,services,Nos,12500
-I0010,"Charges, sevice and maintenance of 76 lifts",,Lift services,Nos,26926
+I0009,Lv bushing oil leaks arresting with gas cut charges,,services,Nos,12500
+I0010,HOUSEKEEPING SERVICES FOR THE MONTH OF APRIL 2026,,services,Nos,1705721
+I0011,GPSC GPC Service For The Month of June-26,,services,Nos,107000
+I0012,"3.5 Corex 400 Sq.mm Aluminium Armoured Cable, 1.1 kV grade, XLPE insulated, PVC outer sheath. Make: Polycab. IS 7098 compliant. (4 runs x 20 m = 80 m) (Refer Note-1)",,Goods,Mtr,2000
+I0013,Double Compression Brass Cable Gland- DBW 13A,,Goods,set,12500
+I0014,Enclosure for Transformer Output Connection,,Goods,set,128000
+I0015,"Cable Tray, Clamps, Stands, Supports & Accessories",,Goods,LOT,75000
+I0016,Cable transportation charges,,Goods,Nos,5500
+I0017,Dismantling of Existing Transformer Output Connections & Damaged Busduct,,Goods,JOB,25000
+I0018,"Laying, Glanding, Lugging & Termination of Cables",,Goods,JOB,25000
+I0019,Security Guard Services,,security service,Nos,15000

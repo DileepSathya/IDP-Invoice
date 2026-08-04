@@ -185,11 +185,15 @@ _RELEVANCE_PROMPT = (
 )
 
 
-def _is_invoice_related(user_query: str) -> bool:
+def _is_invoice_related(user_query: str, *, session_id: str | None = None) -> bool:
     """Binary relevance gate — runs before the full intent pipeline."""
+    metrics_context: dict[str, Any] = {"source": "chat_relevance"}
+    if session_id:
+        metrics_context["session_id"] = session_id
     try:
         response = _get_gemini().generate_content(
-            _RELEVANCE_PROMPT.format(query=user_query)
+            _RELEVANCE_PROMPT.format(query=user_query),
+            metrics_context=metrics_context,
         )
         answer = response.text.strip().upper()
         logger.info("[Pipeline] Relevance check for %r → %s", user_query, answer)
@@ -198,8 +202,16 @@ def _is_invoice_related(user_query: str) -> bool:
         return True  # fail open — let the pipeline handle it
 
 
-def extract_intent(user_query: str, chat_history: list[dict]) -> dict:
+def extract_intent(
+    user_query: str,
+    chat_history: list[dict],
+    *,
+    session_id: str | None = None,
+) -> dict:
     """Layer 1: Gemini converts messy query → structured intent JSON."""
+    metrics_context: dict[str, Any] = {"source": "chat_intent"}
+    if session_id:
+        metrics_context["session_id"] = session_id
     history_text = ""
     for turn in chat_history[-4:]:
         role = "User" if turn.get("role") == "user" else "Assistant"
@@ -210,7 +222,7 @@ def extract_intent(user_query: str, chat_history: list[dict]) -> dict:
         prompt += f"=== Recent Conversation ===\n{history_text}\n"
     prompt += f"=== Current Query ===\n{user_query}"
 
-    response = _get_gemini().generate_content(prompt)
+    response = _get_gemini().generate_content(prompt, metrics_context=metrics_context)
     raw = response.text.strip()
 
     # Strip markdown code fences
@@ -807,8 +819,16 @@ Structure your response in this exact order:
 """
 
 
-def refine_response(user_query: str, raw_result: dict) -> str:
+def refine_response(
+    user_query: str,
+    raw_result: dict,
+    *,
+    session_id: str | None = None,
+) -> str:
     """Layer 3: Gemini formats raw MongoDB result → clean human-readable answer."""
+    metrics_context: dict[str, Any] = {"source": "chat_refine"}
+    if session_id:
+        metrics_context["session_id"] = session_id
     # De-duplicate list results before sending to Gemini
     if raw_result.get("type") == "list" and isinstance(raw_result.get("data"), list):
         seen = set()
@@ -829,7 +849,7 @@ Data from database:
 
 Reply now (follow the formatting rules strictly):"""
 
-    response = _get_gemini().generate_content(prompt)
+    response = _get_gemini().generate_content(prompt, metrics_context=metrics_context)
     return response.text.strip()
 
 
@@ -1137,7 +1157,12 @@ def _build_html_response(raw_result: dict, user_query: str) -> str | None:
     )
 
 
-def run_pipeline(user_query: str, chat_history: list[dict] | None = None) -> str:
+def run_pipeline(
+    user_query: str,
+    chat_history: list[dict] | None = None,
+    *,
+    session_id: str | None = None,
+) -> str:
     """
     Run all 3 layers and return the final answer string.
     Any Gemini error propagates up — chat_engine.py shows the error message to the user.
@@ -1146,12 +1171,12 @@ def run_pipeline(user_query: str, chat_history: list[dict] | None = None) -> str
         chat_history = []
 
     # Relevance gate — reject off-topic queries before hitting MongoDB
-    if not _is_invoice_related(user_query):
+    if not _is_invoice_related(user_query, session_id=session_id):
         logger.info("[Pipeline] Off-topic query rejected: %r", user_query)
         return "That question isn't related to the invoice management application. Please ask about invoices, billing, vendors, payment status, or related topics."
 
     # Layer 1 — intent extraction (Gemini)
-    intent = extract_intent(user_query, chat_history)
+    intent = extract_intent(user_query, chat_history, session_id=session_id)
     logger.info("[Pipeline] Intent: type=%s filters=%s", intent.get("intent_type"), intent.get("filters"))
 
     # Layer 2 — MongoDB query (pure Python, always works)
@@ -1168,7 +1193,7 @@ def run_pipeline(user_query: str, chat_history: list[dict] | None = None) -> str
         return html
 
     # Layer 3 — response refinement (Gemini) for counts, sums, trends, etc.
-    return refine_response(user_query, raw_result)
+    return refine_response(user_query, raw_result, session_id=session_id)
 
 
 def _format_breakdown(result: dict) -> str:

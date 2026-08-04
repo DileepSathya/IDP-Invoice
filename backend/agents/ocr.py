@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-from backend.agents.gemini_client import get_model
+from backend.agents.gemini_client import extract_usage_metadata, get_model
 from backend.app_paths import load_app_dotenv
 
 from backend.app_logging import configure_logging
@@ -38,6 +38,8 @@ class OcrResult:
     gemini_prompt_tokens: Optional[int]
     gemini_output_tokens: Optional[int]
     gemini_total_tokens: Optional[int]
+    gemini_thoughts_tokens: Optional[int]
+    gemini_cached_content_tokens: Optional[int]
     gemini_model: Optional[str]
 
 
@@ -250,7 +252,19 @@ def _extract_text_from_docx(docx_path: str) -> str:
 
 def _gemini_extract_invoice_json(
     ocr_text: str,
-) -> tuple[str, Optional[Any], Optional[int], Optional[int], Optional[int], Optional[str]]:
+    *,
+    file_path: str | None = None,
+    run_id: str | None = None,
+) -> tuple[
+    str,
+    Optional[Any],
+    Optional[int],
+    Optional[int],
+    Optional[int],
+    Optional[int],
+    Optional[int],
+    Optional[str],
+]:
     load_app_dotenv()
 
     logger.info("[Gemini] Start extraction")
@@ -261,7 +275,7 @@ def _gemini_extract_invoice_json(
     api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
     if not api_key:
         logger.warning("[Gemini] API key missing → skipping extraction")
-        return "", None, None, None, None, None
+        return "", None, None, None, None, None, None, None
 
     model_name = os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"
 
@@ -323,15 +337,23 @@ OCR TEXT:
 {ocr_text}
 """
 
+    metrics_context: dict[str, Any] = {"source": "ocr"}
+    if file_path:
+        metrics_context["file_name"] = Path(file_path).name
+    if run_id:
+        metrics_context["run_id"] = run_id
+
     # API call
     try:
         logger.info("[Gemini] Calling API...")
-        response = model.generate_content(prompt)
+        response = model.generate_content(prompt, metrics_context=metrics_context)
         raw = (response.text or "").strip()
-        usage = getattr(response, "usage_metadata", None)
-        prompt_tokens = getattr(usage, "prompt_token_count", None) if usage is not None else None
-        output_tokens = getattr(usage, "candidates_token_count", None) if usage is not None else None
-        total_tokens = getattr(usage, "total_token_count", None) if usage is not None else None
+        usage = extract_usage_metadata(response)
+        prompt_tokens = usage["prompt_token_count"]
+        output_tokens = usage["candidates_token_count"]
+        total_tokens = usage["total_token_count"]
+        thoughts_tokens = usage["thoughts_token_count"]
+        cached_content_tokens = usage["cached_content_token_count"]
         logger.info("[Gemini] Response received ✅ (chars=%s)", len(raw))
     except Exception as e:
         logger.error("[Gemini] API call failed ❌: %s", e)
@@ -350,16 +372,16 @@ OCR TEXT:
     try:
         parsed = json.loads(cleaned)
         logger.info("[Gemini] JSON parsed successfully ✅")
-        return raw, parsed, prompt_tokens, output_tokens, total_tokens, model_name
+        return raw, parsed, prompt_tokens, output_tokens, total_tokens, thoughts_tokens, cached_content_tokens, model_name
     except Exception:
         logger.warning(
             "[Gemini] Invalid JSON → returning raw output (chars=%s)",
             len(raw),
         )
-        return raw, None, prompt_tokens, output_tokens, total_tokens, model_name
+        return raw, None, prompt_tokens, output_tokens, total_tokens, thoughts_tokens, cached_content_tokens, model_name
 
 
-def process_file(file_path: str) -> OcrResult:
+def process_file(file_path: str, *, run_id: str | None = None) -> OcrResult:
     configure_logging()
     p = Path(file_path)
     ext = p.suffix.lower()
@@ -410,8 +432,10 @@ def process_file(file_path: str) -> OcrResult:
         gemini_prompt_tokens,
         gemini_output_tokens,
         gemini_total_tokens,
+        gemini_thoughts_tokens,
+        gemini_cached_content_tokens,
         gemini_model,
-    ) = _gemini_extract_invoice_json(ocr_text)
+    ) = _gemini_extract_invoice_json(ocr_text, file_path=str(p), run_id=run_id)
     gemini_end_time = datetime.utcnow()
     if isinstance(gemini_json, dict):
         additional_fields = gemini_json.get("additional_fields")
@@ -444,6 +468,8 @@ def process_file(file_path: str) -> OcrResult:
         gemini_prompt_tokens=gemini_prompt_tokens,
         gemini_output_tokens=gemini_output_tokens,
         gemini_total_tokens=gemini_total_tokens,
+        gemini_thoughts_tokens=gemini_thoughts_tokens,
+        gemini_cached_content_tokens=gemini_cached_content_tokens,
         gemini_model=gemini_model,
     )
 

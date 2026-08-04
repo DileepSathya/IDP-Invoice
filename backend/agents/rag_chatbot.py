@@ -265,7 +265,10 @@ def _get_gemini_answer(prompt: str) -> str:
         model_name,
     )
     model = get_model(api_key=api_key, model_name=model_name)
-    response = model.generate_content(prompt)
+    response = model.generate_content(
+        prompt,
+        metrics_context={"source": "rag_chatbot"},
+    )
     return str(response.text or "").strip()
 
 

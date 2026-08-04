@@ -55,6 +55,7 @@ from backend.agents.database import (
     get_jobs_collection,
     get_pipeline_error_counts,
     get_webhook_attempts_collection,
+    link_gemini_metrics_run,
     record_pipeline_telemetry,
     store_invoice_result,
 )
@@ -620,7 +621,7 @@ def _process_job(
         from license_validator import InvoiceQuotaExceeded, ensure_invoice_quota_available
 
         ensure_invoice_quota_available()
-        ocr_result = process_file(file_path)
+        ocr_result = process_file(file_path, run_id=job_id)
         gemini_json_norm: dict[str, Any] = dict(ocr_result.gemini_json or {})
         invoice_number = gemini_json_norm.get("invoice_number") or gemini_json_norm.get("invoice")
         invoice_number_norm = str(invoice_number).strip() if invoice_number is not None else ""
@@ -641,6 +642,7 @@ def _process_job(
             gemini_raw_text=ocr_result.gemini_raw_text,
             file_status=file_status,
         )
+        link_gemini_metrics_run(run_id=job_id, file_id=inserted_id, tenant_id=tenant_id)
         invoices.update_one(
             {"_id": ObjectId(inserted_id)},
             {"$set": {"tenant_id": tenant_id, "job_id": job_id}},
@@ -691,6 +693,8 @@ def _process_job(
                 "gemini_prompt_tokens": ocr_result.gemini_prompt_tokens,
                 "gemini_output_tokens": ocr_result.gemini_output_tokens,
                 "gemini_total_tokens": ocr_result.gemini_total_tokens,
+                "gemini_thoughts_tokens": ocr_result.gemini_thoughts_tokens,
+                "gemini_cached_content_tokens": ocr_result.gemini_cached_content_tokens,
                 "gemini_model": ocr_result.gemini_model,
                 "total_pipeline_latency": (completed_at - file_received_time).total_seconds(),
                 "status": "success",
@@ -2477,7 +2481,7 @@ async def upload_invoice(file: UploadFile = File(...)) -> InvoiceSummary:
         len(content),
     )
     try:
-        ocr_result = process_file(str(staging_path))
+        ocr_result = process_file(str(staging_path), run_id=run_id)
     except Exception as e:
         # Gemini API failures (invalid/expired key, quota, rate limit, etc.) go
         # to gemini_api_error/ instead of ERROR/ so the folder watcher's
@@ -2530,6 +2534,8 @@ async def upload_invoice(file: UploadFile = File(...)) -> InvoiceSummary:
                 "gemini_prompt_tokens": None,
                 "gemini_output_tokens": None,
                 "gemini_total_tokens": None,
+                "gemini_thoughts_tokens": None,
+                "gemini_cached_content_tokens": None,
                 "gemini_model": os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash",
                 "total_pipeline_latency": (datetime.utcnow() - file_received_time).total_seconds(),
                 "status": "error",
@@ -2581,6 +2587,7 @@ async def upload_invoice(file: UploadFile = File(...)) -> InvoiceSummary:
             gemini_raw_text=ocr_result.gemini_raw_text,
             file_status=file_status,
         )
+        link_gemini_metrics_run(run_id=run_id, file_id=inserted_id)
     except Exception as e:
         record_pipeline_telemetry(
             {
@@ -2604,6 +2611,8 @@ async def upload_invoice(file: UploadFile = File(...)) -> InvoiceSummary:
                 "gemini_prompt_tokens": ocr_result.gemini_prompt_tokens,
                 "gemini_output_tokens": ocr_result.gemini_output_tokens,
                 "gemini_total_tokens": ocr_result.gemini_total_tokens,
+                "gemini_thoughts_tokens": ocr_result.gemini_thoughts_tokens,
+                "gemini_cached_content_tokens": ocr_result.gemini_cached_content_tokens,
                 "gemini_model": ocr_result.gemini_model,
                 "total_pipeline_latency": (datetime.utcnow() - file_received_time).total_seconds(),
                 "status": "error",
@@ -2654,6 +2663,8 @@ async def upload_invoice(file: UploadFile = File(...)) -> InvoiceSummary:
             "gemini_prompt_tokens": ocr_result.gemini_prompt_tokens,
             "gemini_output_tokens": ocr_result.gemini_output_tokens,
             "gemini_total_tokens": ocr_result.gemini_total_tokens,
+            "gemini_thoughts_tokens": ocr_result.gemini_thoughts_tokens,
+            "gemini_cached_content_tokens": ocr_result.gemini_cached_content_tokens,
             "gemini_model": ocr_result.gemini_model,
             "total_pipeline_latency": (db_insert_time - file_received_time).total_seconds(),
             "status": "success",
