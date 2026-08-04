@@ -732,19 +732,23 @@ def _process_job(
     except Exception as e:
         from license_validator import InvoiceQuotaExceeded
 
+        gemini_api_failure = is_gemini_api_error(e)
         if staging_path.is_file():
             try:
-                finalize_invoice_file(
-                    staging_path,
-                    file_status="error",
-                    status=0,
-                    pipeline_failed=True,
-                )
+                if gemini_api_failure:
+                    move_to_gemini_api_error(staging_path)
+                else:
+                    finalize_invoice_file(
+                        staging_path,
+                        file_status="error",
+                        status=0,
+                        pipeline_failed=True,
+                    )
             except Exception:
                 pass
         if isinstance(e, InvoiceQuotaExceeded):
             error_stage = "license"
-        elif is_gemini_api_error(e):
+        elif gemini_api_failure:
             error_stage = "gemini_quota"
         elif is_network_error(e):
             error_stage = "network"

@@ -543,16 +543,19 @@ def _gemini_recovery_worker(q: "queue.Queue[Path]") -> None:
                 return
 
             current_key = _reload_env_and_track_gemini_key()
-            if current_key == previous_key:
+            key_changed = current_key != previous_key
+            if key_changed:
+                previous_key = current_key
                 logger.info(
-                    "[Folder watcher → Gemini recovery] GEMINI_API_KEY unchanged — "
-                    "skipping retry this cycle.",
+                    "[Folder watcher → Gemini recovery] GEMINI_API_KEY changed — "
+                    "re-queuing quarantined files.",
                 )
-                if not list_gemini_api_error_files():
-                    break
-                continue
+            else:
+                logger.info(
+                    "[Folder watcher → Gemini recovery] Retrying quarantined files "
+                    "after transient Gemini API error (e.g. 503 overload).",
+                )
 
-            previous_key = current_key
             requeued = _requeue_gemini_api_error_files(q)
             if requeued <= 0:
                 break

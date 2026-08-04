@@ -21,11 +21,15 @@ class NetworkPipelineError(Exception):
 
 
 class GeminiApiPipelineError(Exception):
-    """Gemini API failure (quota, rate limit, invalid key, etc.)."""
+    """Gemini API failure (quota, rate limit, invalid key, 503 overload, etc.)."""
 
 
 _GEMINI_API_MARKERS = (
     "429",
+    "500",
+    "502",
+    "503",
+    "504",
     "quota",
     "rate limit",
     "rate-limit",
@@ -35,6 +39,35 @@ _GEMINI_API_MARKERS = (
     "permission denied",
     "resource exhausted",
     "billing",
+    "unavailable",
+    "high demand",
+    "servererror",
+    "service unavailable",
+    "deadline exceeded",
+    "google.genai",
+    "generativeai",
+)
+
+_GOOGLE_GEMINI_MODULE_PREFIXES = (
+    "google.genai",
+    "google.api_core",
+    "google.generativeai",
+)
+
+_GOOGLE_GEMINI_EXCEPTION_NAMES = frozenset(
+    {
+        "ResourceExhausted",
+        "PermissionDenied",
+        "InvalidArgument",
+        "FailedPrecondition",
+        "ServiceUnavailable",
+        "InternalServerError",
+        "TooManyRequests",
+        "DeadlineExceeded",
+        "ServerError",
+        "ClientError",
+        "APIError",
+    }
 )
 
 _NETWORK_MARKERS = (
@@ -67,22 +100,22 @@ def _exception_message(exc: BaseException) -> str:
     return " ".join(parts).lower()
 
 
+def _is_google_gemini_exception(exc: BaseException) -> bool:
+    module_name = type(exc).__module__ or ""
+    if any(module_name.startswith(prefix) for prefix in _GOOGLE_GEMINI_MODULE_PREFIXES):
+        return True
+    return type(exc).__name__ in _GOOGLE_GEMINI_EXCEPTION_NAMES
+
+
 def is_gemini_api_error(exc: BaseException) -> bool:
     if isinstance(exc, GeminiApiPipelineError):
         return True
 
-    message = _exception_message(exc)
-    if any(marker in message for marker in _GEMINI_API_MARKERS):
+    if _is_google_gemini_exception(exc):
         return True
 
-    module_name = type(exc).__module__ or ""
-    class_name = type(exc).__name__
-    if module_name.startswith("google.api_core") and class_name in {
-        "ResourceExhausted",
-        "PermissionDenied",
-        "InvalidArgument",
-        "FailedPrecondition",
-    }:
+    message = _exception_message(exc)
+    if any(marker in message for marker in _GEMINI_API_MARKERS):
         return True
 
     return False
