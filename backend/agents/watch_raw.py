@@ -269,18 +269,17 @@ def _store_invoice_result(
             "error_message": None,
         }
     )
+    # Same post-insert path as POST /upload: persist ERP match fields and enqueue Tally
+    # push when the invoice is system-processed (see backend/api.py _sync_hitl_and_status).
     try:
         coll = get_invoices_collection()
-        coll.update_one(
-            {"_id": ObjectId(inserted_id)},
-            {
-                "$set": {
-                    "gemini.json.additional_fields.HITL": hitl_value,
-                    "gemini.json.additional_fields.human_processed": False,
-                    "gemini.json.additional_fields.ever_hitl_true": False,
-                    "gemini.json.additional_fields.status": status_value,
-                }
-            },
+        from backend.api import _sync_hitl_and_status
+
+        hitl_value, status_value = _sync_hitl_and_status(
+            coll,
+            ObjectId(inserted_id),
+            gemini_json,
+            uploaded_file_path=str(final_path),
         )
     except Exception as e:
         logger.warning(
