@@ -1,5 +1,5 @@
 """
-Portable launcher: starts bundled MongoDB (optional), watcher, API, and opens the browser.
+Portable launcher: starts bundled MongoDB, PostgreSQL (PO_DB), watcher, API, and opens the browser.
 
 Built as: dist/IDP-Invoice/Start IDP Invoice.exe
 """
@@ -53,6 +53,23 @@ def ensure_layout(root: Path) -> None:
     if not tally_env.exists() and tally_example.exists():
         shutil.copy(tally_example, tally_env)
         print(f"Created {tally_env} from .env.example — set TALLY_COMPANY before pushing to Tally.")
+
+    po_db_dir = root / "po-db"
+    for name in (
+        "data",
+        "data/completed",
+        "data/ERROR",
+        "pgdata",
+        "logs",
+    ):
+        (po_db_dir / name).mkdir(parents=True, exist_ok=True)
+
+    po_db_config = po_db_dir / "config.ini"
+    po_db_example = po_db_dir / "config.example.ini"
+    if not po_db_config.exists() and po_db_example.exists():
+        shutil.copy(po_db_example, po_db_config)
+        print(f"Created {po_db_config} from config.example.ini.")
+    _sync_po_db_config(root)
 
 
 def _read_env_value(root: Path, key: str, default: str) -> str:
@@ -148,6 +165,223 @@ def _tally_enabled(root: Path) -> bool:
     }
 
 
+def _po_db_watcher_enabled(root: Path) -> bool:
+    return _read_env_value(root, "PO_DB_WATCHER_ENABLED", "true").strip().lower() in {
+        "true",
+        "1",
+        "yes",
+        "on",
+    }
+
+
+def _sync_po_db_config(root: Path) -> None:
+    """Keep po-db/config.ini [database] in sync with root .env POSTGRES_* values."""
+    po_db_dir = root / "po-db"
+    config_path = po_db_dir / "config.ini"
+    if not config_path.is_file():
+        return
+
+    mapping = {
+        "host": _read_env_value(root, "POSTGRES_HOST", "localhost"),
+        "port": _read_env_value(root, "POSTGRES_PORT", "5432"),
+        "dbname": _read_env_value(root, "POSTGRES_DB", "PO_DB"),
+        "user": _read_env_value(root, "POSTGRES_USER", "postgres"),
+        "password": _read_env_value(root, "POSTGRES_PASSWORD", ""),
+    }
+
+    lines = config_path.read_text(encoding="utf-8").splitlines()
+    in_database = False
+    updated_keys: set[str] = set()
+    out: list[str] = []
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            in_database = stripped.lower() == "[database]"
+            out.append(line)
+            continue
+        if in_database:
+            matched = False
+            for key, value in mapping.items():
+                prefix = f"{key} ="
+                if stripped.lower().startswith(prefix):
+                    out.append(f"{key} = {value}")
+                    updated_keys.add(key)
+                    matched = True
+                    break
+            if not matched:
+                out.append(line)
+            continue
+        out.append(line)
+
+    if updated_keys != set(mapping.keys()):
+        if out and out[-1].strip():
+            out.append("")
+        if not any(line.strip().lower() == "[database]" for line in out):
+            out.append("[database]")
+        for key, value in mapping.items():
+            if key not in updated_keys:
+                out.append(f"{key} = {value}")
+
+    config_path.write_text("\n".join(out) + "\n", encoding="utf-8")
+
+
+def _use_bundled_postgres(root: Path) -> tuple[bool, int]:
+    if os.environ.get("IDP_USE_BUNDLED_POSTGRES", "1").strip().lower() in {"0", "false", "no"}:
+        return False, 5432
+
+    host = _read_env_value(root, "POSTGRES_HOST", "localhost").strip().lower()
+    if host not in {"localhost", "127.0.0.1", ""}:
+        return False, int(_read_env_value(root, "POSTGRES_PORT", "5432"))
+
+    postgres = root / "po-db" / "pgsql" / "bin" / "postgres.exe"
+    if not postgres.is_file():
+        return False, int(_read_env_value(root, "POSTGRES_PORT", "5432"))
+
+    return True, int(_read_env_value(root, "POSTGRES_PORT", "5432"))
+
+
+def _pgsql_bin(root: Path) -> Path:
+    return root / "po-db" / "pgsql" / "bin"
+
+
+def _pgsql_env(root: Path) -> dict[str, str]:
+    env = os.environ.copy()
+    bin_dir = str(_pgsql_bin(root))
+    env["PATH"] = bin_dir + os.pathsep + env.get("PATH", "")
+    env["PGDATA"] = str(root / "po-db" / "pgdata")
+    return env
+
+
+def wait_for_postgres(port: int, timeout: float = 120.0) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if _port_open("127.0.0.1", port):
+            return True
+        time.sleep(1.0)
+    return False
+
+
+def ensure_postgres_initialized(root: Path, port: int) -> None:
+    po_db = root / "po-db"
+    pgdata = po_db / "pgdata"
+    initdb = _pgsql_bin(root) / "initdb.exe"
+    pg_version = pgdata / "PG_VERSION"
+
+    if pg_version.is_file():
+        return
+
+    if not initdb.is_file():
+        print(f"[WARN] initdb.exe not found at {initdb} — bundled PostgreSQL may be missing.")
+        return
+
+    print("Initializing bundled PostgreSQL data directory (first run) ...")
+    pgdata.mkdir(parents=True, exist_ok=True)
+    (po_db / "logs").mkdir(parents=True, exist_ok=True)
+    env = _pgsql_env(root)
+    subprocess.run(
+        [str(initdb), "-D", str(pgdata), "-U", "postgres", "-A", "trust", "-E", "UTF8"],
+        cwd=str(_pgsql_bin(root)),
+        env=env,
+        check=True,
+    )
+    conf_path = pgdata / "postgresql.conf"
+    with conf_path.open("a", encoding="utf-8") as fh:
+        fh.write(f"\nport = {port}\n")
+        fh.write("listen_addresses = '127.0.0.1'\n")
+
+
+def ensure_po_db_schema(root: Path) -> None:
+    po_db = root / "po-db"
+    psql = _pgsql_bin(root) / "psql.exe"
+    sql_file = po_db / "sql" / "create_po_database.sql"
+    env = _pgsql_env(root)
+
+    if not psql.is_file() or not sql_file.is_file():
+        return
+
+    check_db = subprocess.run(
+        [str(psql), "-U", "postgres", "-tc", "SELECT 1 FROM pg_database WHERE datname = 'PO_DB'"],
+        cwd=str(_pgsql_bin(root)),
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    if "1" not in (check_db.stdout or ""):
+        print('Creating database "PO_DB" ...')
+        subprocess.run(
+            [str(psql), "-U", "postgres", "-c", 'CREATE DATABASE "PO_DB";'],
+            cwd=str(_pgsql_bin(root)),
+            env=env,
+            check=True,
+        )
+
+    check_table = subprocess.run(
+        [
+            str(psql),
+            "-U",
+            "postgres",
+            "-d",
+            "PO_DB",
+            "-tc",
+            "SELECT 1 FROM information_schema.tables WHERE table_name = 'vendor_master'",
+        ],
+        cwd=str(_pgsql_bin(root)),
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    if "1" in (check_table.stdout or ""):
+        return
+
+    print("Applying PO_DB schema (create_po_database.sql) ...")
+    subprocess.run(
+        [str(psql), "-U", "postgres", "-d", "PO_DB", "-f", str(sql_file)],
+        cwd=str(_pgsql_bin(root)),
+        env=env,
+        check=True,
+    )
+
+
+def start_bundled_postgres(root: Path, port: int) -> subprocess.Popen | None:
+    po_db = root / "po-db"
+    pg_ctl = _pgsql_bin(root) / "pg_ctl.exe"
+    pgdata = po_db / "pgdata"
+    logpath = po_db / "logs" / "postgres.log"
+
+    if _port_open("127.0.0.1", port):
+        print(f"PostgreSQL already listening on port {port} — using existing instance.")
+        return None
+
+    if not pg_ctl.is_file():
+        print(f"[WARN] pg_ctl.exe not found — bundled PostgreSQL skipped.")
+        return None
+
+    ensure_postgres_initialized(root, port)
+    pgdata.mkdir(parents=True, exist_ok=True)
+    (po_db / "logs").mkdir(parents=True, exist_ok=True)
+    env = _pgsql_env(root)
+
+    print(f"Starting bundled PostgreSQL on port {port} ...")
+    subprocess.run(
+        [str(pg_ctl), "start", "-D", str(pgdata), "-l", str(logpath), "-w"],
+        cwd=str(_pgsql_bin(root)),
+        env=env,
+        check=True,
+    )
+
+    if wait_for_postgres(port):
+        print("PostgreSQL is ready.")
+        try:
+            ensure_po_db_schema(root)
+        except subprocess.CalledProcessError as exc:
+            print(f"[WARN] PO_DB schema setup failed: {exc}")
+        return None
+
+    print("[WARN] Bundled PostgreSQL did not become ready in time. Check po-db/logs/postgres.log")
+    return None
+
+
 def _popen_cmd(cmd: list[str], cwd: Path) -> subprocess.Popen:
     creationflags = 0
     if sys.platform == "win32":
@@ -208,6 +442,9 @@ def main() -> None:
     api_exe = root / "idp-api" / "idp-api.exe"
     watcher_exe = root / "idp-watcher" / "idp-watcher.exe"
     tally_bridge_exe = root / "tally-bridge" / "tally-bridge.exe"
+    po_watcher_exe = root / "po-db" / "po-watcher.exe"
+    po_loader_exe = root / "po-db" / "po-loader.exe"
+    po_db_dir = root / "po-db"
 
     if not api_exe.is_file():
         print(f"[ERROR] API executable not found: {api_exe}")
@@ -224,6 +461,39 @@ def main() -> None:
                 processes.append(mongo_proc)
         else:
             print("Using external MongoDB from MONGO_URI (bundled MongoDB skipped).")
+
+        use_bundled_pg, postgres_port = _use_bundled_postgres(root)
+        if use_bundled_pg:
+            try:
+                start_bundled_postgres(root, postgres_port)
+            except subprocess.CalledProcessError:
+                print("[WARN] Bundled PostgreSQL failed to start. Check po-db/logs/postgres.log")
+        elif _read_env_value(root, "POSTGRES_HOST", "localhost").strip():
+            print("Using external PostgreSQL from POSTGRES_* (bundled PostgreSQL skipped).")
+        else:
+            print("PO_DB / PostgreSQL not configured — ERP matching disabled.")
+
+        if _po_db_watcher_enabled(root):
+            if po_watcher_exe.is_file() and po_loader_exe.is_file():
+                print(f"Starting PO_DB CSV watcher: {po_watcher_exe}")
+                processes.append(
+                    _popen_cmd(
+                        [
+                            str(po_watcher_exe),
+                            "--data-dir",
+                            str(po_db_dir / "data"),
+                            "--loader",
+                            str(po_loader_exe),
+                            "--config",
+                            str(po_db_dir / "config.ini"),
+                        ],
+                        po_db_dir,
+                    )
+                )
+            elif po_watcher_exe.is_file():
+                print(f"[WARN] po-loader.exe not found (skipping PO watcher): {po_loader_exe}")
+        else:
+            print("PO_DB CSV watcher disabled (PO_DB_WATCHER_ENABLED=false).")
 
         if watcher_exe.is_file():
             print(f"Starting watcher: {watcher_exe}")

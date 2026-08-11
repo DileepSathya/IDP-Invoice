@@ -9,6 +9,8 @@ Portable layout (frozen):
     idp-api/idp-api.exe
     idp-watcher/idp-watcher.exe
     tally-bridge/tally-bridge.exe
+    po-db/po-loader.exe
+    po-db/po-watcher.exe
     invoices_data/to_be_processed/
     invoices_data/_api_staging/
     invoices_data/HITL_pending/
@@ -24,7 +26,7 @@ import os
 import sys
 from pathlib import Path
 
-_FROZEN_SUBDIRS = frozenset({"idp-api", "idp-watcher", "tally-bridge"})
+_FROZEN_SUBDIRS = frozenset({"idp-api", "idp-watcher", "tally-bridge", "po-db"})
 
 
 def is_frozen() -> bool:

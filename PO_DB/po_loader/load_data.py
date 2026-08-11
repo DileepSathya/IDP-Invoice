@@ -381,10 +381,16 @@ def write_error_note(data_dir: str, paths: List[str], error_message: str) -> str
     return note_path
 
 
+def _default_config_path() -> str:
+    if getattr(sys, "frozen", False):
+        return os.path.join(os.path.dirname(os.path.abspath(sys.executable)), "config.ini")
+    return "config.ini"
+
+
 def main():
     parser = argparse.ArgumentParser(description="Load/upsert PO_DB CSV files.")
     parser.add_argument("--data-dir", required=True, help="Folder containing the CSV files")
-    parser.add_argument("--config", default="config.ini", help="Path to DB config file")
+    parser.add_argument("--config", default=_default_config_path(), help="Path to DB config file")
     parser.add_argument("--dry-run", action="store_true", help="Validate and preview only, no DB writes")
     args = parser.parse_args()
 

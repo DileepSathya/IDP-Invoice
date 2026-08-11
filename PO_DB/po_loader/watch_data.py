@@ -60,11 +60,24 @@ logging.basicConfig(
 log = logging.getLogger("watcher")
 
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _po_db_root() -> str:
+    """Portable po-db/ folder when frozen; PO_DB/ when running from source."""
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.normpath(os.path.join(THIS_DIR, ".."))
+
+
 # "prior location with respect to the current file" -> one directory up,
 # then into data/. Adjust DEFAULT_DATA_DIR here if the layout changes.
-DEFAULT_DATA_DIR = os.path.normpath(os.path.join(THIS_DIR, "..", "data"))
-DEFAULT_LOADER = os.path.join(THIS_DIR, "load_data.py")
-DEFAULT_CONFIG = os.path.join(THIS_DIR, "config.ini")
+DEFAULT_DATA_DIR = os.path.join(_po_db_root(), "data")
+DEFAULT_LOADER = (
+    os.path.join(_po_db_root(), "po-loader.exe")
+    if getattr(sys, "frozen", False)
+    else os.path.join(THIS_DIR, "load_data.py")
+)
+DEFAULT_CONFIG = os.path.join(_po_db_root(), "config.ini")
 DEFAULT_INTERVAL_SECONDS = 5 * 60  # 5 minutes
 
 # Sub-folder names created inside --data-dir by default (can be overridden
@@ -170,7 +183,10 @@ def get_interval_seconds(config_path: str, cli_value: Optional[int]) -> int:
 
 
 def run_loader(loader_path: str, data_dir: str, config_path: str, dry_run: bool) -> bool:
-    cmd = [sys.executable, loader_path, "--data-dir", data_dir, "--config", config_path]
+    if loader_path.lower().endswith(".exe"):
+        cmd = [loader_path, "--data-dir", data_dir, "--config", config_path]
+    else:
+        cmd = [sys.executable, loader_path, "--data-dir", data_dir, "--config", config_path]
     if dry_run:
         cmd.append("--dry-run")
 

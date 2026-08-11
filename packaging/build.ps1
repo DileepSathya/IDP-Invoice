@@ -3,7 +3,10 @@ param(
     [switch]$SkipFrontend,
     [switch]$SkipPyInstaller,
     [switch]$SkipMongoDB,
-    [string]$MongoVersion = "7.0.14"
+    [switch]$SkipPoDB,
+    [switch]$SkipPostgreSQL,
+    [string]$MongoVersion = "7.0.14",
+    [string]$PostgresVersion = "16.14"
 )
 
 $ErrorActionPreference = "Stop"
@@ -28,7 +31,7 @@ $Py = Resolve-Python
 Write-Host "Using Python: $Py"
 
 if (-not $SkipFrontend) {
-    Write-Host "`n[1/5] Building frontend..."
+    Write-Host "`n[1/6] Building frontend..."
     Push-Location (Join-Path $Root "frontend")
     if (-not (Test-Path "node_modules")) {
         npm install
@@ -39,11 +42,11 @@ if (-not $SkipFrontend) {
     }
     Pop-Location
 } else {
-    Write-Host "`n[1/5] Skipping frontend build."
+    Write-Host "`n[1/6] Skipping frontend build."
 }
 
 if (-not $SkipPyInstaller) {
-    Write-Host "`n[2/5] Installing PyInstaller..."
+    Write-Host "`n[2/6] Installing PyInstaller..."
     & $Py -m pip install --upgrade pyinstaller
 
     $tallyBridgeSrc = Join-Path $Root "TALLY INTEGRATION\api_server.py"
@@ -51,7 +54,7 @@ if (-not $SkipPyInstaller) {
         throw "TALLY INTEGRATION source not found ($tallyBridgeSrc). Clone or restore the Tally bridge folder before building."
     }
 
-    Write-Host "`n[3/5] Running PyInstaller (API, watcher, launcher, tally-bridge)..."
+    Write-Host "`n[3/6] Running PyInstaller (API, watcher, launcher, tally-bridge)..."
     New-Item -ItemType Directory -Force -Path $DistRoot, $BuildWork | Out-Null
 
     $commonArgs = @(
@@ -72,11 +75,11 @@ if (-not $SkipPyInstaller) {
     & $Py -m PyInstaller @commonArgs (Join-Path $Root "packaging\idp_launcher.spec")
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed for idp_launcher.spec" }
 } else {
-    Write-Host "`n[2/5] Skipping PyInstaller."
-    Write-Host "`n[3/5] Skipping PyInstaller."
+    Write-Host "`n[2/6] Skipping PyInstaller."
+    Write-Host "`n[3/6] Skipping PyInstaller."
 }
 
-Write-Host "`n[4/5] Assembling portable folder..."
+Write-Host "`n[4/6] Assembling portable folder..."
 New-Item -ItemType Directory -Force -Path $DistRoot | Out-Null
 
 $frontendOut = Join-Path $DistRoot "frontend"
@@ -136,10 +139,23 @@ if (Test-Path $tallyEnvExampleSrc) {
 }
 
 if (-not $SkipMongoDB) {
-    Write-Host "`n[5/5] Bundling MongoDB $MongoVersion ..."
+    Write-Host "`n[5/6] Bundling MongoDB $MongoVersion ..."
     & (Join-Path $Root "packaging\bundle_mongodb.ps1") -DistRoot $DistRoot -MongoVersion $MongoVersion
 } else {
-    Write-Host "`n[5/5] Skipping MongoDB bundle."
+    Write-Host "`n[5/6] Skipping MongoDB bundle."
+}
+
+if (-not $SkipPoDB) {
+    Write-Host "`n[6/6] Bundling PO_DB (PostgreSQL + loader/watcher) ..."
+    $poDbArgs = @{
+        DistRoot         = $DistRoot
+        PostgresVersion  = $PostgresVersion
+    }
+    if ($SkipPyInstaller) { $poDbArgs.SkipPyInstaller = $true }
+    if ($SkipPostgreSQL) { $poDbArgs.SkipPostgreSQL = $true }
+    & (Join-Path $Root "packaging\bundle_po_db.ps1") @poDbArgs
+} else {
+    Write-Host "`n[6/6] Skipping PO_DB bundle."
 }
 
 Write-Host "`nCopying OCR runtime packages/metadata into frozen bundles ..."
@@ -156,7 +172,9 @@ Write-Host "  $DistRoot"
 Write-Host "  Run: $(Join-Path $DistRoot 'Start IDP Invoice.exe')"
 Write-Host "`nBefore first use:"
 Write-Host "  1. Edit dist\IDP-Invoice\.env and set GEMINI_API_KEY."
-Write-Host "  2. (Optional) Fill in POSTGRES_HOST/POSTGRES_USER/POSTGRES_PASSWORD in .env to enable ERP matching - they ship blank on purpose."
-Write-Host "  3. Place license.lic next to Start IDP Invoice.exe (see licensing\README.md)."
-Write-Host "  4. (Optional) Set TALLY_ENABLED=true in .env and configure tally-bridge\.env (TALLY_URL, TALLY_COMPANY)."
+Write-Host "  2. Keep POSTGRES_HOST=localhost to use bundled PostgreSQL in po-db\ (auto-started by launcher)."
+Write-Host "  3. Drop ERP CSVs into po-db\data\ (watcher starts automatically unless PO_DB_WATCHER_ENABLED=false)."
+Write-Host "  4. Place license.lic next to Start IDP Invoice.exe (see licensing\README.md)."
+Write-Host "  5. (Optional) Set TALLY_ENABLED=true in .env and configure tally-bridge\.env (TALLY_URL, TALLY_COMPANY)."
 Write-Host "Bundled MongoDB starts automatically when MONGO_URI points to localhost."
+Write-Host "Bundled PostgreSQL starts automatically when POSTGRES_HOST=localhost and po-db\pgsql exists."
