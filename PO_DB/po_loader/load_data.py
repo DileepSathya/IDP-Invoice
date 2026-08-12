@@ -387,41 +387,33 @@ def _default_config_path() -> str:
     return "config.ini"
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Load/upsert PO_DB CSV files.")
-    parser.add_argument("--data-dir", required=True, help="Folder containing the CSV files")
-    parser.add_argument("--config", default=_default_config_path(), help="Path to DB config file")
-    parser.add_argument("--dry-run", action="store_true", help="Validate and preview only, no DB writes")
-    args = parser.parse_args()
-
-    db_conf = read_db_config(args.config)
+def run_load(data_dir: str, config_path: str, dry_run: bool = False) -> int:
+    """Load/upsert CSV files. Returns 0 on success, 1 on failure."""
+    db_conf = read_db_config(config_path)
 
     conn = None
-    if not args.dry_run:
+    if not dry_run:
         try:
             conn = psycopg2.connect(**db_conf)
         except psycopg2.OperationalError as e:
             log.error("Could not connect to database: %s", e)
-            sys.exit(1)
+            return 1
 
     total = 0
-    # Every source file that exists and is part of this run - tracked only
-    # so a failure's error.txt can list exactly which files were involved.
-    # This script never deletes or moves them; see module docstring.
     run_paths: List[str] = []
 
     try:
-        log.info("Starting load from: %s", args.data_dir)
+        log.info("Starting load from: %s", data_dir)
         for spec in TABLE_SPECS:
-            path = os.path.join(args.data_dir, spec.csv_file)
+            path = os.path.join(data_dir, spec.csv_file)
             if not os.path.exists(path):
                 log.warning("  %-15s -> file not found (%s), skipped", spec.table, spec.csv_file)
                 continue
 
             run_paths.append(path)
             columns, rows = load_csv_rows(spec, path)
-            ensure_fk_stubs(conn, spec, columns, rows, args.dry_run)
-            total += upsert(conn, spec, columns, rows, args.dry_run)
+            ensure_fk_stubs(conn, spec, columns, rows, dry_run)
+            total += upsert(conn, spec, columns, rows, dry_run)
 
         if conn:
             conn.commit()
@@ -429,29 +421,32 @@ def main():
         log.info(
             "Done. %d row(s) processed. %s",
             total,
-            "(dry run - nothing written)" if args.dry_run else "Committed.",
+            "(dry run - nothing written)" if dry_run else "Committed.",
         )
-        # Source CSVs are intentionally left in data_dir here. The watcher
-        # (watch_data_folder.py) sees this process exit 0 and moves them
-        # into the "completed" folder itself.
+        return 0
 
     except Exception as e:
         if conn:
             conn.rollback()
         log.error("Load failed, DB transaction rolled back. Reason: %s", e)
 
-        if not args.dry_run and run_paths:
-            write_error_note(args.data_dir, run_paths, traceback.format_exc())
-        elif args.dry_run:
-            log.info("Dry run: no error note written.")
-        # Source CSVs are intentionally left in data_dir here too. The
-        # watcher sees this process exit non-zero and moves them into the
-        # "ERROR" folder itself.
+        if not dry_run and run_paths:
+            write_error_note(data_dir, run_paths, traceback.format_exc())
 
-        sys.exit(1)
+        return 1
     finally:
         if conn:
             conn.close()
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Load/upsert PO_DB CSV files.")
+    parser.add_argument("--data-dir", required=True, help="Folder containing the CSV files")
+    parser.add_argument("--config", default=_default_config_path(), help="Path to DB config file")
+    parser.add_argument("--dry-run", action="store_true", help="Validate and preview only, no DB writes")
+    args = parser.parse_args()
+
+    raise SystemExit(run_load(args.data_dir, args.config, args.dry_run))
 
 
 if __name__ == "__main__":

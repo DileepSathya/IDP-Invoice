@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec for PO_DB CSV folder watcher (onefile -> po-db/po-watcher.exe)."""
+"""PyInstaller spec for unified PO_DB service (onefile -> po-db/po-db.exe)."""
 
 from pathlib import Path
 
@@ -9,11 +9,16 @@ LOADER_DIR = ROOT / "PO_DB" / "po_loader"
 block_cipher = None
 
 a = Analysis(
-    [str(LOADER_DIR / "watch_data.py")],
+    [str(LOADER_DIR / "po_db_service.py")],
     pathex=[str(ROOT), str(LOADER_DIR)],
     binaries=[],
     datas=[],
     hiddenimports=[
+        "po_db_runtime",
+        "watch_data",
+        "load_data",
+        "psycopg2",
+        "psycopg2._psycopg",
         "configparser",
     ],
     hookspath=[],
@@ -34,7 +39,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="po-watcher",
+    name="po-db",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

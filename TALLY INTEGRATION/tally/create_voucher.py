@@ -24,6 +24,8 @@ IGST_ledger = "IGST"
 # failing. Above this we refuse to push so the invoice goes back for review.
 ROUND_OFF_TOLERANCE = float(os.environ.get("TALLY_ROUND_OFF_TOLERANCE", "1.00"))
 
+TALLY_VOUCHER_CLASS = os.environ.get("TALLY_VOUCHER_CLASS", "Automated Purchase")
+
 # Debits and credits must agree to the paisa, or Tally files the voucher as an
 # import exception ("Mismatch in total amount between Credit and Debit entries").
 BALANCE_EPSILON = 0.01
@@ -102,10 +104,15 @@ def _voucher_imbalance(root):
     """Sum the signed amounts of every entry that actually posts to a ledger and
     return the residual - 0.00 on a well-formed voucher.
 
-    Only two element types hit the books: the ACCOUNTINGALLOCATIONS inside each
-    inventory line, and the voucher-level LEDGERENTRIES. ALLINVENTORYENTRIES,
-    BATCHALLOCATIONS and BILLALLOCATIONS amounts are stock and bill-reference
-    sub-allocations of those - counting them would double up.
+    When a Voucher Class is deployed (<CLASSNAME> present), Tally applies the
+    purchase ledger allocation from the class configuration, so inventory lines
+    carry their debit only on the direct <AMOUNT> under ALLINVENTORYENTRIES.LIST.
+    Without <CLASSNAME>, fall back to the nested ACCOUNTINGALLOCATIONS.LIST
+    amounts as before.
+
+    Voucher-level LEDGERENTRIES always post. BATCHALLOCATIONS and BILLALLOCATIONS
+    amounts are stock and bill-reference sub-allocations - counting them would
+    double up.
 
     Returns None if the payload has no <VOUCHER> element to inspect.
     """
@@ -114,6 +121,7 @@ def _voucher_imbalance(root):
         return None
 
     amounts = []
+    uses_voucher_class = any(child.tag == "CLASSNAME" for child in voucher)
 
     def _collect_direct_amounts(element):
         for leaf in element:  # direct children only - never nested allocations
@@ -127,9 +135,12 @@ def _voucher_imbalance(root):
         if child.tag == "LEDGERENTRIES.LIST":
             _collect_direct_amounts(child)
         elif child.tag == "ALLINVENTORYENTRIES.LIST":
-            for sub in child:
-                if sub.tag == "ACCOUNTINGALLOCATIONS.LIST":
-                    _collect_direct_amounts(sub)
+            if uses_voucher_class:
+                _collect_direct_amounts(child)
+            else:
+                for sub in child:
+                    if sub.tag == "ACCOUNTINGALLOCATIONS.LIST":
+                        _collect_direct_amounts(sub)
 
     return round(sum(amounts), 2)
 
@@ -154,7 +165,6 @@ def ledger_entries_xml(data):
     """
     json_data = data['gemini']['json']
     line_items = json_data['line_items']
-    purchase_ledger = json_data.get('purchase_ledger', 'Purchase A/c')
 
     additional_fields = json_data.get("additional_fields", {})
 
@@ -222,13 +232,7 @@ def ledger_entries_xml(data):
                                 <AMOUNT>{line_amount}</AMOUNT>
                             </BATCHALLOCATIONS.LIST>"""
 
-        # Close inventory tags adding financial branch accounts line structures
-        item_xml += f"""
-                            <ACCOUNTINGALLOCATIONS.LIST>
-                                <LEDGERNAME>{_safe(purchase_ledger)}</LEDGERNAME>
-                                <ISDEEMEDPOSITIVE>{is_deemed}</ISDEEMEDPOSITIVE>
-                                <AMOUNT>{line_amount}</AMOUNT>
-                            </ACCOUNTINGALLOCATIONS.LIST>
+        item_xml += """
                         </ALLINVENTORYENTRIES.LIST>"""
 
         inventory_entries_xml += item_xml
@@ -392,6 +396,7 @@ def send_template_to_tally(TALLY_URL, path, company_name, data, invoice_number, 
             COMPANY_NAME=_safe(company_name),
             INVOICE_NUMBER=_safe(invoice_number),
             VOUCHER_TYPE=_safe(voucher_type),
+            VOUCHER_CLASS=_safe(TALLY_VOUCHER_CLASS),
             VOUCHER_DATE=convert_date_yyyymmdd("2025-07-01"), #invoice_date
             PARTY_LEDGER=_safe(vendor_name),
             TOTAL_AMOUNT=total_amount,

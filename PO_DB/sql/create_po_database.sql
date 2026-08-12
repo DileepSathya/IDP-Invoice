@@ -25,10 +25,10 @@ BEGIN;
 -- ------------------------------------------------------------
 DROP TABLE IF EXISTS vendor_master CASCADE;
 CREATE TABLE vendor_master (
-    vendor_id           VARCHAR(50)  NOT NULL,
+    vendor_id           VARCHAR(500)  NOT NULL,
     vendor_name         VARCHAR(100) NOT NULL,
-    gst_tax_number      VARCHAR(25),
-    tin_number          VARCHAR(25),
+    gst_tax_number      VARCHAR(100),
+    tin_number          VARCHAR(100),
     vendor_address_1    VARCHAR(255),
     vendor_address_2    VARCHAR(255),
     vendor_address_3    VARCHAR(255),
@@ -48,10 +48,10 @@ CREATE TABLE vendor_master (
 -- ------------------------------------------------------------
 DROP TABLE IF EXISTS item_master CASCADE;
 CREATE TABLE item_master (
-    item_id      VARCHAR(25) NOT NULL,
+    item_id      VARCHAR(500) NOT NULL,
     item_name    TEXT,
     description  TEXT,
-    category     VARCHAR(50),
+    category     VARCHAR(500),
     units        VARCHAR(10),
     rate         FLOAT,
     CONSTRAINT pk_item_master PRIMARY KEY (item_id)
@@ -62,11 +62,11 @@ CREATE TABLE item_master (
 -- ------------------------------------------------------------
 DROP TABLE IF EXISTS po_header CASCADE;
 CREATE TABLE po_header (
-    po_id         VARCHAR(25) NOT NULL,
-    business_unit VARCHAR(25) NOT NULL,
-    vendor_id     VARCHAR(50),
-    po_status     VARCHAR(15),
-    po_type       VARCHAR(20),
+    po_id         VARCHAR(500) NOT NULL,
+    business_unit VARCHAR(500) NOT NULL,
+    vendor_id     VARCHAR(500),
+    po_status     VARCHAR(100),
+    po_type       VARCHAR(100),
     po_date       TIMESTAMP,
     CONSTRAINT pk_po_header PRIMARY KEY (po_id, business_unit),
     CONSTRAINT fk_po_header_vendor
@@ -79,9 +79,9 @@ CREATE TABLE po_header (
 -- ------------------------------------------------------------
 DROP TABLE IF EXISTS po_details CASCADE;
 CREATE TABLE po_details (
-    po_id         VARCHAR(25) NOT NULL,
-    business_unit VARCHAR(25) NOT NULL,
-    item_id       VARCHAR(25) NOT NULL,
+    po_id         VARCHAR(500) NOT NULL,
+    business_unit VARCHAR(500) NOT NULL,
+    item_id       VARCHAR(500) NOT NULL,
     line_number   INT,
     rate          FLOAT,
     qty           FLOAT,

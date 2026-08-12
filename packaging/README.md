@@ -20,7 +20,7 @@ Options:
 - `-SkipPyInstaller` — only assemble `dist/IDP-Invoice` (frontend + MongoDB + PO_DB assets; skips frozen exes)
 - `-SkipMongoDB` — skip downloading/copying bundled MongoDB
 - `-SkipPoDB` — skip the entire `po-db/` bundle
-- `-SkipPostgreSQL` — bundle PO_DB loader/watcher only (no PostgreSQL binaries)
+- `-SkipPostgreSQL` — bundle PO_DB service only (no PostgreSQL binaries)
 - `-MongoVersion 7.0.14` — pin MongoDB Community version
 - `-PostgresVersion 16.14` — pin PostgreSQL binary version
 
@@ -36,7 +36,7 @@ Bundle MongoDB into an existing dist without rebuilding exes:
 .\packaging\bundle_mongodb.ps1
 ```
 
-Bundle PO_DB (PostgreSQL + loader/watcher) into an existing dist:
+Bundle PO_DB (PostgreSQL + po-db.exe) into an existing dist:
 
 ```powershell
 .\packaging\bundle_po_db.ps1
@@ -49,22 +49,20 @@ dist/IDP-Invoice/
   Start IDP Invoice.exe    ← launcher (MongoDB + PostgreSQL + watchers + API + browser)
   mongodb/bin/mongod.exe   ← bundled MongoDB server
   data/db/                 ← MongoDB data files (created on first run)
-  po-db/                   ← bundled ERP reference database (PostgreSQL + CSV tools)
+  po-db/                   ← bundled ERP reference database (PostgreSQL + CSV service)
+    po-db.exe              ← setup Postgres/schema + CSV watcher (single executable)
+    start-po-db.bat        ← optional wrapper for po-db.exe
     pgsql/                 ← PostgreSQL server (bin, lib, share)
     pgdata/                ← PostgreSQL cluster data (created on first run)
-    data/                  ← CSV drop folder for po-watcher.exe
+    data/                  ← CSV drop folder
     sql/create_po_database.sql
     templates/             ← sample CSV templates
-    config.ini             ← loader/watcher DB credentials
-    po-loader.exe          ← one-shot CSV loader
-    po-watcher.exe         ← polls data/ and runs po-loader.exe
-    init-po-db.bat         ← manual first-run DB init (launcher auto-inits too)
-    run-watcher.bat        ← start CSV watcher manually
+    config.ini             ← DB credentials (synced from root .env on startup)
   idp-api/idp-api.exe
   idp-watcher/idp-watcher.exe
   tally-bridge/tally-bridge.exe   ← Tally voucher bridge (port 8001)
   tally-bridge/xml_scripts/       ← voucher XML template
-  tally-bridge/.env.example       ← TallyPrime URL + company name
+  tally-bridge/.env.example       ← TallyPrime URL, company name, voucher class
   frontend/                ← built React UI
   .env.example
   invoices_data/
@@ -81,16 +79,18 @@ dist/IDP-Invoice/
 1. Copy `.env.example` → `.env`
 2. Set `GEMINI_API_KEY`
 3. Keep `MONGO_URI=mongodb://localhost:27017` to use bundled MongoDB
-4. Keep `POSTGRES_HOST=localhost` to use bundled PostgreSQL in `po-db\` (default).
-   On first launch the launcher initializes Postgres, creates the `PO_DB` database,
-   and applies the schema automatically.
+4. Keep `POSTGRES_HOST=localhost` for bundled PO_DB (default), or set
+   `IDP_USE_BUNDLED_POSTGRES=0` and configure `POSTGRES_*` for an external server.
+   `po-db.exe` creates the `PO_DB` database and tables when missing, then watches
+   `po-db\data\` for CSV files (`PO_DB_WATCHER_ENABLED=true` by default).
 5. Drop ERP CSV files (`vendor_master.csv`, `item_master.csv`, `po_header.csv`,
-   `po_details.csv`) into `po-db\data\`. The launcher starts `po-watcher.exe` by
-   default (`PO_DB_WATCHER_ENABLED=true`).
+   `po_details.csv`) into `po-db\data\` before or after starting the app.
 6. (Optional) To push matched invoices to TallyPrime, set `TALLY_ENABLED=true` in `.env`
    and edit `tally-bridge\.env`:
    - `TALLY_URL=http://localhost:9000` (TallyPrime HTTP port)
    - `TALLY_COMPANY=` exact company name open in TallyPrime
+   - `TALLY_VOUCHER_CLASS=Automated Purchase` — must match the Voucher Class
+     name configured in TallyPrime for the Purchase voucher type
    - Use the same `MONGO_URI` / `MONGO_DB` as the main app
 7. Double-click **Start IDP Invoice.exe**
 8. Browser opens at `http://localhost:8000`
@@ -105,17 +105,14 @@ The launcher starts bundled MongoDB automatically when:
 - `IDP_USE_BUNDLED_MONGO` is not disabled
 - `mongodb/bin/mongod.exe` exists in the portable folder
 
-The launcher starts bundled PostgreSQL automatically when:
-
-- `POSTGRES_HOST` is `localhost` or `127.0.0.1`
-- `IDP_USE_BUNDLED_POSTGRES` is not disabled
-- `po-db/pgsql/bin/postgres.exe` exists in the portable folder
-
-If either database is already running on the configured port, the launcher reuses it.
+The launcher starts `po-db.exe` when `PO_DB_WATCHER_ENABLED=true` and `POSTGRES_HOST` is set.
+`po-db.exe` handles bundled or external PostgreSQL, creates `PO_DB`/tables if missing, and
+starts the CSV watcher. If bundled port 5432 is busy, bundled Postgres automatically uses 15432+.
 
 For **MongoDB Atlas**, set `MONGO_URI` to your cloud connection string and `IDP_USE_BUNDLED_MONGO=0`.
 
 For an **external PostgreSQL** server, set `POSTGRES_HOST` to that host and `IDP_USE_BUNDLED_POSTGRES=0`.
+`po-db.exe` still creates the `PO_DB` database and tables on that server when missing.
 
 To disable the CSV watcher while keeping ERP matching, set `PO_DB_WATCHER_ENABLED=false`.
 
@@ -133,11 +130,11 @@ Tally bridge (separate terminal, when `TALLY_ENABLED=true`):
 venv\Scripts\python.exe -m backend.run_tally_bridge
 ```
 
-PO_DB loader/watcher (development, from repo):
+PO_DB service (development, from repo):
 
 ```powershell
-cd PO_DB
-PO_DB\run.bat
+cd PO_DB\po_loader
+..\..\venv\Scripts\python.exe po_db_service.py
 ```
 
 Or use `run_production.bat` option 5 — it starts the bridge automatically when `TALLY_ENABLED=true` in `.env`.

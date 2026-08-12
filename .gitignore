@@ -12,6 +12,7 @@ invoices_data/
 dist/
 build/
 packaging/mongodb-cache/
+packaging/postgresql-cache/
 keygen/private_key.pem
 license.lic
 *.lic

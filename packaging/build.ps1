@@ -126,6 +126,14 @@ $tallyXmlDst = Join-Path $tallyBridgeRoot "xml_scripts"
 if (Test-Path $tallyXmlSrc) {
     if (Test-Path $tallyXmlDst) { Remove-Item -Recurse -Force $tallyXmlDst }
     Copy-Item -Recurse $tallyXmlSrc $tallyXmlDst
+    $voucherXml = Join-Path $tallyXmlDst "create_voucher.xml"
+    if (-not (Test-Path $voucherXml)) {
+        throw "Tally voucher template missing after copy: $voucherXml"
+    }
+    $voucherContent = Get-Content $voucherXml -Raw
+    if ($voucherContent -notmatch '<CLASSNAME>\{VOUCHER_CLASS\}</CLASSNAME>') {
+        throw "create_voucher.xml is missing Voucher Class support (<CLASSNAME>{VOUCHER_CLASS}</CLASSNAME>)."
+    }
 }
 $tallyEnvExampleSrc = Join-Path $Root "TALLY INTEGRATION\.env.example"
 $tallyEnvExampleDst = Join-Path $tallyBridgeRoot ".env.example"
@@ -134,7 +142,7 @@ if (Test-Path $tallyEnvExampleSrc) {
     Copy-Item -Force $tallyEnvExampleSrc $tallyEnvExampleDst
     if (-not (Test-Path $tallyEnvDst)) {
         Copy-Item -Force $tallyEnvExampleDst $tallyEnvDst
-        Write-Host "Created tally-bridge\.env from .env.example (set TALLY_COMPANY and TALLY_URL)."
+        Write-Host "Created tally-bridge\.env from .env.example (set TALLY_COMPANY, TALLY_URL, and TALLY_VOUCHER_CLASS)."
     }
 }
 
@@ -172,9 +180,9 @@ Write-Host "  $DistRoot"
 Write-Host "  Run: $(Join-Path $DistRoot 'Start IDP Invoice.exe')"
 Write-Host "`nBefore first use:"
 Write-Host "  1. Edit dist\IDP-Invoice\.env and set GEMINI_API_KEY."
-Write-Host "  2. Keep POSTGRES_HOST=localhost to use bundled PostgreSQL in po-db\ (auto-started by launcher)."
-Write-Host "  3. Drop ERP CSVs into po-db\data\ (watcher starts automatically unless PO_DB_WATCHER_ENABLED=false)."
+Write-Host "  2. Keep POSTGRES_HOST=localhost for bundled PO_DB (po-db.exe auto-creates DB/tables and watches po-db\data\)."
+Write-Host "  3. Or set IDP_USE_BUNDLED_POSTGRES=0 and POSTGRES_* to use an external PostgreSQL server."
 Write-Host "  4. Place license.lic next to Start IDP Invoice.exe (see licensing\README.md)."
-Write-Host "  5. (Optional) Set TALLY_ENABLED=true in .env and configure tally-bridge\.env (TALLY_URL, TALLY_COMPANY)."
+Write-Host "  5. (Optional) Set TALLY_ENABLED=true in .env and configure tally-bridge\.env (TALLY_URL, TALLY_COMPANY, TALLY_VOUCHER_CLASS)."
 Write-Host "Bundled MongoDB starts automatically when MONGO_URI points to localhost."
-Write-Host "Bundled PostgreSQL starts automatically when POSTGRES_HOST=localhost and po-db\pgsql exists."
+Write-Host "po-db.exe handles bundled/external PostgreSQL, schema bootstrap, and CSV watching."

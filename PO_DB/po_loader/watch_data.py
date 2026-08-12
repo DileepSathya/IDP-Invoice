@@ -182,7 +182,16 @@ def get_interval_seconds(config_path: str, cli_value: Optional[int]) -> int:
         return DEFAULT_INTERVAL_SECONDS
 
 
+INPROCESS_LOADER = "__inprocess__"
+
+
 def run_loader(loader_path: str, data_dir: str, config_path: str, dry_run: bool) -> bool:
+    if loader_path == INPROCESS_LOADER:
+        from load_data import run_load
+
+        log.info("Running in-process CSV loader.")
+        return run_load(data_dir, config_path, dry_run) == 0
+
     if loader_path.lower().endswith(".exe"):
         cmd = [loader_path, "--data-dir", data_dir, "--config", config_path]
     else:
@@ -271,7 +280,8 @@ def main():
     args = parser.parse_args()
 
     args.data_dir = os.path.abspath(args.data_dir)
-    args.loader = os.path.abspath(args.loader)
+    if args.loader != INPROCESS_LOADER:
+        args.loader = os.path.abspath(args.loader)
     args.config = os.path.abspath(args.config)
     args.interval = get_interval_seconds(args.config, args.interval)
     args.completed_dir = (

@@ -24,6 +24,12 @@ def _configure_bridge_env(bridge_root: Path) -> None:
     template = bridge_root / "xml_scripts" / "create_voucher.xml"
     if template.is_file():
         os.environ.setdefault("TALLY_VOUCHER_TEMPLATE", str(template))
+    else:
+        bundled_template = Path(getattr(sys, "_MEIPASS", bridge_root)) / "xml_scripts" / "create_voucher.xml"
+        if bundled_template.is_file():
+            os.environ.setdefault("TALLY_VOUCHER_TEMPLATE", str(bundled_template))
+
+    os.environ.setdefault("TALLY_VOUCHER_CLASS", "Automated Purchase")
 
     # Pin the outgoing-payload dump to one predictable place. Left to its own
     # default it lands next to whichever bridge folder is active, so the source

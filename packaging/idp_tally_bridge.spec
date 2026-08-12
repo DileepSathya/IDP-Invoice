@@ -15,6 +15,9 @@ a = Analysis(
     [str(ROOT / "backend" / "run_tally_bridge.py")],
     pathex=[str(ROOT), str(TALLY_DIR)],
     binaries=[],
+    # xml_scripts is also copied to dist/tally-bridge/xml_scripts by build.ps1 so
+    # the external template (with {VOUCHER_CLASS}) can be updated without rebuilding
+    # the exe. Keep both in sync — create_voucher.py reads TALLY_VOUCHER_CLASS.
     datas=[
         (str(TALLY_DIR / "xml_scripts"), "xml_scripts"),
     ],

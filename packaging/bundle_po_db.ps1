@@ -44,7 +44,7 @@ if (-not (Test-Path $configDst)) {
     Write-Host "Kept existing po-db\config.ini (not overwritten)."
 }
 
-foreach ($asset in @("init-po-db.bat", "run-watcher.bat", "README.txt")) {
+foreach ($asset in @("start-po-db.bat", "README.txt")) {
     $src = Join-Path $AssetsRoot $asset
     if (-not (Test-Path $src)) {
         throw "Missing po_db asset: $src"
@@ -87,15 +87,21 @@ if (-not $SkipPyInstaller) {
     $BuildWork = Join-Path $Root "build\pyinstaller-po-db"
     New-Item -ItemType Directory -Force -Path $BuildWork | Out-Null
 
-    Write-Host "Building po-loader.exe and po-watcher.exe ..."
+    Write-Host "Building po-db.exe ..."
     $commonArgs = @(
         "--distpath", $PoDbRoot,
         "--workpath", $BuildWork,
         "--noconfirm"
     )
 
-    Invoke-PyInstallerBuild -Python $Py -BuildArgs $commonArgs -SpecPath (Join-Path $Root "packaging\po_loader.spec")
-    Invoke-PyInstallerBuild -Python $Py -BuildArgs $commonArgs -SpecPath (Join-Path $Root "packaging\po_watcher.spec")
+    Invoke-PyInstallerBuild -Python $Py -BuildArgs $commonArgs -SpecPath (Join-Path $Root "packaging\po_db.spec")
+
+    foreach ($legacyExe in @("po-loader.exe", "po-watcher.exe")) {
+        $legacyPath = Join-Path $PoDbRoot $legacyExe
+        if (Test-Path $legacyPath) {
+            Remove-Item -Force $legacyPath
+        }
+    }
 } else {
     Write-Host "Skipping PyInstaller for po-db loader/watcher."
 }

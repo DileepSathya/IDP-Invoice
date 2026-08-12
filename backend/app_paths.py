@@ -9,8 +9,7 @@ Portable layout (frozen):
     idp-api/idp-api.exe
     idp-watcher/idp-watcher.exe
     tally-bridge/tally-bridge.exe
-    po-db/po-loader.exe
-    po-db/po-watcher.exe
+    po-db/po-db.exe
     invoices_data/to_be_processed/
     invoices_data/_api_staging/
     invoices_data/HITL_pending/
