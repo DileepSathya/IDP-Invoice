@@ -21,6 +21,14 @@ def _configure_bridge_env(bridge_root: Path) -> None:
 
     load_dotenv(bridge_root / ".env", override=False)
 
+    try:
+        from tally.env_sync import sync_env_from_example
+
+        sync_env_from_example(bridge_root / ".env", bridge_root / ".env.example")
+        load_dotenv(bridge_root / ".env", override=True)
+    except Exception:
+        pass
+
     template = bridge_root / "xml_scripts" / "create_voucher.xml"
     if template.is_file():
         os.environ.setdefault("TALLY_VOUCHER_TEMPLATE", str(template))
@@ -29,7 +37,8 @@ def _configure_bridge_env(bridge_root: Path) -> None:
         if bundled_template.is_file():
             os.environ.setdefault("TALLY_VOUCHER_TEMPLATE", str(bundled_template))
 
-    os.environ.setdefault("TALLY_VOUCHER_CLASS", "Automated Purchase")
+    os.environ.setdefault("TALLY_VOUCHER_TYPE", "Purchase")
+    os.environ.setdefault("TALLY_PURCHASE_LEDGER", "Purchase A/c")
 
     # Pin the outgoing-payload dump to one predictable place. Left to its own
     # default it lands next to whichever bridge folder is active, so the source

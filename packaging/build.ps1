@@ -30,6 +30,45 @@ function Resolve-Python {
 $Py = Resolve-Python
 Write-Host "Using Python: $Py"
 
+function Sync-EnvFromExample {
+    param(
+        [Parameter(Mandatory = $true)][string]$EnvPath,
+        [Parameter(Mandatory = $true)][string]$ExamplePath
+    )
+    if (-not (Test-Path $ExamplePath)) { return @() }
+    if (-not (Test-Path $EnvPath)) {
+        Copy-Item -Force $ExamplePath $EnvPath
+        return @("<created>")
+    }
+    $existing = Get-Content $EnvPath -Raw
+    $added = @()
+    foreach ($line in Get-Content $ExamplePath) {
+        if ($line -match '^\s*#' -or $line -match '^\s*$') { continue }
+        if ($line -match '^\s*([^=]+?)=') {
+            $key = $matches[1].Trim()
+            if ($existing -notmatch "(?m)^\s*$([regex]::Escape($key))\s*=") {
+                Add-Content -Path $EnvPath -Value $line
+                $added += $key
+            }
+        }
+    }
+    return $added
+}
+
+function Test-TallyVoucherTemplate {
+    param([Parameter(Mandatory = $true)][string]$TemplatePath)
+    if (-not (Test-Path $TemplatePath)) {
+        throw "Tally voucher template missing: $TemplatePath"
+    }
+    $content = Get-Content $TemplatePath -Raw
+    if ($content -notmatch '<VOUCHERTYPENAME>\{VOUCHER_TYPE\}</VOUCHERTYPENAME>') {
+        throw 'create_voucher.xml is missing voucher type placeholder (<VOUCHERTYPENAME>{VOUCHER_TYPE}</VOUCHERTYPENAME>).'
+    }
+    if ($content -match '<CLASSNAME>') {
+        throw 'create_voucher.xml still contains <CLASSNAME> - remove voucher-class tags for ledger-based import.'
+    }
+}
+
 if (-not $SkipFrontend) {
     Write-Host "`n[1/6] Building frontend..."
     Push-Location (Join-Path $Root "frontend")
@@ -126,23 +165,33 @@ $tallyXmlDst = Join-Path $tallyBridgeRoot "xml_scripts"
 if (Test-Path $tallyXmlSrc) {
     if (Test-Path $tallyXmlDst) { Remove-Item -Recurse -Force $tallyXmlDst }
     Copy-Item -Recurse $tallyXmlSrc $tallyXmlDst
-    $voucherXml = Join-Path $tallyXmlDst "create_voucher.xml"
-    if (-not (Test-Path $voucherXml)) {
-        throw "Tally voucher template missing after copy: $voucherXml"
-    }
-    $voucherContent = Get-Content $voucherXml -Raw
-    if ($voucherContent -notmatch '<CLASSNAME>\{VOUCHER_CLASS\}</CLASSNAME>') {
-        throw "create_voucher.xml is missing Voucher Class support (<CLASSNAME>{VOUCHER_CLASS}</CLASSNAME>)."
-    }
+    Test-TallyVoucherTemplate -TemplatePath (Join-Path $tallyXmlDst "create_voucher.xml")
 }
 $tallyEnvExampleSrc = Join-Path $Root "TALLY INTEGRATION\.env.example"
 $tallyEnvExampleDst = Join-Path $tallyBridgeRoot ".env.example"
 $tallyEnvDst = Join-Path $tallyBridgeRoot ".env"
 if (Test-Path $tallyEnvExampleSrc) {
     Copy-Item -Force $tallyEnvExampleSrc $tallyEnvExampleDst
-    if (-not (Test-Path $tallyEnvDst)) {
-        Copy-Item -Force $tallyEnvExampleDst $tallyEnvDst
-        Write-Host "Created tally-bridge\.env from .env.example (set TALLY_COMPANY, TALLY_URL, and TALLY_VOUCHER_CLASS)."
+    $addedKeys = Sync-EnvFromExample -EnvPath $tallyEnvDst -ExamplePath $tallyEnvExampleDst
+    if ($addedKeys -contains "<created>") {
+        Write-Host "Created tally-bridge\.env from .env.example (set TALLY_COMPANY, TALLY_URL, TALLY_VOUCHER_TYPE, TALLY_PURCHASE_LEDGER)."
+    } elseif ($addedKeys.Count -gt 0) {
+        Write-Host "Merged missing tally-bridge\.env keys: $($addedKeys -join ', ')"
+    } else {
+        Write-Host "Kept existing tally-bridge\.env (required keys already present)."
+    }
+    $syncEnvSrc = Join-Path $Root "TALLY INTEGRATION\sync_env.py"
+    if (Test-Path $syncEnvSrc) {
+        Copy-Item -Force $syncEnvSrc (Join-Path $tallyBridgeRoot "sync_env.py")
+    }
+    if (Test-Path $tallyEnvDst) {
+        $tallyEnvText = Get-Content $tallyEnvDst -Raw
+        if ($tallyEnvText -match '(?m)^\s*TALLY_VOUCHER_CLASS\s*=') {
+            Write-Host "[WARN] tally-bridge\.env still has TALLY_VOUCHER_CLASS (unused). Remove it and set TALLY_PURCHASE_LEDGER instead."
+        }
+        if ($tallyEnvText -match '(?m)^\s*TALLY_VOUCHER_TYPE\s*=\s*.*(account|A/c).*$') {
+            Write-Host "[WARN] TALLY_VOUCHER_TYPE looks like a ledger name. Set it to Purchase and use TALLY_PURCHASE_LEDGER for Purchase A/c."
+        }
     }
 }
 
@@ -183,6 +232,6 @@ Write-Host "  1. Edit dist\IDP-Invoice\.env and set GEMINI_API_KEY."
 Write-Host "  2. Keep POSTGRES_HOST=localhost for bundled PO_DB (po-db.exe auto-creates DB/tables and watches po-db\data\)."
 Write-Host "  3. Or set IDP_USE_BUNDLED_POSTGRES=0 and POSTGRES_* to use an external PostgreSQL server."
 Write-Host "  4. Place license.lic next to Start IDP Invoice.exe (see licensing\README.md)."
-Write-Host "  5. (Optional) Set TALLY_ENABLED=true in .env and configure tally-bridge\.env (TALLY_URL, TALLY_COMPANY, TALLY_VOUCHER_CLASS)."
+Write-Host "  5. (Optional) Set TALLY_ENABLED=true in .env and configure tally-bridge\.env (TALLY_URL, TALLY_COMPANY, TALLY_VOUCHER_TYPE, TALLY_PURCHASE_LEDGER)."
 Write-Host "Bundled MongoDB starts automatically when MONGO_URI points to localhost."
 Write-Host "po-db.exe handles bundled/external PostgreSQL, schema bootstrap, and CSV watching."

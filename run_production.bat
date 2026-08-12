@@ -182,10 +182,11 @@ popd
 goto :eof
 
 :ensure_tally_bridge_env
+if not exist "TALLY INTEGRATION\.env.example" goto :eof
 if not exist "TALLY INTEGRATION\.env" (
-  if exist "TALLY INTEGRATION\.env.example" (
-    copy /y "TALLY INTEGRATION\.env.example" "TALLY INTEGRATION\.env" >nul
-  )
+  copy /y "TALLY INTEGRATION\.env.example" "TALLY INTEGRATION\.env" >nul
+) else (
+  "%VENV_PY%" "TALLY INTEGRATION\sync_env.py" >nul 2>&1
 )
 goto :eof
 

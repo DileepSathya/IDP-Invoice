@@ -62,7 +62,7 @@ dist/IDP-Invoice/
   idp-watcher/idp-watcher.exe
   tally-bridge/tally-bridge.exe   ← Tally voucher bridge (port 8001)
   tally-bridge/xml_scripts/       ← voucher XML template
-  tally-bridge/.env.example       ← TallyPrime URL, company name, voucher class
+  tally-bridge/.env.example       ← TallyPrime URL, company, voucher type, purchase ledger
   frontend/                ← built React UI
   .env.example
   invoices_data/
@@ -79,9 +79,9 @@ dist/IDP-Invoice/
 1. Copy `.env.example` → `.env`
 2. Set `GEMINI_API_KEY`
 3. Keep `MONGO_URI=mongodb://localhost:27017` to use bundled MongoDB
-4. Keep `POSTGRES_HOST=localhost` for bundled PO_DB (default), or set
+4. Keep `POSTGRES_HOST=127.0.0.1` (or `localhost`; po-db normalizes to IPv4) for bundled PO_DB (default), or set
    `IDP_USE_BUNDLED_POSTGRES=0` and configure `POSTGRES_*` for an external server.
-   `po-db.exe` creates the `PO_DB` database and tables when missing, then watches
+   `po-db.exe` creates the application database and tables when missing, then watches
    `po-db\data\` for CSV files (`PO_DB_WATCHER_ENABLED=true` by default).
 5. Drop ERP CSV files (`vendor_master.csv`, `item_master.csv`, `po_header.csv`,
    `po_details.csv`) into `po-db\data\` before or after starting the app.
@@ -89,8 +89,8 @@ dist/IDP-Invoice/
    and edit `tally-bridge\.env`:
    - `TALLY_URL=http://localhost:9000` (TallyPrime HTTP port)
    - `TALLY_COMPANY=` exact company name open in TallyPrime
-   - `TALLY_VOUCHER_CLASS=Automated Purchase` — must match the Voucher Class
-     name configured in TallyPrime for the Purchase voucher type
+   - `TALLY_VOUCHER_TYPE=Purchase` — must match the voucher type name in TallyPrime
+   - `TALLY_PURCHASE_LEDGER=Purchase A/c` — ledger used in inventory accounting allocations
    - Use the same `MONGO_URI` / `MONGO_DB` as the main app
 7. Double-click **Start IDP Invoice.exe**
 8. Browser opens at `http://localhost:8000`
@@ -98,6 +98,10 @@ dist/IDP-Invoice/
 
 When `TALLY_ENABLED=true`, the launcher also starts `tally-bridge.exe` on port 8001.
 TallyPrime must be running separately with the target company open.
+
+On build and on each launcher start, missing keys from `tally-bridge\.env.example`
+(for example `TALLY_PURCHASE_LEDGER`) are merged into an existing `tally-bridge\.env`
+without overwriting values you already set.
 
 The launcher starts bundled MongoDB automatically when:
 
@@ -112,7 +116,9 @@ starts the CSV watcher. If bundled port 5432 is busy, bundled Postgres automatic
 For **MongoDB Atlas**, set `MONGO_URI` to your cloud connection string and `IDP_USE_BUNDLED_MONGO=0`.
 
 For an **external PostgreSQL** server, set `POSTGRES_HOST` to that host and `IDP_USE_BUNDLED_POSTGRES=0`.
-`po-db.exe` still creates the `PO_DB` database and tables on that server when missing.
+If the application role does not exist yet, also set `POSTGRES_ADMIN_USER` and
+`POSTGRES_ADMIN_PASSWORD` (typically the `postgres` superuser) so `po-db.exe` can
+create `POSTGRES_USER`, the database, and tables automatically.
 
 To disable the CSV watcher while keeping ERP matching, set `PO_DB_WATCHER_ENABLED=false`.
 

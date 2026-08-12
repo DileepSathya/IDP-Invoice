@@ -26,6 +26,40 @@ def portable_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def _sync_env_from_example(env_path: Path, example_path: Path) -> list[str]:
+    """Append keys from example that are missing in env. Returns added key names."""
+    if not example_path.is_file():
+        return []
+    if not env_path.is_file():
+        shutil.copy(example_path, env_path)
+        return ["<created>"]
+    existing_text = env_path.read_text(encoding="utf-8")
+    existing_keys: set[str] = set()
+    for line in existing_text.splitlines():
+        match = re.match(r"^\s*([^#=]+?)=", line)
+        if match:
+            existing_keys.add(match.group(1).strip())
+    added: list[str] = []
+    to_append: list[str] = []
+    for line in example_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        match = re.match(r"^\s*([^=]+?)=", line)
+        if not match:
+            continue
+        key = match.group(1).strip()
+        if key not in existing_keys:
+            to_append.append(line)
+            added.append(key)
+    if to_append:
+        with env_path.open("a", encoding="utf-8") as handle:
+            if existing_text and not existing_text.endswith("\n"):
+                handle.write("\n")
+            handle.write("\n".join(to_append) + "\n")
+    return added
+
+
 def ensure_layout(root: Path) -> None:
     for name in (
         "invoices_data",
@@ -48,14 +82,18 @@ def ensure_layout(root: Path) -> None:
 
     tally_bridge_dir = root / "tally-bridge"
     tally_bridge_dir.mkdir(parents=True, exist_ok=True)
+    (tally_bridge_dir / "xml_scripts").mkdir(parents=True, exist_ok=True)
     tally_env = tally_bridge_dir / ".env"
     tally_example = tally_bridge_dir / ".env.example"
-    if not tally_env.exists() and tally_example.exists():
-        shutil.copy(tally_example, tally_env)
-        print(
-            f"Created {tally_env} from .env.example — set TALLY_COMPANY and "
-            "TALLY_VOUCHER_CLASS before pushing to Tally."
-        )
+    if tally_example.is_file():
+        added = _sync_env_from_example(tally_env, tally_example)
+        if added == ["<created>"]:
+            print(
+                f"Created {tally_env} from .env.example — set TALLY_COMPANY, "
+                "TALLY_VOUCHER_TYPE, and TALLY_PURCHASE_LEDGER before pushing to Tally."
+            )
+        elif added:
+            print(f"Added missing tally-bridge .env keys: {', '.join(added)}")
 
     po_db_dir = root / "po-db"
     for name in (
@@ -124,6 +162,15 @@ def _port_open(host: str, port: int, timeout: float = 1.0) -> bool:
 
 
 def wait_for_mongo(port: int, timeout: float = 120.0) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if _port_open("127.0.0.1", port):
+            return True
+        time.sleep(1.0)
+    return False
+
+
+def wait_for_postgres(port: int, timeout: float = 120.0) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
         if _port_open("127.0.0.1", port):
@@ -257,8 +304,17 @@ def main() -> None:
 
         if _po_db_watcher_enabled(root) and _read_env_value(root, "POSTGRES_HOST", "localhost").strip():
             if po_db_exe.is_file():
+                po_db_port = int(_read_env_value(root, "POSTGRES_PORT", "5432"))
                 print(f"Starting PO_DB service: {po_db_exe}")
                 processes.append(_popen_cmd([str(po_db_exe)], po_db_dir))
+                print(f"Waiting for PostgreSQL on port {po_db_port}...")
+                if wait_for_postgres(po_db_port):
+                    print("PostgreSQL is ready.")
+                else:
+                    print(
+                        "[WARN] PostgreSQL did not respond in time. "
+                        "ERP matching may fail until po-db finishes setup."
+                    )
             else:
                 print(f"[WARN] PO_DB service not found (skipping): {po_db_exe}")
         elif _po_db_watcher_enabled(root):

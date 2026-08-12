@@ -40,6 +40,13 @@ def get_match_threshold() -> float:
         return 80.0
 
 
+def _connection_host(host: str) -> str:
+    normalized = (host or "").strip().lower()
+    if normalized in {"localhost", ""}:
+        return "127.0.0.1"
+    return host.strip()
+
+
 def _get_conn():
     load_app_dotenv()
     import psycopg2  # local import: keep psycopg2 optional until ERP is configured/used
@@ -48,7 +55,7 @@ def _get_conn():
     if dsn:
         return psycopg2.connect(dsn, connect_timeout=int(os.environ.get("POSTGRES_CONNECT_TIMEOUT", "5")))
     return psycopg2.connect(
-        host=os.environ.get("POSTGRES_HOST", "localhost"),
+        host=_connection_host(os.environ.get("POSTGRES_HOST", "localhost")),
         port=os.environ.get("POSTGRES_PORT", "5432"),
         dbname=os.environ.get("POSTGRES_DB", "PO_DB"),
         user=os.environ.get("POSTGRES_USER", "postgres"),

@@ -81,12 +81,14 @@ if exist "TALLY INTEGRATION\requirements.txt" (
   )
 )
 
+if not exist "TALLY INTEGRATION\.env.example" goto :tally_env_done
 if not exist "TALLY INTEGRATION\.env" (
-  if exist "TALLY INTEGRATION\.env.example" (
-    echo Creating TALLY INTEGRATION\.env from .env.example ...
-    copy /y "TALLY INTEGRATION\.env.example" "TALLY INTEGRATION\.env" >nul
-  )
+  echo Creating TALLY INTEGRATION\.env from .env.example ...
+  copy /y "TALLY INTEGRATION\.env.example" "TALLY INTEGRATION\.env" >nul
+) else (
+  "%PY%" "TALLY INTEGRATION\sync_env.py" >nul 2>&1
 )
+:tally_env_done
 
 echo(
 echo [OK] Install complete.

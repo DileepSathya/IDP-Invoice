@@ -54,6 +54,45 @@ def read_app_env(key: str, default: str = "") -> str:
     return os.environ.get(key, default)
 
 
+def connection_host(host: str) -> str:
+    """Prefer IPv4 loopback so bundled Postgres (listen_addresses=127.0.0.1) is reachable."""
+    normalized = (host or "").strip().lower()
+    if normalized in {"localhost", ""}:
+        return "127.0.0.1"
+    return host.strip()
+
+
+def _admin_db_config(db: dict[str, str], *, bundled: bool) -> dict[str, str]:
+    """Credentials used to create roles/databases during bootstrap."""
+    base = {**db, "host": connection_host(db["host"])}
+    if bundled:
+        return {**base, "user": "postgres", "password": ""}
+
+    admin_user = read_app_env("POSTGRES_ADMIN_USER", "").strip()
+    if admin_user:
+        return {
+            **base,
+            "user": admin_user,
+            "password": read_app_env("POSTGRES_ADMIN_PASSWORD", ""),
+        }
+    return base
+
+
+def _write_env_postgres_host(host: str) -> None:
+    env_path = app_root() / ".env"
+    if not env_path.is_file():
+        return
+    pattern = re.compile(r"^(\s*POSTGRES_HOST\s*=\s*).*$", re.MULTILINE)
+    text = env_path.read_text(encoding="utf-8")
+    if pattern.search(text):
+        text = pattern.sub(lambda m: f"{m.group(1)}{host}", text)
+    else:
+        if text and not text.endswith("\n"):
+            text += "\n"
+        text += f"POSTGRES_HOST={host}\n"
+    env_path.write_text(text, encoding="utf-8")
+
+
 def use_bundled_postgres() -> bool:
     raw = read_app_env("IDP_USE_BUNDLED_POSTGRES", "1").strip().lower()
     if raw in {"0", "false", "no"}:
@@ -127,14 +166,19 @@ def read_database_config(cfg_path: Path | None = None) -> dict[str, str]:
 def sync_config_from_app_env() -> None:
     """Keep po-db/config.ini aligned with root .env POSTGRES_* values."""
     cfg = ensure_config_exists()
+    host = read_app_env("POSTGRES_HOST", "localhost")
+    if use_bundled_postgres():
+        host = connection_host(host)
     mapping = {
-        "host": read_app_env("POSTGRES_HOST", "localhost"),
+        "host": host,
         "port": read_app_env("POSTGRES_PORT", "5432"),
         "dbname": read_app_env("POSTGRES_DB", "PO_DB"),
         "user": read_app_env("POSTGRES_USER", "postgres"),
         "password": read_app_env("POSTGRES_PASSWORD", ""),
     }
     _write_ini_database_section(cfg, mapping)
+    if use_bundled_postgres() and mapping["host"] == "127.0.0.1":
+        _write_env_postgres_host("127.0.0.1")
 
 
 def _write_ini_database_section(cfg_path: Path, mapping: dict[str, str]) -> None:
@@ -203,6 +247,16 @@ def _read_bundled_postgres_port() -> int | None:
     return None
 
 
+def _sync_bundled_port_config(port: int) -> None:
+    """Keep po-db/config.ini and root .env aligned with the bundled Postgres port."""
+    mapping = read_database_config()
+    if str(mapping.get("port")) == str(port):
+        return
+    mapping["port"] = str(port)
+    _write_ini_database_section(config_path(), mapping)
+    _write_env_postgres_port(port)
+
+
 def _set_bundled_postgres_port(port: int) -> None:
     pgdata = bundled_pgdata()
     conf = pgdata / "postgresql.conf"
@@ -217,12 +271,10 @@ def _set_bundled_postgres_port(port: int) -> None:
                 lines.append(line)
     if not replaced:
         lines.append(f"port = {port}")
+    conf.parent.mkdir(parents=True, exist_ok=True)
     conf.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-    mapping = read_database_config()
-    mapping["port"] = str(port)
-    _write_ini_database_section(config_path(), mapping)
-    _write_env_postgres_port(port)
+    _sync_bundled_port_config(port)
 
 
 def resolve_bundled_port(requested_port: int) -> int:
@@ -230,13 +282,11 @@ def resolve_bundled_port(requested_port: int) -> int:
     existing = _read_bundled_postgres_port()
     if existing and port_open(host, existing):
         log.info("Bundled PostgreSQL already listening on port %s.", existing)
-        mapping = read_database_config()
-        mapping["port"] = str(existing)
-        _write_ini_database_section(config_path(), mapping)
-        _write_env_postgres_port(existing)
+        _sync_bundled_port_config(existing)
         return existing
 
     if not port_open(host, requested_port):
+        _sync_bundled_port_config(requested_port)
         return requested_port
 
     fallback = find_available_port(host, DEFAULT_BUNDLED_PORT_START)
@@ -304,7 +354,7 @@ def start_bundled_postgres(port: int) -> None:
 
 def _psycopg_connect_kwargs(db: dict[str, str], dbname: str | None = None) -> dict:
     return {
-        "host": db["host"],
+        "host": connection_host(db["host"]),
         "port": int(db["port"]),
         "dbname": dbname if dbname is not None else db["dbname"],
         "user": db["user"],
@@ -313,7 +363,84 @@ def _psycopg_connect_kwargs(db: dict[str, str], dbname: str | None = None) -> di
     }
 
 
-def ensure_po_db_schema(db: dict[str, str]) -> None:
+def _role_exists(cur, role: str) -> bool:
+    cur.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role,))
+    return cur.fetchone() is not None
+
+
+def _quote_ident(name: str) -> str:
+    return '"' + str(name).replace('"', '""') + '"'
+
+
+def ensure_app_role(db: dict[str, str], *, bundled: bool) -> None:
+    """Ensure POSTGRES_USER exists. Bundled: always provision via postgres superuser."""
+    import psycopg2
+    from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
+
+    app_user = db["user"]
+    app_password = db.get("password") or ""
+    connect_db = {**db, "host": connection_host(db["host"])}
+
+    if not bundled:
+        try:
+            psycopg2.connect(**_psycopg_connect_kwargs(connect_db, dbname="postgres"))
+            log.info("Application PostgreSQL role %r is reachable.", app_user)
+            return
+        except psycopg2.OperationalError as exc:
+            err = str(exc).lower()
+            recoverable = (
+                "does not exist" in err
+                or "password authentication failed" in err
+                or "no pg_hba.conf entry" in err
+            )
+            if not recoverable:
+                raise RuntimeError(f"Could not connect to external PostgreSQL: {exc}") from exc
+            if not read_app_env("POSTGRES_ADMIN_USER", "").strip():
+                raise RuntimeError(
+                    f"Cannot connect as application role {app_user!r}: {exc}. "
+                    "Create the role manually, fix POSTGRES_PASSWORD, or set "
+                    "POSTGRES_ADMIN_USER and POSTGRES_ADMIN_PASSWORD so PO_DB can provision it."
+                ) from exc
+            log.info(
+                "Application role %r is not ready (%s); provisioning with admin credentials.",
+                app_user,
+                exc,
+            )
+
+    admin = _admin_db_config(db, bundled=bundled)
+    log.info(
+        "Ensuring PostgreSQL role %r exists (admin=%r on %s:%s) ...",
+        app_user,
+        admin["user"],
+        admin["host"],
+        admin["port"],
+    )
+    conn = psycopg2.connect(**_psycopg_connect_kwargs(admin, dbname="postgres"))
+    conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+    try:
+        with conn.cursor() as cur:
+            quoted_user = _quote_ident(app_user)
+            if _role_exists(cur, app_user):
+                if app_password:
+                    cur.execute(f"ALTER ROLE {quoted_user} WITH PASSWORD %s", (app_password,))
+                log.info("PostgreSQL role %r already exists.", app_user)
+            else:
+                if app_password:
+                    cur.execute(
+                        f"CREATE ROLE {quoted_user} WITH LOGIN CREATEDB PASSWORD %s",
+                        (app_password,),
+                    )
+                else:
+                    cur.execute(f"CREATE ROLE {quoted_user} WITH LOGIN CREATEDB")
+                log.info("Created PostgreSQL role %r.", app_user)
+    finally:
+        conn.close()
+
+    psycopg2.connect(**_psycopg_connect_kwargs(connect_db, dbname="postgres")).close()
+    log.info("Verified application PostgreSQL role %r can connect.", app_user)
+
+
+def ensure_po_db_schema(db: dict[str, str], *, admin_db: dict[str, str] | None = None) -> None:
     import psycopg2
     from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 
@@ -321,21 +448,47 @@ def ensure_po_db_schema(db: dict[str, str]) -> None:
     if not sql_file.is_file():
         raise RuntimeError(f"Schema SQL not found: {sql_file}")
 
-    dbname = db["dbname"]
-    admin_kwargs = _psycopg_connect_kwargs(db, dbname="postgres")
-    log.info("Ensuring database %r exists on %s:%s ...", dbname, db["host"], db["port"])
+    connect_db = {**db, "host": connection_host(db["host"])}
+    admin = admin_db or connect_db
+    admin = {**connect_db, **admin}
+
+    dbname = connect_db["dbname"]
+    app_user = connect_db["user"]
+    admin_kwargs = _psycopg_connect_kwargs(admin, dbname="postgres")
+    log.info(
+        "Ensuring database %r exists on %s:%s ...",
+        dbname,
+        admin["host"],
+        admin["port"],
+    )
     admin_conn = psycopg2.connect(**admin_kwargs)
     admin_conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
     try:
         with admin_conn.cursor() as cur:
             cur.execute("SELECT 1 FROM pg_database WHERE datname = %s", (dbname,))
             if not cur.fetchone():
-                log.info('Creating database "%s" ...', dbname)
-                cur.execute(f'CREATE DATABASE "{dbname}"')
+                log.info('Creating database "%s" owned by %r ...', dbname, app_user)
+                cur.execute(
+                    f"CREATE DATABASE {_quote_ident(dbname)} OWNER {_quote_ident(app_user)}"
+                )
+            else:
+                cur.execute(
+                    f"GRANT ALL PRIVILEGES ON DATABASE {_quote_ident(dbname)} "
+                    f"TO {_quote_ident(app_user)}"
+                )
     finally:
         admin_conn.close()
 
-    app_kwargs = _psycopg_connect_kwargs(db)
+    if admin["user"] != app_user:
+        schema_admin_conn = psycopg2.connect(**_psycopg_connect_kwargs(admin, dbname=dbname))
+        schema_admin_conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)
+        try:
+            with schema_admin_conn.cursor() as cur:
+                cur.execute(f"GRANT CREATE ON SCHEMA public TO {_quote_ident(app_user)}")
+        finally:
+            schema_admin_conn.close()
+
+    app_kwargs = _psycopg_connect_kwargs(connect_db)
     conn = psycopg2.connect(**app_kwargs)
     try:
         with conn.cursor() as cur:
@@ -382,20 +535,23 @@ def bootstrap_po_db() -> dict[str, str]:
         if requested == DEFAULT_EXTERNAL_PORT_START and port_open("127.0.0.1", requested):
             requested = DEFAULT_BUNDLED_PORT_START
         port = resolve_bundled_port(requested)
+        _sync_bundled_port_config(port)
         start_bundled_postgres(port)
         db = read_database_config()
+        admin_db = _admin_db_config(db, bundled=True)
+        ensure_app_role(db, bundled=True)
+        ensure_po_db_schema(db, admin_db=admin_db)
     else:
+        db = {**db, "host": connection_host(db["host"])}
         log.info(
             "Using external PostgreSQL at %s:%s (IDP_USE_BUNDLED_POSTGRES=0 or non-local host).",
             db["host"],
             db["port"],
         )
-        import psycopg2
+        ensure_app_role(db, bundled=False)
+        admin_db = _admin_db_config(db, bundled=False)
+        if admin_db["user"] == db["user"]:
+            admin_db = None
+        ensure_po_db_schema(db, admin_db=admin_db)
 
-        try:
-            psycopg2.connect(**_psycopg_connect_kwargs(db, dbname="postgres"))
-        except psycopg2.OperationalError as exc:
-            raise RuntimeError(f"Could not connect to external PostgreSQL: {exc}") from exc
-
-    ensure_po_db_schema(db)
     return read_database_config()

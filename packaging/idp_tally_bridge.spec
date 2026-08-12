@@ -16,8 +16,7 @@ a = Analysis(
     pathex=[str(ROOT), str(TALLY_DIR)],
     binaries=[],
     # xml_scripts is also copied to dist/tally-bridge/xml_scripts by build.ps1 so
-    # the external template (with {VOUCHER_CLASS}) can be updated without rebuilding
-    # the exe. Keep both in sync — create_voucher.py reads TALLY_VOUCHER_CLASS.
+    # the external template can be updated without rebuilding the exe.
     datas=[
         (str(TALLY_DIR / "xml_scripts"), "xml_scripts"),
     ],
@@ -26,6 +25,7 @@ a = Analysis(
         "tally",
         "tally.pipeline",
         "tally.create_voucher",
+        "tally.env_sync",
         "tally.invoice_data_retriver",
         "tally.configurations",
         "tally.configurations.config",
