@@ -99,10 +99,10 @@ TABLE_SPECS: List[TableSpec] = [
         pk_columns=["vendor_id"],
         int_columns=["pin_code"],
         varchar_limits={
-            "vendor_id": 50,
+            "vendor_id": 500,
             "vendor_name": 100,
-            "gst_tax_number": 25,
-            "tin_number": 25,
+            "gst_tax_number": 100,
+            "tin_number": 100,
             "vendor_address_1": 255,
             "vendor_address_2": 255,
             "vendor_address_3": 255,
@@ -120,7 +120,7 @@ TABLE_SPECS: List[TableSpec] = [
         table="item_master",
         pk_columns=["item_id"],
         float_columns=["rate"],
-        varchar_limits={"item_id": 25, "category": 50, "units": 10},
+        varchar_limits={"item_id": 500, "category": 500, "units": 10},
     ),
     TableSpec(
         csv_file="po_header.csv",
@@ -128,10 +128,10 @@ TABLE_SPECS: List[TableSpec] = [
         pk_columns=["po_id", "business_unit"],
         varchar_limits={
             "po_id": 500,
-            "business_unit": 25,
-            "vendor_id": 50,
-            "po_status": 15,
-            "po_type": 20,
+            "business_unit": 500,
+            "vendor_id": 500,
+            "po_status": 100,
+            "po_type": 100,
         },
         fk_stub={
             "fk_column": "vendor_id",
@@ -147,7 +147,7 @@ TABLE_SPECS: List[TableSpec] = [
         pk_columns=["po_id", "business_unit", "item_id"],
         int_columns=["line_number"],
         float_columns=["rate", "qty", "total"],
-        varchar_limits={"po_id": 500, "business_unit": 25, "item_id": 25, "units": 10},
+        varchar_limits={"po_id": 500, "business_unit": 500, "item_id": 500, "units": 10},
         fk_stub={
             "fk_column": "item_id",
             "parent_table": "item_master",
