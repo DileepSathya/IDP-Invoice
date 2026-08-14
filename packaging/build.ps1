@@ -133,11 +133,13 @@ if (Test-Path $frontendSrc) {
 $envExample = Join-Path $DistRoot ".env.example"
 $envTarget = Join-Path $DistRoot ".env"
 Copy-Item -Force (Join-Path $Root ".env.example") $envExample
-if (-not (Test-Path $envTarget)) {
-    Copy-Item -Force $envExample $envTarget
+$addedRootEnvKeys = Sync-EnvFromExample -EnvPath $envTarget -ExamplePath $envExample
+if ($addedRootEnvKeys -contains "<created>") {
     Write-Host "Created .env from .env.example in dist (set GEMINI_API_KEY before processing invoices)."
-} else {
-    Write-Host "Kept existing dist .env (not overwritten)."
+} elseif ($addedRootEnvKeys.Count -gt 0) {
+    Write-Host "Merged missing dist .env keys: $($addedRootEnvKeys -join ', ')"
+} elseif (Test-Path $envTarget) {
+    Write-Host "Kept existing dist .env (required keys already present)."
 }
 
 Write-Host "`nResetting stored data (MongoDB data dir, invoice files, logs) for a clean build..."
@@ -233,5 +235,6 @@ Write-Host "  2. Keep POSTGRES_HOST=localhost for bundled PO_DB (po-db.exe auto-
 Write-Host "  3. Or set IDP_USE_BUNDLED_POSTGRES=0 and POSTGRES_* to use an external PostgreSQL server."
 Write-Host "  4. Place license.lic next to Start IDP Invoice.exe (see licensing\README.md)."
 Write-Host "  5. (Optional) Set TALLY_ENABLED=true in .env and configure tally-bridge\.env (TALLY_URL, TALLY_COMPANY, TALLY_VOUCHER_TYPE, TALLY_PURCHASE_LEDGER)."
+Write-Host "  6. (Optional) For HITL email alerts, set SMTP_* in .env and configure Settings -> HITL Email Notifications in the UI."
 Write-Host "Bundled MongoDB starts automatically when MONGO_URI points to localhost."
 Write-Host "po-db.exe handles bundled/external PostgreSQL, schema bootstrap, and CSV watching."

@@ -1294,6 +1294,14 @@ def _sync_hitl_and_status(
         except Exception:
             pass
 
+    if existing_status != status_value:
+        try:
+            from backend.hitl_notifications import on_hitl_status_change
+
+            on_hitl_status_change(previous_status=existing_status, new_status=status_value)
+        except Exception:
+            logger.exception("[api] HITL notification hook failed")
+
     if human_processed and status_value == 2 and uploaded_file_path:
         new_path = relocate_after_hitl_processed(uploaded_file_path)
         if new_path and new_path != uploaded_file_path:
@@ -1347,8 +1355,10 @@ async def _app_lifespan(app: FastAPI):
     load_agent_settings_into_env()
 
     from backend.erp_scheduler import start_erp_scheduler
+    from backend.hitl_notification_scheduler import start_hitl_notification_scheduler
 
     start_erp_scheduler()
+    start_hitl_notification_scheduler()
 
     # Kick off one ERP/PO_DB re-sync on every app start so "Last synced"/"Next sync" on the
     # ERP page reflect reality immediately, instead of waiting out whatever was configured
@@ -1682,6 +1692,100 @@ def force_erp_sync_route() -> ErpSyncSettingsResponse:
         )
     run_erp_sync_async()
     return _erp_sync_settings_response()
+
+
+class HitlNotificationSettingsResponse(BaseModel):
+    enabled: bool
+    recipient_emails: List[str]
+    trigger_mode: str
+    digest_frequency_minutes: int
+    pending_threshold: int
+    last_sent_at: Optional[str] = None
+    last_pending_count: int = 0
+    smtp_configured: bool = False
+    next_digest_at: Optional[str] = None
+    hitl_pending_count: int = 0
+
+
+class HitlNotificationSettingsUpdate(BaseModel):
+    enabled: bool
+    recipient_emails: List[str]
+    trigger_mode: str
+    digest_frequency_minutes: int
+    pending_threshold: int
+
+
+class HitlNotificationTestResponse(BaseModel):
+    success: bool
+    message: str
+
+
+def _hitl_notification_settings_response() -> HitlNotificationSettingsResponse:
+    from datetime import timedelta
+
+    from backend.hitl_email import is_smtp_configured
+    from backend.hitl_notification_settings import (
+        get_hitl_notification_settings,
+        next_digest_baseline,
+    )
+    from backend.hitl_notifications import count_hitl_pending
+
+    s = get_hitl_notification_settings()
+    next_digest_at = None
+    if s.get("enabled") and s.get("trigger_mode") == "scheduled_digest":
+        baseline = next_digest_baseline(s)
+        if baseline is not None:
+            next_digest_at = baseline + timedelta(minutes=s["digest_frequency_minutes"])
+
+    return HitlNotificationSettingsResponse(
+        enabled=s["enabled"],
+        recipient_emails=s["recipient_emails"],
+        trigger_mode=s["trigger_mode"],
+        digest_frequency_minutes=s["digest_frequency_minutes"],
+        pending_threshold=s["pending_threshold"],
+        last_sent_at=_iso(s.get("last_sent_at")),
+        last_pending_count=int(s.get("last_pending_count") or 0),
+        smtp_configured=is_smtp_configured(),
+        next_digest_at=_iso(next_digest_at),
+        hitl_pending_count=count_hitl_pending(),
+    )
+
+
+@app.get("/notifications/hitl-settings", response_model=HitlNotificationSettingsResponse)
+def get_hitl_notification_settings_route() -> HitlNotificationSettingsResponse:
+    return _hitl_notification_settings_response()
+
+
+@app.put("/notifications/hitl-settings", response_model=HitlNotificationSettingsResponse)
+def put_hitl_notification_settings_route(
+    payload: HitlNotificationSettingsUpdate,
+) -> HitlNotificationSettingsResponse:
+    from backend.hitl_notification_settings import save_hitl_notification_settings
+
+    try:
+        save_hitl_notification_settings(
+            enabled=payload.enabled,
+            recipient_emails=payload.recipient_emails,
+            trigger_mode=payload.trigger_mode,
+            digest_frequency_minutes=payload.digest_frequency_minutes,
+            pending_threshold=payload.pending_threshold,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return _hitl_notification_settings_response()
+
+
+@app.post("/notifications/hitl-settings/test", response_model=HitlNotificationTestResponse)
+def test_hitl_notification_route() -> HitlNotificationTestResponse:
+    from backend.hitl_notifications import send_test_notification
+
+    try:
+        send_test_notification()
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to send test email: {e}") from e
+    return HitlNotificationTestResponse(success=True, message="Test email sent.")
 
 
 @app.get("/tally/status", response_model=TallyStatusResponse)

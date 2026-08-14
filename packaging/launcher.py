@@ -76,9 +76,14 @@ def ensure_layout(root: Path) -> None:
 
     env_path = root / ".env"
     example_path = root / ".env.example"
-    if not env_path.exists() and example_path.exists():
-        shutil.copy(example_path, env_path)
-        print(f"Created {env_path} from .env.example — set GEMINI_API_KEY before processing invoices.")
+    if example_path.is_file():
+        added = _sync_env_from_example(env_path, example_path)
+        if added == ["<created>"]:
+            print(
+                f"Created {env_path} from .env.example — set GEMINI_API_KEY before processing invoices."
+            )
+        elif added:
+            print(f"Added missing .env keys: {', '.join(added)}")
 
     tally_bridge_dir = root / "tally-bridge"
     tally_bridge_dir.mkdir(parents=True, exist_ok=True)

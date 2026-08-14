@@ -60,6 +60,8 @@ for /f "tokens=2" %%v in ('"%VENV_PY%" --version 2^>^&1') do set "PYFULL=%%v"
 for /f "tokens=1,2 delims=." %%a in ("%PYFULL%") do set "VENVVER=%%a.%%b"
 if not "%VENVVER%"=="3.11" goto :wrong_venv_python
 
+call :ensure_root_env
+
 :start_watcher
 
 echo(
@@ -187,6 +189,15 @@ if not exist "TALLY INTEGRATION\.env" (
   copy /y "TALLY INTEGRATION\.env.example" "TALLY INTEGRATION\.env" >nul
 ) else (
   "%VENV_PY%" "TALLY INTEGRATION\sync_env.py" >nul 2>&1
+)
+goto :eof
+
+:ensure_root_env
+if not exist ".env.example" goto :eof
+if not exist ".env" (
+  copy /y ".env.example" ".env" >nul
+) else (
+  "%VENV_PY%" sync_env.py >nul 2>&1
 )
 goto :eof
 

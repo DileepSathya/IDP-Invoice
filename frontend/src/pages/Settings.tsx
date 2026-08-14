@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { fetchLicenseProfile, type LicenseProfile } from "../api";
 
 function formatPlanType(plan: string): string {
@@ -70,6 +71,9 @@ export const Settings: React.FC = () => {
           <h2>Settings</h2>
           <p>View your license and subscription details.</p>
         </div>
+        <Link to="/settings/notifications" className="button-link">
+          HITL Email Notifications
+        </Link>
       </div>
 
       {error && <div className="alert alert-error">{error}</div>}

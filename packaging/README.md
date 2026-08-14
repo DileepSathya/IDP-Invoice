@@ -96,6 +96,27 @@ dist/IDP-Invoice/
 8. Browser opens at `http://localhost:8000`
 9. Drop invoice files in `invoices_data/to_be_processed/` (or upload via the UI)
 
+### HITL email notifications (optional)
+
+When invoices are flagged for human review, the app can send email alerts configured from
+**Settings → HITL Email Notifications** in the UI (recipient addresses and trigger mode).
+
+SMTP credentials live in the portable `.env` (not in the UI):
+
+```env
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USER=your-smtp-user
+SMTP_PASSWORD=your-smtp-password
+SMTP_FROM=noreply@example.com
+SMTP_USE_TLS=true
+```
+
+Trigger modes: **Immediate**, **Scheduled digest** (frequency in minutes), or **Threshold only**.
+
+On build and on each launcher start, missing keys from `.env.example` (including commented
+SMTP placeholders) are merged into an existing `.env` without overwriting values you already set.
+
 When `TALLY_ENABLED=true`, the launcher also starts `tally-bridge.exe` on port 8001.
 TallyPrime must be running separately with the target company open.
 

@@ -5,6 +5,7 @@ import { Home } from "./pages/Dashboard";
 import { AnalyticsDashboard } from "./pages/AnalyticsDashboard";
 import { Erp } from "./pages/Erp";
 import { ErpSettings } from "./pages/ErpSettings";
+import { NotificationSettings } from "./pages/NotificationSettings";
 import { Chat } from "./pages/Chat";
 import { Settings } from "./pages/Settings";
 import { AccountMenu } from "./components/AccountMenu";
@@ -37,6 +38,7 @@ const AppLayout: React.FC = () => {
           <Route path="/dashboard" element={<AnalyticsDashboard />} />
           <Route path="/erp" element={<Erp />} />
           <Route path="/erp/settings" element={<ErpSettings />} />
+          <Route path="/settings/notifications" element={<NotificationSettings />} />
           <Route path="/chat" element={<Chat />} />
           <Route path="/settings" element={<Settings />} />
         </Routes>

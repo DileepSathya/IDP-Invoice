@@ -450,6 +450,60 @@ export async function forceErpSync(): Promise<ErpSyncSettings> {
   return res.json();
 }
 
+export type HitlNotificationTriggerMode =
+  | "immediate"
+  | "scheduled_digest"
+  | "threshold_only";
+
+export type HitlNotificationSettings = {
+  enabled: boolean;
+  recipient_emails: string[];
+  trigger_mode: HitlNotificationTriggerMode;
+  digest_frequency_minutes: number;
+  pending_threshold: number;
+  last_sent_at: string | null;
+  last_pending_count: number;
+  smtp_configured: boolean;
+  next_digest_at: string | null;
+  hitl_pending_count: number;
+};
+
+export async function fetchHitlNotificationSettings(): Promise<HitlNotificationSettings> {
+  const res = await fetch("/api/notifications/hitl-settings");
+  if (!res.ok) {
+    throw new Error(`Failed to load HITL notification settings (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function saveHitlNotificationSettings(payload: {
+  enabled: boolean;
+  recipient_emails: string[];
+  trigger_mode: HitlNotificationTriggerMode;
+  digest_frequency_minutes: number;
+  pending_threshold: number;
+}): Promise<HitlNotificationSettings> {
+  const res = await fetch("/api/notifications/hitl-settings", {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const msg = await res.text();
+    throw new Error(msg || `Failed to save HITL notification settings (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function sendHitlNotificationTest(): Promise<{ success: boolean; message: string }> {
+  const res = await fetch("/api/notifications/hitl-settings/test", { method: "POST" });
+  if (!res.ok) {
+    const msg = await res.text();
+    throw new Error(msg || `Failed to send test email (${res.status})`);
+  }
+  return res.json();
+}
+
 const CHAT_SESSION_KEY = "idp_chat_session_id";
 
 export function getChatSessionId(): string | null {
