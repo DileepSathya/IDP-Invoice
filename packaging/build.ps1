@@ -69,6 +69,19 @@ function Test-TallyVoucherTemplate {
     }
 }
 
+function Test-TallyXmlScripts {
+    param([Parameter(Mandatory = $true)][string]$XmlDir)
+    if (-not (Test-Path $XmlDir)) {
+        throw "Tally xml_scripts folder missing: $XmlDir"
+    }
+    foreach ($required in @("create_voucher.xml", "ledger_list.xml", "purchase_ledger_list.xml")) {
+        $path = Join-Path $XmlDir $required
+        if (-not (Test-Path $path)) {
+            throw "Required Tally XML script missing: $path"
+        }
+    }
+}
+
 if (-not $SkipFrontend) {
     Write-Host "`n[1/6] Building frontend..."
     Push-Location (Join-Path $Root "frontend")
@@ -167,6 +180,7 @@ $tallyXmlDst = Join-Path $tallyBridgeRoot "xml_scripts"
 if (Test-Path $tallyXmlSrc) {
     if (Test-Path $tallyXmlDst) { Remove-Item -Recurse -Force $tallyXmlDst }
     Copy-Item -Recurse $tallyXmlSrc $tallyXmlDst
+    Test-TallyXmlScripts -XmlDir $tallyXmlDst
     Test-TallyVoucherTemplate -TemplatePath (Join-Path $tallyXmlDst "create_voucher.xml")
 }
 $tallyEnvExampleSrc = Join-Path $Root "TALLY INTEGRATION\.env.example"
@@ -235,6 +249,7 @@ Write-Host "  2. Keep POSTGRES_HOST=localhost for bundled PO_DB (po-db.exe auto-
 Write-Host "  3. Or set IDP_USE_BUNDLED_POSTGRES=0 and POSTGRES_* to use an external PostgreSQL server."
 Write-Host "  4. Place license.lic next to Start IDP Invoice.exe (see licensing\README.md)."
 Write-Host "  5. (Optional) Set TALLY_ENABLED=true in .env and configure tally-bridge\.env (TALLY_URL, TALLY_COMPANY, TALLY_VOUCHER_TYPE, TALLY_PURCHASE_LEDGER)."
-Write-Host "  6. (Optional) For HITL email alerts, set SMTP_* in .env and configure Settings -> HITL Email Notifications in the UI."
+Write-Host "     Then open Settings -> Ledger Settings in the UI to pick the purchase ledger from Tally Prime."
+Write-Host "  6. (Optional) For HITL email alerts, set IDP_APP_URL and SMTP_* in .env and configure Settings -> HITL Email Notifications in the UI."
 Write-Host "Bundled MongoDB starts automatically when MONGO_URI points to localhost."
 Write-Host "po-db.exe handles bundled/external PostgreSQL, schema bootstrap, and CSV watching."

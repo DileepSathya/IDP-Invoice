@@ -96,6 +96,7 @@ a = Analysis(
         "backend.tally_integration.bridge_client",
         "backend.tally_integration.pipeline",
         "backend.tally_sync",
+        "backend.tally_settings",
         "requests",
         "psycopg2",
         "psycopg2.extras",

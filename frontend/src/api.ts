@@ -450,6 +450,53 @@ export async function forceErpSync(): Promise<ErpSyncSettings> {
   return res.json();
 }
 
+export type TallyPurchaseLedgers = {
+  ledgers: string[];
+  company?: string | null;
+  error?: string | null;
+  tally_configured?: boolean;
+  tally_reachable?: boolean;
+};
+
+export type TallyLedgerSettings = {
+  purchase_ledger: string;
+  updated_at?: string | null;
+  tally_configured?: boolean;
+};
+
+export async function fetchTallyPurchaseLedgers(): Promise<TallyPurchaseLedgers> {
+  const res = await fetch("/api/tally/purchase-ledgers");
+  if (!res.ok) {
+    const msg = await res.text();
+    throw new Error(msg || `Failed to load purchase ledgers (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function fetchTallyLedgerSettings(): Promise<TallyLedgerSettings> {
+  const res = await fetch("/api/tally/ledger-settings");
+  if (!res.ok) {
+    const msg = await res.text();
+    throw new Error(msg || `Failed to load ledger settings (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function saveTallyLedgerSettings(
+  purchaseLedger: string,
+): Promise<TallyLedgerSettings> {
+  const res = await fetch("/api/tally/ledger-settings", {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ purchase_ledger: purchaseLedger }),
+  });
+  if (!res.ok) {
+    const msg = await res.text();
+    throw new Error(msg || `Failed to save ledger settings (${res.status})`);
+  }
+  return res.json();
+}
+
 export type HitlNotificationTriggerMode =
   | "immediate"
   | "scheduled_digest"

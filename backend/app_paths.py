@@ -62,6 +62,24 @@ def logs_dir() -> Path:
     return app_dir() / "logs"
 
 
+def tally_bridge_root() -> Path:
+    """Tally bridge service folder (dev source tree or portable tally-bridge/)."""
+    if is_frozen():
+        return app_dir() / "tally-bridge"
+    return repo_root() / "TALLY INTEGRATION"
+
+
+def tally_bridge_xml_scripts_dir() -> Path:
+    """XML templates for Tally HTTP requests — external copy preferred in portable builds."""
+    external = tally_bridge_root() / "xml_scripts"
+    if external.is_dir():
+        return external
+    bundled = bundle_dir() / "xml_scripts"
+    if bundled.is_dir():
+        return bundled
+    return external
+
+
 def resolve_data_path(env_key: str, default: str) -> Path:
     raw = os.environ.get(env_key, default).strip() or default
     path = Path(raw).expanduser()

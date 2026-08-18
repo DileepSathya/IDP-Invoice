@@ -2,11 +2,33 @@
 Here we will return the comapany name list of ledgers and stock items
 """
 
-import xml.etree.ElementTree as ET
-import requests
+from __future__ import annotations
+
 import logging
-from tally.configurations.config import clean_tally_xml,normalize_to_bytes
+import os
+import re
+import xml.etree.ElementTree as ET
+from pathlib import Path
+from typing import Optional
+
+import requests
+
+from tally.configurations.config import clean_tally_xml, normalize_to_bytes
+
 logger = logging.getLogger(__name__)
+
+PURCHASE_ACCOUNTS_GROUP = "Purchase Accounts"
+
+
+def _xml_scripts_dir() -> Path:
+    """Resolve Tally XML templates for dev, portable external copy, and PyInstaller bundle."""
+    env = os.environ.get("TALLY_XML_SCRIPTS_DIR", "").strip()
+    if env:
+        return Path(env)
+    cwd_scripts = Path.cwd() / "xml_scripts"
+    if cwd_scripts.is_dir():
+        return cwd_scripts
+    return Path(__file__).resolve().parent.parent / "xml_scripts"
 
 
 
@@ -73,6 +95,103 @@ def ledgers_retriver(TALLY_URL,xml_request):
         print(f"An error occurred: {e}")
 
     return ledger_dict
+
+
+def _load_xml_template(filename: str, *, company_name: Optional[str] = None) -> str:
+    path = _xml_scripts_dir() / filename
+    if not path.is_file():
+        raise FileNotFoundError(f"Tally XML template not found: {path}")
+    xml_text = path.read_text(encoding="utf-8")
+    if company_name:
+        company_tag = f"<SVCURRENTCOMPANY>{company_name}</SVCURRENTCOMPANY>"
+        if "<SVCURRENTCOMPANY>" not in xml_text:
+            xml_text = xml_text.replace(
+                "<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>",
+                f"<SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>\n                {company_tag}",
+            )
+        else:
+            xml_text = re.sub(
+                r"<SVCURRENTCOMPANY>.*?</SVCURRENTCOMPANY>",
+                company_tag,
+                xml_text,
+                count=1,
+            )
+    return xml_text
+
+
+def _parse_ledger_names(response_text: str) -> list[str]:
+    cleaned_text = clean_tally_xml(response_text)
+    root = ET.fromstring(cleaned_text)
+    names: list[str] = []
+    for ledger in root.findall(".//LEDGER"):
+        name = (ledger.get("NAME") or "").strip()
+        if not name:
+            name_tag = ledger.find("NAME")
+            if name_tag is not None and name_tag.text:
+                name = name_tag.text.strip()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def get_purchase_ledgers(
+    tally_url: str,
+    *,
+    company_name: Optional[str] = None,
+) -> tuple[list[str], Optional[str]]:
+    """Return purchase-account ledger names from Tally (includes nested sub-groups)."""
+    errors: list[str] = []
+
+    for template in ("purchase_ledger_list.xml", "ledger_list.xml"):
+        try:
+            xml_request = _load_xml_template(template, company_name=company_name)
+            headers = {"Content-Type": "text/xml;charset=utf-8"}
+            response = requests.post(
+                tally_url,
+                data=normalize_to_bytes(xml_request),
+                headers=headers,
+                timeout=30,
+            )
+            if response.status_code != 200:
+                errors.append(f"{template}: HTTP {response.status_code}")
+                continue
+
+            raw_text = response.content.decode("utf-8", errors="replace")
+            if template == "purchase_ledger_list.xml":
+                names = _parse_ledger_names(raw_text)
+            else:
+                cleaned_text = clean_tally_xml(raw_text)
+                root = ET.fromstring(cleaned_text)
+                names = []
+                for ledger in root.findall(".//LEDGER"):
+                    parent_tag = ledger.find("PARENT")
+                    parent = (
+                        parent_tag.text.strip()
+                        if parent_tag is not None and parent_tag.text
+                        else ""
+                    )
+                    if parent != PURCHASE_ACCOUNTS_GROUP:
+                        continue
+                    name = (ledger.get("NAME") or "").strip()
+                    if not name:
+                        name_tag = ledger.find("NAME")
+                        if name_tag is not None and name_tag.text:
+                            name = name_tag.text.strip()
+                    if name:
+                        names.append(name)
+
+            names = sorted({n.strip() for n in names if n and n.strip()})
+            if names:
+                return names, None
+            errors.append(f"{template}: no purchase ledgers found")
+        except requests.exceptions.ConnectionError:
+            return [], "Cannot connect to Tally. Verify Tally is running on port 9000."
+        except Exception as exc:
+            errors.append(f"{template}: {exc}")
+
+    detail = "; ".join(errors) if errors else "No purchase ledgers found in Tally"
+    return [], detail
+
 
 def stock_items(TALLY_URL,xml_request):
     stock_fin_list=[]

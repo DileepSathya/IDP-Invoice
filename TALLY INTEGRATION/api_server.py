@@ -20,6 +20,7 @@ from pydantic import BaseModel
 load_dotenv()
 
 from tally.pipeline import push_invoice_by_id
+from tally.tally_details import get_purchase_ledgers
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -27,6 +28,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="Tally Bridge", version="1.0.0")
 
 TALLY_URL = os.environ.get("TALLY_URL", "http://localhost:9000").strip()
+TALLY_COMPANY = os.environ.get("TALLY_COMPANY", "").strip()
 
 
 class PushResponse(BaseModel):
@@ -45,6 +47,12 @@ class HealthResponse(BaseModel):
     tally_reachable: bool = False
     tally_url: str = TALLY_URL
     tally_error: Optional[str] = None
+
+
+class PurchaseLedgersResponse(BaseModel):
+    ledgers: list[str]
+    company: Optional[str] = None
+    error: Optional[str] = None
 
 
 def _ping_tally() -> tuple[bool, Optional[str]]:
@@ -80,6 +88,15 @@ def _ping_tally() -> tuple[bool, Optional[str]]:
 def health() -> HealthResponse:
     reachable, err = _ping_tally()
     return HealthResponse(bridge_ok=True, tally_reachable=reachable, tally_error=err)
+
+
+@app.get("/ledgers/purchase", response_model=PurchaseLedgersResponse)
+def list_purchase_ledgers() -> PurchaseLedgersResponse:
+    company = TALLY_COMPANY or None
+    ledgers, error = get_purchase_ledgers(TALLY_URL, company_name=company)
+    if not ledgers and error:
+        logger.warning("[tally_bridge] purchase ledgers fetch failed: %s", error)
+    return PurchaseLedgersResponse(ledgers=ledgers, company=company, error=error)
 
 
 @app.post("/push/invoice/{invoice_id}", response_model=PushResponse)

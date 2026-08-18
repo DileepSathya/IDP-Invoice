@@ -29,7 +29,15 @@ def _configure_bridge_env(bridge_root: Path) -> None:
     except Exception:
         pass
 
-    template = bridge_root / "xml_scripts" / "create_voucher.xml"
+    try:
+        from backend.app_paths import tally_bridge_xml_scripts_dir
+
+        xml_scripts = tally_bridge_xml_scripts_dir()
+        os.environ.setdefault("TALLY_XML_SCRIPTS_DIR", str(xml_scripts))
+        template = xml_scripts / "create_voucher.xml"
+    except Exception:
+        template = bridge_root / "xml_scripts" / "create_voucher.xml"
+
     if template.is_file():
         os.environ.setdefault("TALLY_VOUCHER_TEMPLATE", str(template))
     else:

@@ -116,7 +116,10 @@ export const Dashboard: React.FC = () => {
   });
   const [isDraggingPreview, setIsDraggingPreview] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
-  const [showHitlOnly, setShowHitlOnly] = useState(false);
+  const [showHitlOnly, setShowHitlOnly] = useState(() => {
+    const hitl = new URLSearchParams(window.location.search).get("hitl");
+    return hitl === "1" || hitl?.toLowerCase() === "true";
+  });
   const [jsonEditorOpen, setJsonEditorOpen] = useState(false);
   const [jsonEditorInvoiceId, setJsonEditorInvoiceId] = useState<string | null>(null);
   const [jsonEditorBase, setJsonEditorBase] = useState<Record<string, unknown>>({});

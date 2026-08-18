@@ -1298,7 +1298,11 @@ def _sync_hitl_and_status(
         try:
             from backend.hitl_notifications import on_hitl_status_change
 
-            on_hitl_status_change(previous_status=existing_status, new_status=status_value)
+            on_hitl_status_change(
+                previous_status=existing_status,
+                new_status=status_value,
+                gemini_json=gemini_json,
+            )
         except Exception:
             logger.exception("[api] HITL notification hook failed")
 
@@ -1622,6 +1626,24 @@ class TallySyncStartResponse(BaseModel):
     message: str
 
 
+class TallyPurchaseLedgersResponse(BaseModel):
+    ledgers: list[str]
+    company: Optional[str] = None
+    error: Optional[str] = None
+    tally_configured: bool = False
+    tally_reachable: bool = False
+
+
+class TallyLedgerSettingsResponse(BaseModel):
+    purchase_ledger: str
+    updated_at: Optional[str] = None
+    tally_configured: bool = False
+
+
+class TallyLedgerSettingsUpdate(BaseModel):
+    purchase_ledger: str
+
+
 class ErpSyncSettingsUpdate(BaseModel):
     mode: str
     frequency_minutes: int
@@ -1802,6 +1824,76 @@ def get_tally_status_route() -> TallyStatusResponse:
         reachable=reachable,
         company=None,
         error=err,
+    )
+
+
+@app.get("/tally/purchase-ledgers", response_model=TallyPurchaseLedgersResponse)
+def get_tally_purchase_ledgers_route() -> TallyPurchaseLedgersResponse:
+    from backend.tally_integration.bridge_client import fetch_purchase_ledgers_from_bridge, ping_bridge
+    from backend.tally_integration.config import is_tally_configured
+
+    if not is_tally_configured():
+        return TallyPurchaseLedgersResponse(
+            ledgers=[],
+            company=None,
+            error="Tally is not configured (set TALLY_ENABLED=true and TALLY_BRIDGE_URL in .env).",
+            tally_configured=False,
+            tally_reachable=False,
+        )
+
+    reachable, bridge_err = ping_bridge()
+    if not reachable:
+        return TallyPurchaseLedgersResponse(
+            ledgers=[],
+            company=None,
+            error=bridge_err or "Tally bridge is not reachable",
+            tally_configured=True,
+            tally_reachable=False,
+        )
+
+    result = fetch_purchase_ledgers_from_bridge()
+    return TallyPurchaseLedgersResponse(
+        ledgers=result.get("ledgers") or [],
+        company=result.get("company"),
+        error=result.get("error"),
+        tally_configured=True,
+        tally_reachable=True,
+    )
+
+
+@app.get("/tally/ledger-settings", response_model=TallyLedgerSettingsResponse)
+def get_tally_ledger_settings_route() -> TallyLedgerSettingsResponse:
+    from backend.tally_settings import get_tally_settings, purchase_ledger_updated_at_iso
+    from backend.tally_integration.config import is_tally_configured
+
+    settings = get_tally_settings()
+    return TallyLedgerSettingsResponse(
+        purchase_ledger=settings["purchase_ledger"],
+        updated_at=purchase_ledger_updated_at_iso(settings),
+        tally_configured=is_tally_configured(),
+    )
+
+
+@app.put("/tally/ledger-settings", response_model=TallyLedgerSettingsResponse)
+def put_tally_ledger_settings_route(payload: TallyLedgerSettingsUpdate) -> TallyLedgerSettingsResponse:
+    from backend.tally_settings import get_tally_settings, purchase_ledger_updated_at_iso, save_tally_settings
+    from backend.tally_integration.config import is_tally_configured
+
+    if not is_tally_configured():
+        raise HTTPException(
+            status_code=400,
+            detail="Tally is not configured (set TALLY_ENABLED=true and TALLY_BRIDGE_URL in .env).",
+        )
+
+    try:
+        settings = save_tally_settings(purchase_ledger=payload.purchase_ledger)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    return TallyLedgerSettingsResponse(
+        purchase_ledger=settings["purchase_ledger"],
+        updated_at=purchase_ledger_updated_at_iso(settings),
+        tally_configured=True,
     )
 
 

@@ -71,9 +71,14 @@ export const Settings: React.FC = () => {
           <h2>Settings</h2>
           <p>View your license and subscription details.</p>
         </div>
-        <Link to="/settings/notifications" className="button-link">
-          HITL Email Notifications
-        </Link>
+        <div className="panel-header-actions">
+          <Link to="/settings/notifications" className="button-link">
+            HITL Email Notifications
+          </Link>
+          <Link to="/settings/ledger" className="button-link">
+            Ledger Settings
+          </Link>
+        </div>
       </div>
 
       {error && <div className="alert alert-error">{error}</div>}

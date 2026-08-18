@@ -277,6 +277,13 @@ body {
   font-size: 0.9rem;
 }
 
+.panel-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
 .upload-button {
   position: relative;
   overflow: hidden;
@@ -2185,6 +2192,40 @@ tbody tr:nth-child(even) {
 .erp-settings-next-synced {
   font-size: 0.82rem;
   color: #94a3b8;
+}
+
+.ledger-settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-width: 32rem;
+}
+
+.ledger-settings-company {
+  margin: 0;
+  font-size: 0.88rem;
+  color: #cbd5e1;
+}
+
+.ledger-settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.ledger-settings-label {
+  font-size: 0.88rem;
+  color: #cbd5e1;
+}
+
+.ledger-settings-field select {
+  width: 100%;
+  padding: 0.5rem 0.65rem;
+  border-radius: 0.5rem;
+  border: 1px solid #334155;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-size: 0.9rem;
 }
 
 .notification-settings-enable {

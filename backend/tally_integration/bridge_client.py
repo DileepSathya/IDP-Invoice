@@ -73,6 +73,33 @@ def ping_bridge() -> tuple[bool, Optional[str]]:
         return False, f"Bridge unreachable at {config.TALLY_BRIDGE_URL}: {exc}"
 
 
+def fetch_purchase_ledgers_from_bridge() -> dict[str, Any]:
+    if not config.TALLY_BRIDGE_URL:
+        return {"ledgers": [], "company": None, "error": "TALLY_BRIDGE_URL is not set"}
+    try:
+        resp = requests.get(
+            f"{config.TALLY_BRIDGE_URL}/ledgers/purchase",
+            timeout=config.TALLY_BRIDGE_TIMEOUT,
+        )
+        resp.raise_for_status()
+        body = resp.json()
+        ledgers = body.get("ledgers") or []
+        if not isinstance(ledgers, list):
+            ledgers = []
+        return {
+            "ledgers": [str(name) for name in ledgers if str(name).strip()],
+            "company": body.get("company"),
+            "error": body.get("error"),
+        }
+    except requests.RequestException as exc:
+        log.error("[tally_bridge] Failed to fetch purchase ledgers: %s", exc)
+        return {
+            "ledgers": [],
+            "company": None,
+            "error": f"Bridge unreachable at {config.TALLY_BRIDGE_URL}: {exc}",
+        }
+
+
 def push_invoice_via_bridge(invoice_id: str, *, force: bool = False) -> TallyPushResult:
     url = f"{config.TALLY_BRIDGE_URL}/push/invoice/{invoice_id}"
     try:

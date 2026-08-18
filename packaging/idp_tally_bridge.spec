@@ -25,6 +25,7 @@ a = Analysis(
         "tally",
         "tally.pipeline",
         "tally.create_voucher",
+        "tally.tally_details",
         "tally.env_sync",
         "tally.invoice_data_retriver",
         "tally.configurations",

@@ -95,7 +95,7 @@ def ensure_layout(root: Path) -> None:
         if added == ["<created>"]:
             print(
                 f"Created {tally_env} from .env.example — set TALLY_COMPANY, "
-                "TALLY_VOUCHER_TYPE, and TALLY_PURCHASE_LEDGER before pushing to Tally."
+                "TALLY_VOUCHER_TYPE, and TALLY_PURCHASE_LEDGER (or use Settings -> Ledger Settings)."
             )
         elif added:
             print(f"Added missing tally-bridge .env keys: {', '.join(added)}")

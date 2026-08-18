@@ -61,7 +61,7 @@ dist/IDP-Invoice/
   idp-api/idp-api.exe
   idp-watcher/idp-watcher.exe
   tally-bridge/tally-bridge.exe   ← Tally voucher bridge (port 8001)
-  tally-bridge/xml_scripts/       ← voucher XML template
+  tally-bridge/xml_scripts/       ← voucher + ledger list XML templates
   tally-bridge/.env.example       ← TallyPrime URL, company, voucher type, purchase ledger
   frontend/                ← built React UI
   .env.example
@@ -90,8 +90,10 @@ dist/IDP-Invoice/
    - `TALLY_URL=http://localhost:9000` (TallyPrime HTTP port)
    - `TALLY_COMPANY=` exact company name open in TallyPrime
    - `TALLY_VOUCHER_TYPE=Purchase` — must match the voucher type name in TallyPrime
-   - `TALLY_PURCHASE_LEDGER=Purchase A/c` — ledger used in inventory accounting allocations
+   - `TALLY_PURCHASE_LEDGER=Purchase A/c` — default fallback if nothing is saved in the UI
    - Use the same `MONGO_URI` / `MONGO_DB` as the main app
+   Open **Settings → Ledger Settings** in the UI to load purchase ledgers dynamically from
+   Tally Prime and save your selection (stored in MongoDB; used on every voucher push).
 7. Double-click **Start IDP Invoice.exe**
 8. Browser opens at `http://localhost:8000`
 9. Drop invoice files in `invoices_data/to_be_processed/` (or upload via the UI)
@@ -104,6 +106,7 @@ When invoices are flagged for human review, the app can send email alerts config
 SMTP credentials live in the portable `.env` (not in the UI):
 
 ```env
+IDP_APP_URL=http://localhost:8000
 SMTP_HOST=smtp.example.com
 SMTP_PORT=587
 SMTP_USER=your-smtp-user
@@ -112,7 +115,15 @@ SMTP_FROM=noreply@example.com
 SMTP_USE_TLS=true
 ```
 
-Trigger modes: **Immediate**, **Scheduled digest** (frequency in minutes), or **Threshold only**.
+`IDP_APP_URL` is used in notification emails as the link to the HITL review page
+(`/?hitl=1` on the Home screen).
+
+Trigger modes and email formats:
+
+- **Immediate** — subject `IDP-HITL Alert - Invoice no: <invoice number>` with timestamp,
+  invoice number, recorded extracted values, and reason(s) for human review.
+- **Scheduled digest / Threshold** — subject `IDP-HITL Scheduled Alert` with pending count,
+  review-page link, and a table of invoice numbers with their reason(s).
 
 On build and on each launcher start, missing keys from `.env.example` (including commented
 SMTP placeholders) are merged into an existing `.env` without overwriting values you already set.

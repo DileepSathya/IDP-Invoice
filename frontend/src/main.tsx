@@ -8,6 +8,7 @@ import { ErpSettings } from "./pages/ErpSettings";
 import { NotificationSettings } from "./pages/NotificationSettings";
 import { Chat } from "./pages/Chat";
 import { Settings } from "./pages/Settings";
+import { LedgerSettings } from "./pages/LedgerSettings";
 import { AccountMenu } from "./components/AccountMenu";
 import "./styles.css";
 
@@ -39,6 +40,7 @@ const AppLayout: React.FC = () => {
           <Route path="/erp" element={<Erp />} />
           <Route path="/erp/settings" element={<ErpSettings />} />
           <Route path="/settings/notifications" element={<NotificationSettings />} />
+          <Route path="/settings/ledger" element={<LedgerSettings />} />
           <Route path="/chat" element={<Chat />} />
           <Route path="/settings" element={<Settings />} />
         </Routes>

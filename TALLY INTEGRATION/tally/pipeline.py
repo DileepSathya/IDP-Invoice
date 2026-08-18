@@ -28,6 +28,33 @@ MONGO_DB = os.environ.get("MONGO_DB", "IDP")
 MONGO_COLLECTION = os.environ.get("MONGO_INVOICES_COLLECTION", "invoices")
 
 
+def _load_purchase_ledger_setting() -> str:
+    default = os.environ.get("TALLY_PURCHASE_LEDGER", "Purchase A/c").strip() or "Purchase A/c"
+    try:
+        from pymongo import MongoClient
+
+        client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=2000)
+        doc = client[MONGO_DB]["erp_settings"].find_one({"_id": "tally_settings"}) or {}
+        value = str(doc.get("purchase_ledger") or "").strip()
+        if value:
+            return value
+    except Exception as exc:
+        logger.debug("[tally_pipeline] Could not load purchase ledger from MongoDB: %s", exc)
+    return default
+
+
+def _inject_purchase_ledger(doc: dict[str, Any]) -> dict[str, Any]:
+    """Ensure gemini.json.purchase_ledger is set from app settings before voucher build."""
+    doc = dict(doc)
+    gemini = dict(doc.get("gemini") or {})
+    json_data = dict(gemini.get("json") or {})
+    if not str(json_data.get("purchase_ledger") or "").strip():
+        json_data["purchase_ledger"] = _load_purchase_ledger_setting()
+    gemini["json"] = json_data
+    doc["gemini"] = gemini
+    return doc
+
+
 def _vendor_name(doc: dict[str, Any]) -> str:
     gemini_json = (doc.get("gemini") or {}).get("json") or {}
     additional = gemini_json.get("additional_fields") or {}
@@ -89,6 +116,8 @@ def push_invoice_document(doc: dict[str, Any]) -> dict[str, Any]:
         }
 
     logger.info("[tally_pipeline] Creating voucher for invoice '%s' (_id=%s)", invoice_number, invoice_id)
+
+    doc = _inject_purchase_ledger(doc)
 
     result = create_voucher.send_template_to_tally(
         TALLY_URL=TALLY_URL,
