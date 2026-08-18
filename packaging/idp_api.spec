@@ -57,6 +57,7 @@ a = Analysis(
         "watchdog.observers.polling",
         "backend",
         "backend.api",
+        "backend.auth",
         "backend.app_paths",
         "backend.app_logging",
         "backend.run_api",

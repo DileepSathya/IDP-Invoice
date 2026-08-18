@@ -160,8 +160,8 @@ call :ensure_frontend
 
 start "frontend" cmd /k "cd /d %~dp0frontend && npm run dev"
 
-REM Open default browser pointing at the frontend
-start "" "http://localhost:5173/"
+REM Open default browser pointing at the frontend login page
+start "" "http://localhost:5173/login"
 
 "%VENV_PY%" -m uvicorn backend.api:app --host 0.0.0.0 --port 8000
 

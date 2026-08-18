@@ -18,12 +18,20 @@ from urllib import error as urllib_error
 from bson import ObjectId
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from backend.app_paths import app_dir, frontend_dist_dir, load_app_dotenv
+from backend.auth import (
+    SESSION_COOKIE,
+    SESSION_MAX_AGE,
+    create_session_token,
+    requires_dashboard_auth,
+    validate_session_token,
+    verify_credentials,
+)
 from backend.agent_settings import (
     SUPPORTED_MODELS,
     get_agent_settings,
@@ -1466,6 +1474,17 @@ def get_pdf_preview_page(filename: str, page: int = Query(1, ge=1)) -> Response:
 
 
 @app.middleware("http")
+async def require_dashboard_auth_middleware(request: Request, call_next):
+    path = request.url.path
+    method = request.method
+    if requires_dashboard_auth(method, path):
+        username = validate_session_token(request.cookies.get(SESSION_COOKIE))
+        if not username:
+            return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+    return await call_next(request)
+
+
+@app.middleware("http")
 async def add_observability_and_security_headers(request: Request, call_next):
     request_id = request.headers.get("x-request-id") or str(uuid4())
     request.state.request_id = request_id
@@ -1530,6 +1549,48 @@ def _all_distinct_values(field: str) -> list[str]:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class AuthStatusResponse(BaseModel):
+    authenticated: bool
+    username: Optional[str] = None
+
+
+@app.post("/auth/login", response_model=AuthStatusResponse)
+def auth_login(payload: LoginRequest, response: Response) -> AuthStatusResponse:
+    if not verify_credentials(payload.username, payload.password):
+        raise HTTPException(status_code=401, detail="Invalid login ID or password.")
+
+    token = create_session_token(payload.username)
+    response.set_cookie(
+        key=SESSION_COOKIE,
+        value=token,
+        httponly=True,
+        samesite="lax",
+        max_age=SESSION_MAX_AGE,
+        path="/",
+    )
+    user_audit_logger.info("dashboard_login username=%s", payload.username)
+    return AuthStatusResponse(authenticated=True, username=payload.username)
+
+
+@app.post("/auth/logout")
+def auth_logout(response: Response) -> dict[str, bool]:
+    response.delete_cookie(key=SESSION_COOKIE, path="/")
+    return {"ok": True}
+
+
+@app.get("/auth/me", response_model=AuthStatusResponse)
+def auth_me(request: Request) -> AuthStatusResponse:
+    username = validate_session_token(request.cookies.get(SESSION_COOKIE))
+    if not username:
+        return AuthStatusResponse(authenticated=False)
+    return AuthStatusResponse(authenticated=True, username=username)
 
 
 @app.get("/license", response_model=LicenseProfileResponse)

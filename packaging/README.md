@@ -76,6 +76,17 @@ dist/IDP-Invoice/
 
 ## First run (end user)
 
+### Dashboard login
+
+The web dashboard requires sign-in. Credentials are **hardcoded in the application**
+(`backend/auth.py` in source; bundled inside `idp-api.exe` in portable builds).
+No `.env` configuration is needed for login.
+
+| Field | Value |
+|-------|-------|
+| Login ID | `IDP_admin` |
+| Password | `idpadmin@123` |
+
 1. Copy `.env.example` → `.env`
 2. Set `GEMINI_API_KEY`
 3. Keep `MONGO_URI=mongodb://localhost:27017` to use bundled MongoDB
@@ -95,7 +106,10 @@ dist/IDP-Invoice/
    Open **Settings → Ledger Settings** in the UI to load purchase ledgers dynamically from
    Tally Prime and save your selection (stored in MongoDB; used on every voucher push).
 7. Double-click **Start IDP Invoice.exe**
-8. Browser opens at `http://localhost:8000`
+8. Browser opens at `http://localhost:8000/login` — sign in with the hardcoded dashboard
+   credentials in `backend/auth.py`:
+   - Login ID: `IDP_admin`
+   - Password: `idpadmin@123`
 9. Drop invoice files in `invoices_data/to_be_processed/` (or upload via the UI)
 
 ### HITL email notifications (optional)
@@ -161,6 +175,9 @@ cd frontend && npm run build
 cd ..
 venv\Scripts\python.exe -m backend.run_api
 ```
+
+Open `http://localhost:8000/login` and sign in with `IDP_admin` / `idpadmin@123`
+(credentials are hardcoded in `backend/auth.py`, not in `.env`).
 
 Tally bridge (separate terminal, when `TALLY_ENABLED=true`):
 

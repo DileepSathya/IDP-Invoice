@@ -1385,6 +1385,70 @@ tbody tr:nth-child(even) {
   color: #fecaca;
 }
 
+.login-page {
+  min-height: 100dvh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem;
+}
+
+.login-card {
+  width: 100%;
+  max-width: 420px;
+  padding: 2rem;
+  border-radius: 1.25rem;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  background: rgba(15, 23, 42, 0.92);
+  box-shadow: 0 24px 48px rgba(2, 6, 23, 0.45);
+}
+
+.login-title {
+  margin: 0 0 0.35rem;
+  font-size: 1.5rem;
+}
+
+.login-subtitle {
+  margin: 0 0 1.5rem;
+  color: #9ca3af;
+  font-size: 0.95rem;
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.login-label {
+  font-size: 0.85rem;
+  color: #cbd5e1;
+}
+
+.login-input {
+  width: 100%;
+  border-radius: 0.75rem;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(2, 6, 23, 0.65);
+  color: #f8fafc;
+  padding: 0.65rem 0.85rem;
+  font-size: 0.95rem;
+}
+
+.login-input:focus {
+  outline: 2px solid rgba(99, 102, 241, 0.55);
+  outline-offset: 1px;
+}
+
+.login-submit {
+  margin-top: 0.75rem;
+  width: 100%;
+}
+
+.account-menu-logout {
+  color: #fca5a5;
+}
+
 .chat-page {
   flex: 1 1 auto;
   min-height: 0;

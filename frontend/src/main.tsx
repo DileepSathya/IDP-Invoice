@@ -9,7 +9,9 @@ import { NotificationSettings } from "./pages/NotificationSettings";
 import { Chat } from "./pages/Chat";
 import { Settings } from "./pages/Settings";
 import { LedgerSettings } from "./pages/LedgerSettings";
+import { Login } from "./pages/Login";
 import { AccountMenu } from "./components/AccountMenu";
+import { ProtectedRoute } from "./components/ProtectedRoute";
 import "./styles.css";
 
 const AppLayout: React.FC = () => {
@@ -52,7 +54,17 @@ const AppLayout: React.FC = () => {
 const App: React.FC = () => {
   return (
     <BrowserRouter>
-      <AppLayout />
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route
+          path="/*"
+          element={
+            <ProtectedRoute>
+              <AppLayout />
+            </ProtectedRoute>
+          }
+        />
+      </Routes>
     </BrowserRouter>
   );
 };

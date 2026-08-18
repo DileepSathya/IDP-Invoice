@@ -5,6 +5,7 @@ import {
   LicenseProfile,
   fetchAgentSettings,
   fetchLicenseProfile,
+  logoutDashboard,
   saveAgentSettings,
 } from "../api";
 
@@ -113,6 +114,15 @@ export const AccountMenu: React.FC = () => {
     }
   };
 
+  const handleLogout = async () => {
+    try {
+      await logoutDashboard();
+    } finally {
+      setOpen(false);
+      navigate("/login", { replace: true });
+    }
+  };
+
   return (
     <div className="account-menu" ref={menuRef}>
       <button
@@ -158,6 +168,13 @@ export const AccountMenu: React.FC = () => {
               <span className="account-menu-tab-arrow" aria-hidden="true">
                 →
               </span>
+            </button>
+            <button
+              type="button"
+              className="account-menu-tab account-menu-tab-link account-menu-logout"
+              onClick={() => void handleLogout()}
+            >
+              Log out
             </button>
           </div>
 

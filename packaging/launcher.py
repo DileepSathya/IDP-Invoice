@@ -185,7 +185,7 @@ def wait_for_postgres(port: int, timeout: float = 120.0) -> bool:
 
 
 def wait_for_api(port: int, timeout: float = 180.0) -> bool:
-    url = f"http://127.0.0.1:{port}/invoices"
+    url = f"http://127.0.0.1:{port}/health"
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
@@ -350,7 +350,7 @@ def main() -> None:
 
         print(f"Waiting for API on port {api_port}...")
         if wait_for_api(api_port):
-            url = f"http://127.0.0.1:{api_port}/"
+            url = f"http://127.0.0.1:{api_port}/login"
             print(f"Opening {url}")
             webbrowser.open(url)
         else:

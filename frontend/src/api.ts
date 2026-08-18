@@ -137,6 +137,43 @@ const JSON_HEADERS = {
   "Content-Type": "application/json",
 };
 
+async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  return fetch(input, { ...init, credentials: "include" });
+}
+
+export type AuthStatus = {
+  authenticated: boolean;
+  username?: string | null;
+};
+
+export async function fetchAuthStatus(): Promise<AuthStatus> {
+  const res = await apiFetch("/api/auth/me");
+  if (!res.ok) {
+    throw new Error(`Failed to check auth status (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function loginDashboard(username: string, password: string): Promise<AuthStatus> {
+  const res = await apiFetch("/api/auth/login", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ username, password }),
+  });
+  if (!res.ok) {
+    const detail = await res.text();
+    throw new Error(detail || `Login failed (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function logoutDashboard(): Promise<void> {
+  const res = await apiFetch("/api/auth/logout", { method: "POST" });
+  if (!res.ok) {
+    throw new Error(`Logout failed (${res.status})`);
+  }
+}
+
 export async function fetchInvoices(
   filters: InvoiceFilters = {},
 ): Promise<InvoiceListResponse> {
@@ -150,7 +187,7 @@ export async function fetchInvoices(
   const query = params.toString();
   const url = query ? `/api/invoices?${query}` : "/api/invoices";
 
-  const res = await fetch(url);
+  const res = await apiFetch(url);
   if (!res.ok) {
     throw new Error(`Failed to load invoices (${res.status})`);
   }
@@ -161,7 +198,7 @@ export async function uploadInvoice(file: File): Promise<InvoiceSummary> {
   const form = new FormData();
   form.append("file", file);
 
-  const res = await fetch("/api/upload", {
+  const res = await apiFetch("/api/upload", {
     method: "POST",
     body: form,
   });
@@ -204,7 +241,7 @@ export async function updateInvoice(
   id: string,
   payload: InvoiceUpdatePayload,
 ): Promise<InvoiceSummary> {
-  const res = await fetch(`/api/invoices/${id}`, {
+  const res = await apiFetch(`/api/invoices/${id}`, {
     method: "PATCH",
     headers: JSON_HEADERS,
     body: JSON.stringify(payload),
@@ -219,7 +256,7 @@ export async function updateInvoice(
 export async function humanApproveInvoice(
   id: string,
 ): Promise<InvoiceSummary> {
-  const res = await fetch(`/api/invoices/${id}/human-approve`, {
+  const res = await apiFetch(`/api/invoices/${id}/human-approve`, {
     method: "POST",
   });
   if (!res.ok) {
@@ -243,7 +280,7 @@ export async function addInvoiceLineItem(
     amount_after_tax: string;
   }> = {},
 ): Promise<InvoiceSummary> {
-  const res = await fetch(`/api/invoices/${id}/line-items`, {
+  const res = await apiFetch(`/api/invoices/${id}/line-items`, {
     method: "POST",
     headers: JSON_HEADERS,
     body: JSON.stringify(payload),
@@ -259,7 +296,7 @@ export async function deleteInvoiceLineItem(
   invoiceId: string,
   lineItemIndex: number,
 ): Promise<void> {
-  const res = await fetch(`/api/invoices/${invoiceId}/line-items/${lineItemIndex}`, {
+  const res = await apiFetch(`/api/invoices/${invoiceId}/line-items/${lineItemIndex}`, {
     method: "DELETE",
   });
   if (!res.ok) {
@@ -275,7 +312,7 @@ export async function deleteInvoices(
     return { requested_count: 0, deleted_count: 0 };
   }
 
-  const res = await fetch("/api/invoices/delete", {
+  const res = await apiFetch("/api/invoices/delete", {
     method: "POST",
     headers: JSON_HEADERS,
     body: JSON.stringify({ ids }),
@@ -288,7 +325,7 @@ export async function deleteInvoices(
 }
 
 export async function fetchLicenseProfile(): Promise<LicenseProfile> {
-  const res = await fetch("/api/license");
+  const res = await apiFetch("/api/license");
   if (!res.ok) {
     throw new Error(`Failed to load license profile (${res.status})`);
   }
@@ -296,7 +333,7 @@ export async function fetchLicenseProfile(): Promise<LicenseProfile> {
 }
 
 export async function fetchPdfPageCount(filename: string): Promise<number> {
-  const res = await fetch(`/api/raw-pdf-info/${encodeURIComponent(filename)}`);
+  const res = await apiFetch(`/api/raw-pdf-info/${encodeURIComponent(filename)}`);
   if (!res.ok) {
     throw new Error(`Failed to load PDF info (${res.status})`);
   }
@@ -322,7 +359,7 @@ export type ConfigStatus = {
 };
 
 export async function fetchAgentSettings(): Promise<AgentSettings> {
-  const res = await fetch("/api/agent-settings");
+  const res = await apiFetch("/api/agent-settings");
   if (!res.ok) {
     throw new Error(`Failed to load AI agent settings (${res.status})`);
   }
@@ -333,7 +370,7 @@ export async function saveAgentSettings(
   model: string,
   apiKey: string,
 ): Promise<AgentSettings> {
-  const res = await fetch("/api/agent-settings", {
+  const res = await apiFetch("/api/agent-settings", {
     method: "PUT",
     headers: JSON_HEADERS,
     body: JSON.stringify({ model, api_key: apiKey }),
@@ -346,7 +383,7 @@ export async function saveAgentSettings(
 }
 
 export async function fetchConfigStatus(): Promise<ConfigStatus> {
-  const res = await fetch("/api/config-status");
+  const res = await apiFetch("/api/config-status");
   if (!res.ok) {
     throw new Error(`Failed to load configuration status (${res.status})`);
   }
@@ -354,7 +391,7 @@ export async function fetchConfigStatus(): Promise<ConfigStatus> {
 }
 
 export async function fetchPipelineStatus(): Promise<PipelineStatus> {
-  const res = await fetch("/api/telemetry/pipeline-status");
+  const res = await apiFetch("/api/telemetry/pipeline-status");
   if (!res.ok) {
     throw new Error(`Failed to load pipeline status (${res.status})`);
   }
@@ -407,7 +444,7 @@ export async function pushInvoiceToTally(
   force = false,
 ): Promise<TallyPushResponse> {
   const qs = force ? "?force=true" : "";
-  const res = await fetch(`/api/tally/push/${encodeURIComponent(invoiceId)}${qs}`, {
+  const res = await apiFetch(`/api/tally/push/${encodeURIComponent(invoiceId)}${qs}`, {
     method: "POST",
   });
   if (!res.ok) {
@@ -418,7 +455,7 @@ export async function pushInvoiceToTally(
 }
 
 export async function fetchErpSyncSettings(): Promise<ErpSyncSettings> {
-  const res = await fetch("/api/erp/settings");
+  const res = await apiFetch("/api/erp/settings");
   if (!res.ok) {
     throw new Error(`Failed to load ERP sync settings (${res.status})`);
   }
@@ -429,7 +466,7 @@ export async function saveErpSyncSettings(
   mode: ErpSyncMode,
   frequencyMinutes: number,
 ): Promise<ErpSyncSettings> {
-  const res = await fetch("/api/erp/settings", {
+  const res = await apiFetch("/api/erp/settings", {
     method: "PUT",
     headers: JSON_HEADERS,
     body: JSON.stringify({ mode, frequency_minutes: frequencyMinutes }),
@@ -442,7 +479,7 @@ export async function saveErpSyncSettings(
 }
 
 export async function forceErpSync(): Promise<ErpSyncSettings> {
-  const res = await fetch("/api/erp/sync", { method: "POST" });
+  const res = await apiFetch("/api/erp/sync", { method: "POST" });
   if (!res.ok) {
     const msg = await res.text();
     throw new Error(msg || `Failed to start ERP sync (${res.status})`);
@@ -465,7 +502,7 @@ export type TallyLedgerSettings = {
 };
 
 export async function fetchTallyPurchaseLedgers(): Promise<TallyPurchaseLedgers> {
-  const res = await fetch("/api/tally/purchase-ledgers");
+  const res = await apiFetch("/api/tally/purchase-ledgers");
   if (!res.ok) {
     const msg = await res.text();
     throw new Error(msg || `Failed to load purchase ledgers (${res.status})`);
@@ -474,7 +511,7 @@ export async function fetchTallyPurchaseLedgers(): Promise<TallyPurchaseLedgers>
 }
 
 export async function fetchTallyLedgerSettings(): Promise<TallyLedgerSettings> {
-  const res = await fetch("/api/tally/ledger-settings");
+  const res = await apiFetch("/api/tally/ledger-settings");
   if (!res.ok) {
     const msg = await res.text();
     throw new Error(msg || `Failed to load ledger settings (${res.status})`);
@@ -485,7 +522,7 @@ export async function fetchTallyLedgerSettings(): Promise<TallyLedgerSettings> {
 export async function saveTallyLedgerSettings(
   purchaseLedger: string,
 ): Promise<TallyLedgerSettings> {
-  const res = await fetch("/api/tally/ledger-settings", {
+  const res = await apiFetch("/api/tally/ledger-settings", {
     method: "PUT",
     headers: JSON_HEADERS,
     body: JSON.stringify({ purchase_ledger: purchaseLedger }),
@@ -516,7 +553,7 @@ export type HitlNotificationSettings = {
 };
 
 export async function fetchHitlNotificationSettings(): Promise<HitlNotificationSettings> {
-  const res = await fetch("/api/notifications/hitl-settings");
+  const res = await apiFetch("/api/notifications/hitl-settings");
   if (!res.ok) {
     throw new Error(`Failed to load HITL notification settings (${res.status})`);
   }
@@ -530,7 +567,7 @@ export async function saveHitlNotificationSettings(payload: {
   digest_frequency_minutes: number;
   pending_threshold: number;
 }): Promise<HitlNotificationSettings> {
-  const res = await fetch("/api/notifications/hitl-settings", {
+  const res = await apiFetch("/api/notifications/hitl-settings", {
     method: "PUT",
     headers: JSON_HEADERS,
     body: JSON.stringify(payload),
@@ -543,7 +580,7 @@ export async function saveHitlNotificationSettings(payload: {
 }
 
 export async function sendHitlNotificationTest(): Promise<{ success: boolean; message: string }> {
-  const res = await fetch("/api/notifications/hitl-settings/test", { method: "POST" });
+  const res = await apiFetch("/api/notifications/hitl-settings/test", { method: "POST" });
   if (!res.ok) {
     const msg = await res.text();
     throw new Error(msg || `Failed to send test email (${res.status})`);
@@ -570,7 +607,7 @@ export function setChatSessionId(sessionId: string): void {
 }
 
 export async function fetchChatSuggestions(): Promise<string[]> {
-  const res = await fetch("/api/chat/suggestions");
+  const res = await apiFetch("/api/chat/suggestions");
   if (!res.ok) {
     throw new Error(`Failed to load chat suggestions (${res.status})`);
   }
@@ -582,7 +619,7 @@ export async function fetchChatSession(sessionId: string): Promise<{
   session_id: string;
   messages: ChatMessage[];
 }> {
-  const res = await fetch(`/api/chat/session/${encodeURIComponent(sessionId)}`);
+  const res = await apiFetch(`/api/chat/session/${encodeURIComponent(sessionId)}`);
   if (!res.ok) {
     throw new Error(`Failed to load chat session (${res.status})`);
   }
@@ -593,7 +630,7 @@ export async function chat(
   question: string,
   sessionId?: string | null,
 ): Promise<ChatResponse> {
-  const res = await fetch("/api/chat", {
+  const res = await apiFetch("/api/chat", {
     method: "POST",
     headers: JSON_HEADERS,
     body: JSON.stringify({
@@ -614,7 +651,7 @@ export async function chat(
 
 export async function fetchSearchValues(field: SearchField): Promise<string[]> {
   const params = new URLSearchParams({ field });
-  const res = await fetch(`/api/invoices/search/values?${params.toString()}`);
+  const res = await apiFetch(`/api/invoices/search/values?${params.toString()}`);
   if (!res.ok) {
     throw new Error(`Failed to load search values (${res.status})`);
   }
@@ -627,7 +664,7 @@ export async function fetchSearchSuggestions(
   query: string,
 ): Promise<string[]> {
   const params = new URLSearchParams({ field, q: query });
-  const res = await fetch(`/api/invoices/search/suggestions?${params.toString()}`);
+  const res = await apiFetch(`/api/invoices/search/suggestions?${params.toString()}`);
   if (!res.ok) {
     throw new Error(`Failed to load search suggestions (${res.status})`);
   }
@@ -638,7 +675,7 @@ export async function fetchSearchSuggestions(
 export async function fetchInvoiceJsonEditor(
   id: string,
 ): Promise<InvoiceJsonEditorResponse> {
-  const res = await fetch(`/api/invoices/${id}/json-editor`);
+  const res = await apiFetch(`/api/invoices/${id}/json-editor`);
   if (!res.ok) {
     const msg = await res.text();
     throw new Error(msg || `Failed to load invoice editor data (${res.status})`);
@@ -650,7 +687,7 @@ export async function fetchInvoiceJsonEditor(
 export async function fetchInvoiceErpExport(
   id: string,
 ): Promise<InvoiceJsonEditorResponse> {
-  const res = await fetch(`/api/invoices/${id}/erp-export`);
+  const res = await apiFetch(`/api/invoices/${id}/erp-export`);
   if (!res.ok) {
     const msg = await res.text();
     throw new Error(msg || `Failed to export invoice JSON (${res.status})`);
@@ -665,7 +702,7 @@ export async function saveInvoiceJsonEditor(
     line_items: Record<string, unknown>[];
   },
 ): Promise<InvoiceSummary> {
-  const res = await fetch(`/api/invoices/${id}/json-editor`, {
+  const res = await apiFetch(`/api/invoices/${id}/json-editor`, {
     method: "PUT",
     headers: JSON_HEADERS,
     body: JSON.stringify(payload),
