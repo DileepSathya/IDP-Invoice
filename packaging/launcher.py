@@ -187,12 +187,18 @@ def wait_for_postgres(port: int, timeout: float = 120.0) -> bool:
 def wait_for_api(port: int, timeout: float = 180.0) -> bool:
     url = f"http://127.0.0.1:{port}/health"
     deadline = time.time() + timeout
+    attempt = 0
     while time.time() < deadline:
+        attempt += 1
         try:
             with urllib.request.urlopen(url, timeout=3) as resp:
                 if resp.status < 500:
+                    if attempt > 1:
+                        print(f"API is ready (checked /health after {attempt} attempt(s)).")
                     return True
         except (urllib.error.URLError, TimeoutError, OSError):
+            if attempt == 1 or attempt % 10 == 0:
+                print(f"Waiting for API on {url} ...")
             time.sleep(1.0)
     return False
 
@@ -353,6 +359,15 @@ def main() -> None:
             url = f"http://127.0.0.1:{api_port}/login"
             print(f"Opening {url}")
             webbrowser.open(url)
+            print(
+                "After login, use Health in the nav bar (or Home alerts) to verify "
+                ".env, MongoDB, license, and services."
+            )
+            print(
+                "Use http://127.0.0.1:{0}/ (not localhost) so login sessions persist.".format(
+                    api_port
+                )
+            )
         else:
             print("[WARN] API did not respond in time. Check logs/idp.log")
 

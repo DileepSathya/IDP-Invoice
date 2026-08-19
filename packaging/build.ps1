@@ -92,6 +92,10 @@ if (-not $SkipFrontend) {
     if (-not (Test-Path "dist\index.html")) {
         throw "Frontend build failed - dist\index.html missing."
     }
+    $builtAssets = Get-ChildItem -Path "dist\assets" -Filter "index-*.js" -ErrorAction SilentlyContinue
+    if (-not $builtAssets) {
+        throw "Frontend build failed - dist\assets\index-*.js missing."
+    }
     Pop-Location
 } else {
     Write-Host "`n[1/6] Skipping frontend build."
@@ -251,7 +255,10 @@ Write-Host "  4. Place license.lic next to Start IDP Invoice.exe (see licensing\
 Write-Host "  5. (Optional) Set TALLY_ENABLED=true in .env and configure tally-bridge\.env (TALLY_URL, TALLY_COMPANY, TALLY_VOUCHER_TYPE, TALLY_PURCHASE_LEDGER)."
 Write-Host "     Then open Settings -> Ledger Settings in the UI to pick the purchase ledger from Tally Prime."
 Write-Host "  6. (Optional) For HITL email alerts, set IDP_APP_URL and SMTP_* in .env and configure Settings -> HITL Email Notifications in the UI."
-Write-Host "  7. Sign in at /login with the hardcoded dashboard credentials in backend/auth.py"
-Write-Host "     (Login ID: IDP_admin, Password: idpadmin@123)."
+Write-Host "  7. Sign in at http://127.0.0.1:8000/login (launcher waits for API health first)."
+Write-Host "     Credentials are hardcoded in backend/auth.py (Login ID: IDP_admin, Password: idpadmin@123)."
+Write-Host "     Use 127.0.0.1 — not localhost — so session cookies persist across restarts."
+Write-Host "  8. Open Health in the nav bar (or Home alerts) to verify .env, MongoDB, license, and services."
+Write-Host "     API endpoint: GET /api/system-health (same in dev and portable builds)."
 Write-Host "Bundled MongoDB starts automatically when MONGO_URI points to localhost."
 Write-Host "po-db.exe handles bundled/external PostgreSQL, schema bootstrap, and CSV watching."

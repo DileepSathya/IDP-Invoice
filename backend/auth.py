@@ -68,6 +68,7 @@ API_PATH_PREFIXES: tuple[str, ...] = (
     "/license",
     "/agent-settings",
     "/config-status",
+    "/system-health",
     "/erp",
     "/notifications",
     "/tally",

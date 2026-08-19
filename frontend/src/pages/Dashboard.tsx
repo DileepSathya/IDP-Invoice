@@ -1,12 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   InvoiceSummary,
   InvoiceListResponse,
   SearchField,
   LicenseProfile,
-  ConfigStatus,
-  fetchConfigStatus,
+  fetchSystemHealth,
+  SystemHealth,
   fetchLicenseProfile,
   fetchPipelineStatus,
   fetchSearchSuggestions,
@@ -146,7 +146,7 @@ export const Dashboard: React.FC = () => {
   const [saveConfirmOpen, setSaveConfirmOpen] = useState(false);
   const [saveComment, setSaveComment] = useState("");
   const [licenseProfile, setLicenseProfile] = useState<LicenseProfile | null>(null);
-  const [configStatus, setConfigStatus] = useState<ConfigStatus | null>(null);
+  const [systemHealth, setSystemHealth] = useState<SystemHealth | null>(null);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
   const pipelineSnapshotRef = useRef<string | null>(null);
   const [jsonEditorPreviewUrl, setJsonEditorPreviewUrl] = useState<string | null>(null);
@@ -343,13 +343,12 @@ export const Dashboard: React.FC = () => {
     }
   };
 
-  const loadConfigStatus = async () => {
+  const loadSystemHealth = async () => {
     try {
-      const data = await fetchConfigStatus();
-      setConfigStatus(data);
+      const data = await fetchSystemHealth();
+      setSystemHealth(data);
     } catch {
-      // Non-blocking: if the check itself fails, don't block the home screen.
-      setConfigStatus(null);
+      setSystemHealth(null);
     }
   };
 
@@ -487,7 +486,7 @@ export const Dashboard: React.FC = () => {
     pipelineSnapshotRef.current = null;
     void loadInvoices();
     void loadLicenseProfile();
-    void loadConfigStatus();
+    void loadSystemHealth();
   }, []);
 
   useEffect(() => {
@@ -899,8 +898,17 @@ export const Dashboard: React.FC = () => {
     <div className="panel">
       {licenseProfile && <PlanBanner profile={licenseProfile} />}
 
-      {configStatus && !configStatus.configured && (
-        <div className="alert alert-error">{configStatus.message}</div>
+      {systemHealth && systemHealth.overall !== "ok" && (
+        <div className="alert alert-error health-home-alert">
+          <div>
+            {systemHealth.critical_messages.length > 0
+              ? systemHealth.critical_messages.map((message) => <div key={message}>{message}</div>)
+              : "One or more health checks need attention."}
+          </div>
+          <Link to="/health" className="health-home-alert-link">
+            View Health
+          </Link>
+        </div>
       )}
 
       <div className="panel-header">

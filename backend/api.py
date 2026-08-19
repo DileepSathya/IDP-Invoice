@@ -920,6 +920,37 @@ class ConfigStatusResponse(BaseModel):
     message: Optional[str] = None
 
 
+class HealthItemResponse(BaseModel):
+    id: str
+    label: str
+    status: str
+    message: str
+    fix_route: Optional[str] = None
+    fix_hint: Optional[str] = None
+
+
+class HealthSectionResponse(BaseModel):
+    id: str
+    title: str
+    status: str
+    items: List[HealthItemResponse]
+
+
+class HealthLogIssueResponse(BaseModel):
+    time: str
+    level: str
+    message: str
+
+
+class SystemHealthResponse(BaseModel):
+    overall: str
+    checked_at: str
+    summary: dict[str, int]
+    sections: List[HealthSectionResponse]
+    recent_issues: List[HealthLogIssueResponse]
+    critical_messages: List[str]
+
+
 class SearchValuesResponse(BaseModel):
     values: List[str]
 
@@ -1646,6 +1677,13 @@ def get_config_status() -> ConfigStatusResponse:
         "Open the account menu → Settings → AI agent to finish setup before uploading invoices."
     )
     return ConfigStatusResponse(configured=False, missing=missing, message=message)
+
+
+@app.get("/system-health", response_model=SystemHealthResponse)
+def get_system_health() -> SystemHealthResponse:
+    from backend.system_health import collect_system_health
+
+    return SystemHealthResponse(**collect_system_health())
 
 
 class ErpSyncSettingsResponse(BaseModel):

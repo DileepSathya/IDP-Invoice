@@ -1,10 +1,13 @@
 import React, { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { ServerStartingCard } from "../components/ServerStartingCard";
+import { useServerReady } from "../hooks/useServerReady";
 import { fetchAuthStatus, loginDashboard } from "../api";
 
 export const Login: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
+  const { ready: serverReady, timedOut: serverTimedOut } = useServerReady();
   const from =
     (location.state as { from?: string } | null)?.from && (location.state as { from?: string }).from !== "/login"
       ? (location.state as { from?: string }).from!
@@ -17,6 +20,10 @@ export const Login: React.FC = () => {
   const [checking, setChecking] = useState(true);
 
   useEffect(() => {
+    if (!serverReady) {
+      return;
+    }
+
     let cancelled = false;
     (async () => {
       try {
@@ -25,7 +32,7 @@ export const Login: React.FC = () => {
           navigate(from, { replace: true });
         }
       } catch {
-        // Stay on login page.
+        // Stay on login page once the server is up.
       } finally {
         if (!cancelled) {
           setChecking(false);
@@ -35,13 +42,16 @@ export const Login: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [from, navigate]);
+  }, [from, navigate, serverReady]);
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     setError(null);
     setSubmitting(true);
     try {
+      if (!serverReady) {
+        throw new Error("Server is still starting. Please wait and try again.");
+      }
       await loginDashboard(username.trim(), password);
       navigate(from, { replace: true });
     } catch (e) {
@@ -50,6 +60,15 @@ export const Login: React.FC = () => {
       setSubmitting(false);
     }
   };
+
+  if (!serverReady) {
+    return (
+      <ServerStartingCard
+        title="Waiting for API server to start…"
+        timedOut={serverTimedOut}
+      />
+    );
+  }
 
   if (checking) {
     return (

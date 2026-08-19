@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Navigate, useLocation } from "react-router-dom";
+import { ServerStartingCard } from "./ServerStartingCard";
+import { useServerReady } from "../hooks/useServerReady";
 import { fetchAuthStatus } from "../api";
 
 type Props = {
@@ -8,10 +10,16 @@ type Props = {
 
 export const ProtectedRoute: React.FC<Props> = ({ children }) => {
   const location = useLocation();
+  const { ready: serverReady, timedOut: serverTimedOut } = useServerReady();
   const [checking, setChecking] = useState(true);
   const [authenticated, setAuthenticated] = useState(false);
 
   useEffect(() => {
+    if (!serverReady) {
+      setChecking(true);
+      return;
+    }
+
     let cancelled = false;
     (async () => {
       try {
@@ -32,15 +40,18 @@ export const ProtectedRoute: React.FC<Props> = ({ children }) => {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [serverReady]);
 
-  if (checking) {
+  if (!serverReady || checking) {
     return (
-      <div className="login-page">
-        <div className="login-card">
-          <p className="login-subtitle">Checking session…</p>
-        </div>
-      </div>
+      <ServerStartingCard
+        title={
+          serverReady
+            ? "Checking session…"
+            : "Waiting for API server to start…"
+        }
+        timedOut={serverTimedOut}
+      />
     );
   }
 

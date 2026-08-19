@@ -146,6 +146,19 @@ export type AuthStatus = {
   username?: string | null;
 };
 
+export async function fetchHealth(): Promise<boolean> {
+  try {
+    const res = await apiFetch("/api/health");
+    if (!res.ok) {
+      return false;
+    }
+    const data = (await res.json()) as { status?: string };
+    return data.status === "ok";
+  } catch {
+    return false;
+  }
+}
+
 export async function fetchAuthStatus(): Promise<AuthStatus> {
   const res = await apiFetch("/api/auth/me");
   if (!res.ok) {
@@ -161,7 +174,15 @@ export async function loginDashboard(username: string, password: string): Promis
     body: JSON.stringify({ username, password }),
   });
   if (!res.ok) {
-    const detail = await res.text();
+    let detail = await res.text();
+    try {
+      const parsed = JSON.parse(detail) as { detail?: string };
+      if (parsed.detail) {
+        detail = parsed.detail;
+      }
+    } catch {
+      // Use raw response text.
+    }
     throw new Error(detail || `Login failed (${res.status})`);
   }
   return res.json();
@@ -357,6 +378,45 @@ export type ConfigStatus = {
   missing: string[];
   message: string | null;
 };
+
+export type HealthItem = {
+  id: string;
+  label: string;
+  status: "ok" | "warning" | "error" | "info" | "disabled";
+  message: string;
+  fix_route?: string | null;
+  fix_hint?: string | null;
+};
+
+export type HealthSection = {
+  id: string;
+  title: string;
+  status: HealthItem["status"];
+  items: HealthItem[];
+};
+
+export type HealthLogIssue = {
+  time: string;
+  level: string;
+  message: string;
+};
+
+export type SystemHealth = {
+  overall: "ok" | "warning" | "error";
+  checked_at: string;
+  summary: { ok: number; warning: number; error: number };
+  sections: HealthSection[];
+  recent_issues: HealthLogIssue[];
+  critical_messages: string[];
+};
+
+export async function fetchSystemHealth(): Promise<SystemHealth> {
+  const res = await apiFetch("/api/system-health");
+  if (!res.ok) {
+    throw new Error(`Failed to load system health (${res.status})`);
+  }
+  return res.json();
+}
 
 export async function fetchAgentSettings(): Promise<AgentSettings> {
   const res = await apiFetch("/api/agent-settings");

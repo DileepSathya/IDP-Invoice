@@ -158,18 +158,66 @@ echo(
 call :start_tally_bridge
 call :ensure_frontend
 
+echo Starting frontend dev server in a new window ...
 start "frontend" cmd /k "cd /d %~dp0frontend && npm run dev"
 
-REM Open default browser pointing at the frontend login page
+echo Starting API server in a new window ...
+start "api" cmd /k ""%VENV_PY%" -m uvicorn backend.api:app --host 0.0.0.0 --port 8000"
+
+call :wait_for_api
+if errorlevel 1 (
+  echo [WARN] API health check timed out — login page will keep retrying automatically.
+)
+
+call :wait_for_frontend
+if errorlevel 1 (
+  echo [WARN] Frontend dev server did not respond in time — refresh the browser if the page is blank.
+)
+
+echo Opening login page ...
 start "" "http://localhost:5173/login"
 
-"%VENV_PY%" -m uvicorn backend.api:app --host 0.0.0.0 --port 8000
-
 echo(
-echo API server exited. Frontend window may still be open.
-echo Press any key to close this window.
+echo [OK] Watcher, frontend ^(5173^), and API ^(8000^) are running in separate windows.
+echo      Login waits for the API automatically; refresh if the server was still starting.
+echo(
+echo Press any key to close this launcher window. Services keep running.
 pause >nul
 exit /b 0
+
+:wait_for_api
+echo Waiting for API at http://127.0.0.1:8000/health ...
+set "API_ATTEMPTS=0"
+:wait_for_api_loop
+powershell -NoProfile -Command "try { $r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 'http://127.0.0.1:8000/health'; if ($r.StatusCode -ge 200 -and $r.StatusCode -lt 500) { exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>&1
+if not errorlevel 1 (
+  echo API is ready.
+  exit /b 0
+)
+set /a API_ATTEMPTS+=1
+if !API_ATTEMPTS! geq 90 (
+  echo [WARN] API did not respond within 3 minutes.
+  exit /b 1
+)
+timeout /t 2 /nobreak >nul
+goto :wait_for_api_loop
+
+:wait_for_frontend
+echo Waiting for frontend dev server at http://127.0.0.1:5173/ ...
+set "FE_ATTEMPTS=0"
+:wait_for_frontend_loop
+powershell -NoProfile -Command "try { $r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 'http://127.0.0.1:5173/'; if ($r.StatusCode -ge 200 -and $r.StatusCode -lt 500) { exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>&1
+if not errorlevel 1 (
+  echo Frontend dev server is ready.
+  exit /b 0
+)
+set /a FE_ATTEMPTS+=1
+if !FE_ATTEMPTS! geq 60 (
+  echo [WARN] Frontend did not respond within 2 minutes.
+  exit /b 1
+)
+timeout /t 2 /nobreak >nul
+goto :wait_for_frontend_loop
 
 :ensure_frontend
 REM Ensure frontend dependencies (run npm install once if needed)

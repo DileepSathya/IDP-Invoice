@@ -9,9 +9,11 @@ import { NotificationSettings } from "./pages/NotificationSettings";
 import { Chat } from "./pages/Chat";
 import { Settings } from "./pages/Settings";
 import { LedgerSettings } from "./pages/LedgerSettings";
+import { Health } from "./pages/Health";
 import { Login } from "./pages/Login";
 import { AccountMenu } from "./components/AccountMenu";
 import { ProtectedRoute } from "./components/ProtectedRoute";
+import { useCanonicalAppHost } from "./hooks/useCanonicalAppHost";
 import "./styles.css";
 
 const AppLayout: React.FC = () => {
@@ -28,6 +30,7 @@ const AppLayout: React.FC = () => {
               Home
             </NavLink>
             <NavLink to="/dashboard">Dashboard</NavLink>
+            <NavLink to="/health">Health</NavLink>
             <NavLink to="/erp">ERP</NavLink>
             <NavLink to="/chat">Chatbot</NavLink>
             <NavLink to="/settings">Settings</NavLink>
@@ -39,6 +42,7 @@ const AppLayout: React.FC = () => {
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/dashboard" element={<AnalyticsDashboard />} />
+          <Route path="/health" element={<Health />} />
           <Route path="/erp" element={<Erp />} />
           <Route path="/erp/settings" element={<ErpSettings />} />
           <Route path="/settings/notifications" element={<NotificationSettings />} />
@@ -52,6 +56,8 @@ const AppLayout: React.FC = () => {
 };
 
 const App: React.FC = () => {
+  useCanonicalAppHost();
+
   return (
     <BrowserRouter>
       <Routes>
