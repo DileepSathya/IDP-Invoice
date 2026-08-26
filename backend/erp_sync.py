@@ -1,17 +1,9 @@
-"""Full-invoice ERP/PO_DB re-sync.
+"""Full-invoice ERP re-sync against Tally master data in MongoDB.
 
-backend/hitl_status.py already re-matches an individual invoice against
-PO_DB every time it's processed or edited. What that can't do on its own is
-notice changes made directly in Postgres - e.g. a vendor added to
-vendor_master, or a new item_master row - for invoices that were already
-stored before that change happened. `run_erp_sync()` closes that gap: it
-walks every invoice in MongoDB, re-runs matching with fresh PO_DB data, and
-persists anything that changed.
+Re-runs matching for every stored invoice so changes after a Tally master refresh
+(or invoice edits in scheduled mode) propagate to HITL status and download gates.
 
-Triggered two ways:
-- Manually, via the ERP page's "Force Sync" button (run_erp_sync_async()).
-- Automatically, via backend/erp_scheduler.py, when the ERP Settings mode is
-  "scheduled" (see backend/erp_settings.py).
+Triggered manually (ERP Force Sync) or via backend/erp_scheduler.py.
 """
 
 from __future__ import annotations
@@ -112,7 +104,7 @@ def _sync_one_invoice(coll: Any, doc: dict[str, Any]) -> bool:
     )
 
     # Keep the physical file in sync with the Mongo status it now resolves to. Without
-    # this, a doc whose PO_DB mismatch just got fixed by this sync (HITL True -> False,
+    # this, a doc whose ERP mismatch just got fixed by this sync (HITL True -> False,
     # no human involved) would report status=0 ("system processed") while its file is
     # still sitting in HITL_pending - the "Processed" count on the Dashboard would look
     # like it moved without the file actually being there, and it'd disagree with the
@@ -139,17 +131,17 @@ def _sync_one_invoice(coll: Any, doc: dict[str, Any]) -> bool:
 def run_erp_sync() -> dict[str, Any]:
     """Synchronous full re-sync. Safe to call directly (blocks until done) or
     via run_erp_sync_async() from a request handler. No-ops (without taking
-    the sync lock) if PO_DB isn't configured, so this is harmless to call
+    the sync lock) if ERP master data isn't configured, so this is harmless to call
     speculatively."""
     if not erp_db.is_configured():
-        logger.info("[erp_sync] PO_DB not configured - skipping sync.")
-        return {"scanned": 0, "updated": 0, "errored": 0, "skipped_reason": "PO_DB not configured"}
+        logger.info("[erp_sync] ERP master data not configured - skipping sync.")
+        return {"scanned": 0, "updated": 0, "errored": 0, "skipped_reason": "ERP master data not configured"}
 
     if not erp_settings.mark_sync_started():
         logger.info("[erp_sync] Sync already in progress - skipping this trigger.")
         return {"scanned": 0, "updated": 0, "errored": 0, "skipped_reason": "Sync already in progress"}
 
-    # Fresh Postgres data for this pass, not whatever was cached from the last invoice upload.
+    # Fresh Tally master cache for this pass.
     erp_db.invalidate_cache()
 
     coll = get_invoices_collection()

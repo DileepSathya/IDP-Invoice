@@ -73,6 +73,49 @@ def ping_bridge() -> tuple[bool, Optional[str]]:
         return False, f"Bridge unreachable at {config.TALLY_BRIDGE_URL}: {exc}"
 
 
+def fetch_all_masters_from_bridge() -> dict[str, Any]:
+    if not config.TALLY_BRIDGE_URL:
+        return {
+            "success": False,
+            "company": None,
+            "vendors": [],
+            "items": [],
+            "po_headers": [],
+            "po_details": [],
+            "errors": ["TALLY_BRIDGE_URL is not set"],
+            "error": "TALLY_BRIDGE_URL is not set",
+        }
+    try:
+        resp = requests.get(
+            f"{config.TALLY_BRIDGE_URL}/masters/all",
+            timeout=config.TALLY_BRIDGE_TIMEOUT,
+        )
+        resp.raise_for_status()
+        body = resp.json()
+        return {
+            "success": bool(body.get("success")),
+            "company": body.get("company"),
+            "vendors": body.get("vendors") or [],
+            "items": body.get("items") or [],
+            "po_headers": body.get("po_headers") or [],
+            "po_details": body.get("po_details") or [],
+            "errors": body.get("errors") or [],
+            "error": "; ".join(body.get("errors") or []) or None,
+        }
+    except requests.RequestException as exc:
+        log.error("[tally_bridge] Failed to fetch master data: %s", exc)
+        return {
+            "success": False,
+            "company": None,
+            "vendors": [],
+            "items": [],
+            "po_headers": [],
+            "po_details": [],
+            "errors": [str(exc)],
+            "error": str(exc),
+        }
+
+
 def fetch_purchase_ledgers_from_bridge() -> dict[str, Any]:
     if not config.TALLY_BRIDGE_URL:
         return {"ledgers": [], "company": None, "error": "TALLY_BRIDGE_URL is not set"}

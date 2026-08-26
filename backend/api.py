@@ -193,8 +193,8 @@ def _collect_telemetry_overview_counts() -> TelemetryOverviewResponse:
             human_approved_files += 1
 
         # backend/erp_matching.py stamps `erp_hitl_reasons` on every invoice it has ever
-        # matched against PO_DB (an empty list means it matched cleanly). Docs that were
-        # never matched (no seller/PO/line items, or matched before PO_DB was configured)
+        # matched against ERP master data (an empty list means it matched cleanly). Docs that were
+        # never matched (no seller/PO/line items, or matched before ERP master data was configured)
         # don't have this key and are excluded from both counts below.
         erp_reasons = additional_fields.get("erp_hitl_reasons")
         if isinstance(erp_reasons, list):
@@ -846,8 +846,8 @@ class InvoiceSummary(BaseModel):
     hitl_remarks: Optional[List[str]] = None
     deblurred_applied: Optional[bool] = None
     human_approved: Optional[bool] = None
-    # ERP / PO_DB (Postgres) fuzzy-match results — see backend/erp_matching.py.
-    # Populated only when POSTGRES_HOST is configured; null/None otherwise.
+    # ERP / ERP master data (Tally master data in MongoDB) fuzzy-match results — see backend/erp_matching.py.
+    # Populated only when Tally master data is configured; null/None otherwise.
     po_id: Optional[str] = None
     vendor_id: Optional[str] = None
     vendor_match_score: Optional[Any] = None
@@ -856,7 +856,7 @@ class InvoiceSummary(BaseModel):
     po_business_unit: Optional[str] = None
     item_id: Optional[str] = None
     item_match_score: Optional[Any] = None
-    # True when PO_DB matching is current and left no vendor/item/PO gaps (see erp_match_status.py).
+    # True when ERP master data matching is current and left no vendor/item/PO gaps (see erp_match_status.py).
     erp_matching_complete: bool = False
     # Tally push status — bridge to TALLY INTEGRATION service (backend/tally_integration/)
     erp_remark: Optional[str] = None
@@ -1305,12 +1305,12 @@ def _sync_hitl_and_status(
     if new_human_approved != existing_human_approved:
         update_doc["gemini.json.additional_fields.human_approved"] = new_human_approved
 
-    # ERP/PO_DB match results (backend/erp_matching.py) — when run_erp_matching_now=True,
+    # ERP/ERP master data match results (backend/erp_matching.py) — when run_erp_matching_now=True,
     # _calculate_hitl_flag() above mutates additional_fields (and gemini_json["line_items"]
     # item_id/item_match_score) in place, so persist those alongside HITL so edits (e.g.
     # correcting the seller name or PO ID in the JSON editor) re-match and stick.
     # `erp_hitl_reasons` is the cache read-only callers (e.g. the polled invoice list) reuse
-    # instead of re-querying Postgres — see calculate_hitl_flag(run_erp_matching_now=...).
+    # instead of re-querying Tally master data in MongoDB — see calculate_hitl_flag(run_erp_matching_now=...).
     # Skip rewriting line_items on read-only passes: nothing changed, so it'd just be a
     # no-op Mongo write on every poll for every invoice.
     for erp_key in (
@@ -1326,6 +1326,8 @@ def _sync_hitl_and_status(
             update_doc[f"gemini.json.additional_fields.{erp_key}"] = additional_fields.get(erp_key)
     if run_erp_matching_now and isinstance(gemini_json.get("line_items"), list):
         update_doc["gemini.json.line_items"] = gemini_json.get("line_items")
+    if run_erp_matching_now and gemini_json.get("po_id") is not None:
+        update_doc["gemini.json.po_id"] = gemini_json.get("po_id")
 
     if update_doc:
         try:
@@ -1399,14 +1401,16 @@ async def _app_lifespan(app: FastAPI):
 
     from backend.erp_scheduler import start_erp_scheduler
     from backend.hitl_notification_scheduler import start_hitl_notification_scheduler
+    from backend.tally_master_scheduler import start_tally_master_scheduler
 
     start_erp_scheduler()
     start_hitl_notification_scheduler()
+    start_tally_master_scheduler()
 
-    # Kick off one ERP/PO_DB re-sync on every app start so "Last synced"/"Next sync" on the
+    # Kick off one ERP/ERP master data re-sync on every app start so "Last synced"/"Next sync" on the
     # ERP page reflect reality immediately, instead of waiting out whatever was configured
     # before the restart (which could be minutes to hours, depending on frequency). No-ops
-    # harmlessly if PO_DB isn't configured (see erp_sync.run_erp_sync) and runs on a
+    # harmlessly if ERP master data isn't configured (see erp_sync.run_erp_sync) and runs on a
     # background thread so app startup itself isn't blocked on it.
     from backend import erp_db
     from backend.erp_sync import run_erp_sync_async
@@ -1743,6 +1747,46 @@ class TallyLedgerSettingsUpdate(BaseModel):
     purchase_ledger: str
 
 
+class TallyMasterSyncResult(BaseModel):
+    vendors: int = 0
+    items: int = 0
+    po_headers: int = 0
+    po_lines: int = 0
+    errors: list[str] = []
+    success: bool = False
+
+
+class TallyMasterSyncStatusResponse(BaseModel):
+    tally_configured: bool = False
+    configured: bool = False
+    syncing: bool = False
+    company: Optional[str] = None
+    last_synced_at: Optional[str] = None
+    last_result: Optional[TallyMasterSyncResult] = None
+    last_error: Optional[str] = None
+    counts: dict[str, int] = {}
+
+
+class TallyMasterSchedulerSettingsResponse(BaseModel):
+    mode: str
+    frequency_minutes: int
+    rematch_after_scheduled_refresh: bool = False
+    next_refresh_at: Optional[str] = None
+    tally_configured: bool = False
+
+
+class TallyMasterSchedulerSettingsUpdate(BaseModel):
+    mode: str
+    frequency_minutes: int
+    rematch_after_scheduled_refresh: bool = False
+
+
+class TallyMasterRefreshResponse(BaseModel):
+    started: bool
+    message: str
+    status: Optional[TallyMasterSyncStatusResponse] = None
+
+
 class ErpSyncSettingsUpdate(BaseModel):
     mode: str
     frequency_minutes: int
@@ -1807,10 +1851,11 @@ def force_erp_sync_route() -> ErpSyncSettingsResponse:
     from backend.erp_sync import run_erp_sync_async
 
     if not erp_db.is_configured():
-        raise HTTPException(
-            status_code=400,
-            detail="PO_DB is not configured (POSTGRES_HOST is not set) - nothing to sync.",
+        detail = (
+            "ERP master data is not configured — refresh Tally master data in "
+            "Settings → Tally Master Data."
         )
+        raise HTTPException(status_code=400, detail=detail)
     run_erp_sync_async()
     return _erp_sync_settings_response()
 
@@ -1993,6 +2038,141 @@ def put_tally_ledger_settings_route(payload: TallyLedgerSettingsUpdate) -> Tally
         purchase_ledger=settings["purchase_ledger"],
         updated_at=purchase_ledger_updated_at_iso(settings),
         tally_configured=True,
+    )
+
+
+def _tally_master_status_response() -> TallyMasterSyncStatusResponse:
+    from backend import erp_db, tally_master_db
+    from backend.tally_integration.config import is_tally_configured
+
+    meta = tally_master_db.get_sync_metadata()
+    last_result_raw = meta.get("last_result") or {}
+    last_result = None
+    if isinstance(last_result_raw, dict) and last_result_raw:
+        last_result = TallyMasterSyncResult(
+            vendors=int(last_result_raw.get("vendors") or 0),
+            items=int(last_result_raw.get("items") or 0),
+            po_headers=int(last_result_raw.get("po_headers") or 0),
+            po_lines=int(last_result_raw.get("po_lines") or 0),
+            errors=list(last_result_raw.get("errors") or []),
+            success=bool(last_result_raw.get("success")),
+        )
+
+    counts = {
+        "vendors": len(tally_master_db.fetch_vendor_master()) if is_tally_configured() else 0,
+        "items": len(tally_master_db.fetch_item_master()) if is_tally_configured() else 0,
+        "po_headers": len(tally_master_db.fetch_po_header()) if is_tally_configured() else 0,
+        "po_lines": len(tally_master_db.fetch_po_details()) if is_tally_configured() else 0,
+    }
+
+    return TallyMasterSyncStatusResponse(
+        tally_configured=is_tally_configured(),
+        configured=erp_db.is_configured(),
+        syncing=bool(meta.get("syncing")),
+        company=meta.get("company"),
+        last_synced_at=_iso(meta.get("last_synced_at")),
+        last_result=last_result,
+        last_error=meta.get("last_error"),
+        counts=counts,
+    )
+
+
+def _tally_master_scheduler_settings_response() -> TallyMasterSchedulerSettingsResponse:
+    from datetime import timedelta
+
+    from backend.tally_master_settings import (
+        get_tally_master_scheduler_settings,
+        next_refresh_baseline,
+    )
+    from backend.tally_integration.config import is_tally_configured
+
+    s = get_tally_master_scheduler_settings()
+    next_refresh_at = None
+    if s["mode"] == "scheduled":
+        baseline = next_refresh_baseline(s)
+        if baseline is not None:
+            next_refresh_at = baseline + timedelta(minutes=s["frequency_minutes"])
+
+    return TallyMasterSchedulerSettingsResponse(
+        mode=s["mode"],
+        frequency_minutes=s["frequency_minutes"],
+        rematch_after_scheduled_refresh=bool(s.get("rematch_after_scheduled_refresh")),
+        next_refresh_at=_iso(next_refresh_at),
+        tally_configured=is_tally_configured(),
+    )
+
+
+@app.get("/tally/masters/settings", response_model=TallyMasterSchedulerSettingsResponse)
+def get_tally_master_scheduler_settings_route() -> TallyMasterSchedulerSettingsResponse:
+    return _tally_master_scheduler_settings_response()
+
+
+@app.put("/tally/masters/settings", response_model=TallyMasterSchedulerSettingsResponse)
+def put_tally_master_scheduler_settings_route(
+    payload: TallyMasterSchedulerSettingsUpdate,
+) -> TallyMasterSchedulerSettingsResponse:
+    from backend.tally_master_settings import save_tally_master_scheduler_settings
+
+    try:
+        save_tally_master_scheduler_settings(
+            mode=payload.mode,
+            frequency_minutes=payload.frequency_minutes,
+            rematch_after_scheduled_refresh=payload.rematch_after_scheduled_refresh,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _tally_master_scheduler_settings_response()
+
+
+@app.get("/tally/masters/status", response_model=TallyMasterSyncStatusResponse)
+def get_tally_master_status_route() -> TallyMasterSyncStatusResponse:
+    return _tally_master_status_response()
+
+
+@app.post("/tally/masters/refresh", response_model=TallyMasterRefreshResponse)
+def refresh_tally_masters_route(
+    rematch: bool = Query(default=True, description="Re-match all invoices after refresh"),
+    async_refresh: bool = Query(default=True, alias="async", description="Run refresh in background"),
+) -> TallyMasterRefreshResponse:
+    from backend.tally_integration.config import is_tally_configured
+    from backend.tally_master_sync import run_tally_master_refresh, run_tally_master_refresh_async
+
+    if not is_tally_configured():
+        raise HTTPException(
+            status_code=400,
+            detail="Tally is not configured (set TALLY_ENABLED=true and TALLY_BRIDGE_URL in .env).",
+        )
+
+    if async_refresh:
+        started = run_tally_master_refresh_async(rematch_invoices=rematch)
+        if not started:
+            return TallyMasterRefreshResponse(
+                started=False,
+                message="Tally master refresh is already running.",
+                status=_tally_master_status_response(),
+            )
+        return TallyMasterRefreshResponse(
+            started=True,
+            message="Tally master refresh started — this page updates automatically.",
+            status=_tally_master_status_response(),
+        )
+
+    result = run_tally_master_refresh(rematch_invoices=rematch)
+    if not result.get("success") and result.get("skipped_reason"):
+        return TallyMasterRefreshResponse(
+            started=False,
+            message=str(result.get("skipped_reason")),
+            status=_tally_master_status_response(),
+        )
+    if not result.get("success"):
+        errors = result.get("errors") or []
+        detail = "; ".join(errors) if errors else "Tally master refresh failed"
+        raise HTTPException(status_code=502, detail=detail)
+
+    return TallyMasterRefreshResponse(
+        started=True,
+        message="Tally master data refreshed successfully.",
+        status=_tally_master_status_response(),
     )
 
 
@@ -2335,10 +2515,10 @@ def list_invoices(
                     pass
 
         # Keep HITL and lifecycle status synced. This endpoint is polled every few seconds
-        # by the UI (Dashboard/ERP pages), so skip re-running the Postgres-backed ERP match
+        # by the UI (Dashboard/ERP pages), so skip re-running the Tally master data in MongoDB-backed ERP match
         # here - it reuses whatever vendor/item/PO reasons the last real match run found
         # (ingest, edit, human-approve, or the next Force Sync / scheduled batch) instead of
-        # hitting PO_DB on every single poll.
+        # hitting ERP master data on every single poll.
         hitl_value, status_value = _sync_hitl_and_status(
             coll, doc.get("_id"), gemini_json, run_erp_matching_now=False
         )
@@ -2585,7 +2765,7 @@ def human_approve_invoice(invoice_id: str) -> InvoiceSummary:
     gemini_json["additional_fields"] = additional_fields
 
     # Respect "scheduled" ERP sync mode like the edit/add-line-item/delete-line-item
-    # endpoints do - don't hit Postgres synchronously on every approve click if the
+    # endpoints do - don't hit Tally master data in MongoDB synchronously on every approve click if the
     # configured mode says re-matching should wait for the next scheduled sync/Force Sync.
     from backend.erp_settings import should_match_immediately
 
@@ -2655,7 +2835,7 @@ def export_invoice_erp_json(invoice_id: str) -> InvoiceJsonEditorResponse:
     if not invoice_erp_matching_complete(gemini_json, get_erp_sync_settings()):
         raise HTTPException(
             status_code=403,
-            detail="Invoice download is unavailable until PO_DB matching completes with no unmatched vendor, PO, or line items.",
+            detail="Invoice download is unavailable until ERP matching completes with no unmatched vendor, PO, or line items.",
         )
 
     return _invoice_json_editor_response(doc)
@@ -2687,8 +2867,8 @@ def update_invoice_json_editor(invoice_id: str, payload: InvoiceJsonEditorUpdate
     coll.update_one({"_id": oid}, {"$set": {"gemini.json": gemini_json}})
 
     # Ensure HITL lifecycle flags are updated after manual JSON edits. In "scheduled" ERP
-    # sync mode, skip the synchronous PO_DB re-match here - it'll be picked up by the next
-    # scheduled sync (or Force Sync) instead of hitting Postgres on every save.
+    # sync mode, skip the synchronous ERP master data re-match here - it'll be picked up by the next
+    # scheduled sync (or Force Sync) instead of hitting Tally master data in MongoDB on every save.
     from backend.erp_settings import should_match_immediately
 
     match_now = should_match_immediately()
@@ -3157,7 +3337,7 @@ def update_invoice(invoice_id: str, payload: InvoiceUpdate) -> InvoiceSummary:
             doc = coll.find_one({"_id": oid}) or doc
 
     # Sync HITL/status after any edits. In "scheduled" ERP sync mode, skip the synchronous
-    # PO_DB re-match here - it'll be picked up by the next scheduled sync (or Force Sync).
+    # ERP master data re-match here - it'll be picked up by the next scheduled sync (or Force Sync).
     gemini_json = (doc.get("gemini") or {}).get("json") or {}
     if isinstance(gemini_json, dict):
         from backend.erp_settings import should_match_immediately
@@ -3224,7 +3404,7 @@ def add_invoice_line_item(invoice_id: str, payload: LineItemCreate) -> InvoiceSu
         doc = coll.find_one({"_id": oid}) or doc
 
     # Sync HITL/status after any line-item add. In "scheduled" ERP sync mode, skip the
-    # synchronous PO_DB re-match here - it'll be picked up by the next scheduled sync.
+    # synchronous ERP master data re-match here - it'll be picked up by the next scheduled sync.
     gemini_json = (doc.get("gemini") or {}).get("json") or {}
     if isinstance(gemini_json, dict):
         from backend.erp_settings import should_match_immediately
@@ -3293,7 +3473,7 @@ def delete_invoice_line_item(invoice_id: str, line_item_index: int) -> InvoiceLi
         raise HTTPException(status_code=404, detail="Invoice not found after update.")
 
     # Sync HITL/status after any line-item deletion. In "scheduled" ERP sync mode, skip the
-    # synchronous PO_DB re-match here - it'll be picked up by the next scheduled sync.
+    # synchronous ERP master data re-match here - it'll be picked up by the next scheduled sync.
     gemini_json = (doc.get("gemini") or {}).get("json") or {}
     if isinstance(gemini_json, dict):
         from backend.erp_settings import should_match_immediately

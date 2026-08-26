@@ -1,4 +1,4 @@
-"""Background scheduler for ERP/PO_DB re-syncing.
+"""Background scheduler for ERP re-syncing.
 
 Started once from the FastAPI app's lifespan (backend/api.py). Every
 `_CHECK_INTERVAL_SECONDS` it checks the persisted ERP settings

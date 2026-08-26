@@ -1,6 +1,5 @@
 """Fuzzy-matches extracted invoice fields (seller, line items, PO number) against
-the PO_DB Postgres reference tables (vendor_master, item_master, po_header,
-po_details) and mutates the invoice's gemini_json in place with the results.
+Tally master data stored in MongoDB and mutates the invoice's gemini_json in place.
 
 Scores are 0-100 via rapidfuzz (same scale requested for the feature). A score
 at/above ERP_MATCH_THRESHOLD (default 80, see backend/erp_db.get_match_threshold)
@@ -9,9 +8,9 @@ invoice. Anything below that — or a field that doesn't match any candidate at 
 is left unmatched and produces a HITL reason string explaining why, so it surfaces
 in the same "Reason for Human approval" column the rest of HITL already uses.
 
-This module is a no-op (returns []) whenever PO_DB is not configured (see
-backend/erp_db.is_configured), so installs that haven't set up Postgres yet are
-unaffected.
+This module is a no-op (returns []) whenever ERP master data is not configured
+(see backend/erp_db.is_configured), so installs that haven't refreshed Tally
+masters yet are unaffected.
 """
 
 from __future__ import annotations
@@ -22,6 +21,18 @@ from typing import Any, Optional
 from backend import erp_db
 
 logger = logging.getLogger(__name__)
+
+
+def _vendor_master_label() -> str:
+    return "Tally vendors"
+
+
+def _item_master_label() -> str:
+    return "Tally stock items"
+
+
+def _po_header_label() -> str:
+    return "Tally purchase orders"
 
 
 def _clean(value: Any) -> str:
@@ -166,7 +177,7 @@ def run_erp_matching(gemini_json: dict[str, Any]) -> list[str]:
     """Mutates gemini_json in place with vendor_id / item_id / PO-match results.
     Returns a list of concise HITL reason strings for anything that failed to
     match — the caller (backend/hitl_status.py) folds these into the existing
-    hitl_remarks list. Returns [] immediately if PO_DB is not configured."""
+    hitl_remarks list. Returns [] immediately if ERP master data is not configured."""
     if not erp_db.is_configured():
         return []
     if not isinstance(gemini_json, dict):
@@ -184,7 +195,7 @@ def run_erp_matching(gemini_json: dict[str, Any]) -> list[str]:
         reasons.extend(_match_po_into(gemini_json, additional_fields))
     except Exception as e:
         logger.warning("[ERP matching] Unexpected failure, skipping for this invoice: %s", e)
-        reasons.append("PO_DB matching failed unexpectedly - verify vendor/item/PO manually")
+        reasons.append(f"{erp_db.erp_source_label()} matching failed unexpectedly - verify vendor/item/PO manually")
 
     return reasons
 
@@ -199,7 +210,7 @@ def _match_vendor_into(gemini_json: dict[str, Any], additional_fields: dict[str,
         additional_fields.pop("vendor_id", None)
         additional_fields.pop("erp_vendor_name", None)
         additional_fields["vendor_match_score"] = 0.0
-        return ["Seller/vendor name is missing - cannot match against vendor_master"]
+        return [f"Seller/vendor name is missing - cannot match against {_vendor_master_label()}"]
 
     gst_number = (
         additional_fields.get("gst_number")
@@ -225,8 +236,8 @@ def _match_vendor_into(gemini_json: dict[str, Any], additional_fields: dict[str,
     additional_fields["vendor_match_name"] = None
     additional_fields["erp_vendor_name"] = None
     best_name = result.get("best_candidate_name")
-    hint = f" (closest match: '{best_name}', score {result['score']:.0f})" if best_name else " (no vendors in vendor_master)"
-    return [f"Vendor '{seller}' not found in vendor_master{hint}"]
+    hint = f" (closest match: '{best_name}', score {result['score']:.0f})" if best_name else f" (no vendors in {_vendor_master_label()})"
+    return [f"Vendor '{seller}' not found in {_vendor_master_label()}{hint}"]
 
 
 def _match_items_into(gemini_json: dict[str, Any]) -> list[str]:
@@ -244,13 +255,13 @@ def _match_items_into(gemini_json: dict[str, Any]) -> list[str]:
             # stale match data and flag it, rather than silently skipping. Previously
             # this line item was skipped entirely with no HITL reason, so an invoice
             # could look "fully ERP-matched" while one of its line items was never
-            # actually checked against Postgres.
+            # actually checked against Tally master data.
             li["item_match_score"] = 0.0
             li["item_id"] = None
             li["erp_item_name"] = None
             li["erp_unit"] = None
             li["erp_item_group"] = None
-            reasons.append(f"Item {idx + 1}: no service/description to match against item_master")
+            reasons.append(f"Item {idx + 1}: no service/description to match against {_item_master_label()}")
             continue
 
         result = match_item(description)
@@ -273,16 +284,18 @@ def _match_items_into(gemini_json: dict[str, Any]) -> list[str]:
         li["erp_item_group"] = None
         label = f"Item {idx + 1} ('{description}')"
         best_name = result.get("best_candidate_name")
-        hint = f" (closest match: '{best_name}', score {result['score']:.0f})" if best_name else " (no items in item_master)"
-        reasons.append(f"{label} not found in item_master{hint}")
+        hint = f" (closest match: '{best_name}', score {result['score']:.0f})" if best_name else f" (no items in {_item_master_label()})"
+        reasons.append(f"{label} not found in {_item_master_label()}{hint}")
 
     return reasons
 
 
 def _match_po_into(gemini_json: dict[str, Any], additional_fields: dict[str, Any]) -> list[str]:
+    from backend.tally_integration.config import is_po_not_applicable
+
     po_id = gemini_json.get("po_id")
-    if not _clean(po_id):
-        # Missing PO ID is already flagged elsewhere (calculate_hitl_flag) — avoid a duplicate reason.
+    if not _clean(po_id) or is_po_not_applicable(po_id):
+        # Missing/not-applicable PO is handled elsewhere (calculate_hitl_flag / optional PO mode).
         additional_fields.pop("po_business_unit", None)
         return []
 
@@ -292,8 +305,8 @@ def _match_po_into(gemini_json: dict[str, Any], additional_fields: dict[str, Any
     if not result["matched"]:
         additional_fields["po_business_unit"] = None
         best = result.get("best_candidate_po_id")
-        hint = f" (closest match: '{best}', score {result['score']:.0f})" if best else " (no purchase orders in po_header)"
-        return [f"PO '{po_id}' not found in po_header{hint}"]
+        hint = f" (closest match: '{best}', score {result['score']:.0f})" if best else f" (no purchase orders in {_po_header_label()})"
+        return [f"PO '{po_id}' not found in {_po_header_label()}{hint}"]
 
     additional_fields["po_business_unit"] = result["business_unit"]
     reasons: list[str] = []

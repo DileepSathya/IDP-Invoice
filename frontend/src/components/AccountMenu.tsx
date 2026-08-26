@@ -77,7 +77,7 @@ export const AccountMenu: React.FC = () => {
 
   const goToErp = () => {
     setOpen(false);
-    navigate("/erp/settings");
+    navigate("/settings/tally-masters");
   };
 
   useEffect(() => {
@@ -164,7 +164,7 @@ export const AccountMenu: React.FC = () => {
               className="account-menu-tab account-menu-tab-link"
               onClick={goToErp}
             >
-              ERP
+              Tally Master Data
               <span className="account-menu-tab-arrow" aria-hidden="true">
                 →
               </span>

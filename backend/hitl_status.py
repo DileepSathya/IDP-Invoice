@@ -342,9 +342,13 @@ def calculate_hitl_flag(gemini_json: dict[str, Any], *, run_erp_matching_now: bo
     if date_missing:
         reasons.append("Invoice date is missing")
 
+    from backend.tally_integration.config import is_mandatory_purchase_order, resolve_po_id
+
     po_id_value = normalize_po_id(gemini_json)
+    if not is_mandatory_purchase_order():
+        po_id_value = resolve_po_id(gemini_json)
     po_id_missing = _is_blank(po_id_value)
-    if po_id_missing:
+    if po_id_missing and is_mandatory_purchase_order():
         reasons.append("PO ID is missing")
 
     # Due date and term-to-pay ("Net 30", "30 days", ...) are alternatives for
@@ -378,18 +382,16 @@ def calculate_hitl_flag(gemini_json: dict[str, Any], *, run_erp_matching_now: bo
     line_items_flagged, line_item_reasons = evaluate_line_items(line_items)
     reasons.extend(line_item_reasons)
 
-    # PO_DB (Postgres) vendor / item / PO cross-checks. Optional - a no-op that
-    # returns [] whenever PO_DB isn't configured (see backend/erp_db.is_configured),
-    # so installs that haven't set up Postgres are unaffected. Wrapped defensively
-    # so a PO_DB outage or bad data never breaks the rest of HITL evaluation.
+    # Tally master-data vendor / item / PO cross-checks. Optional — no-op when ERP
+    # is not configured (see backend/erp_db.is_configured). Wrapped defensively
+    # so a Tally bridge outage never breaks the rest of HITL evaluation.
     #
-    # `run_erp_matching_now=False` skips hitting Postgres altogether and instead reuses
-    # whatever reasons the *last real* match run found (stored on the doc). This matters
+    # `run_erp_matching_now=False` skips matching and reuses stored reasons from
+    # the last run. This matters for polling/chat paths that should not re-query
     # because calculate_hitl_flag() also runs on hot read paths (the invoice list endpoint,
     # polled every few seconds by the UI; chat/analytics scans over every invoice) - without
-    # this, an unreachable/misconfigured Postgres would get hammered on every single poll
-    # instead of matching once at ingest/edit time and again only on the next Force Sync or
-    # scheduled batch (backend/erp_sync.py).
+    # this, Tally master data would get re-queried on every poll instead of matching once
+    # at ingest/edit time and again only on the next Force Sync or scheduled batch.
     erp_reasons: list[str] = []
     if run_erp_matching_now:
         try:

@@ -2279,7 +2279,7 @@ tbody tr:nth-child(even) {
   margin-bottom: 0;
 }
 
-/* ERP / PO_DB matching page */
+/* ERP / Tally matching page */
 .erp-cell-stack {
   display: flex;
   flex-direction: column;

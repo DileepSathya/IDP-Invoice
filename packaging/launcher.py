@@ -1,5 +1,5 @@
 """
-Portable launcher: starts bundled MongoDB, PO_DB service, invoice watcher, API, and opens the browser.
+Portable launcher: starts bundled MongoDB, invoice watcher, Tally bridge, API, and opens the browser.
 
 Built as: dist/IDP-Invoice/Start IDP Invoice.exe
 """
@@ -100,22 +100,6 @@ def ensure_layout(root: Path) -> None:
         elif added:
             print(f"Added missing tally-bridge .env keys: {', '.join(added)}")
 
-    po_db_dir = root / "po-db"
-    for name in (
-        "data",
-        "data/completed",
-        "data/ERROR",
-        "pgdata",
-        "logs",
-    ):
-        (po_db_dir / name).mkdir(parents=True, exist_ok=True)
-
-    po_db_config = po_db_dir / "config.ini"
-    po_db_example = po_db_dir / "config.example.ini"
-    if not po_db_config.exists() and po_db_example.exists():
-        shutil.copy(po_db_example, po_db_config)
-        print(f"Created {po_db_config} from config.example.ini.")
-
 
 def _read_env_value(root: Path, key: str, default: str) -> str:
     env_path = root / ".env"
@@ -175,15 +159,6 @@ def wait_for_mongo(port: int, timeout: float = 120.0) -> bool:
     return False
 
 
-def wait_for_postgres(port: int, timeout: float = 120.0) -> bool:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if _port_open("127.0.0.1", port):
-            return True
-        time.sleep(1.0)
-    return False
-
-
 def wait_for_api(port: int, timeout: float = 180.0) -> bool:
     url = f"http://127.0.0.1:{port}/health"
     deadline = time.time() + timeout
@@ -218,15 +193,6 @@ def wait_for_tally_bridge(port: int, timeout: float = 60.0) -> bool:
 
 def _tally_enabled(root: Path) -> bool:
     return _read_env_value(root, "TALLY_ENABLED", "false").strip().lower() in {
-        "true",
-        "1",
-        "yes",
-        "on",
-    }
-
-
-def _po_db_watcher_enabled(root: Path) -> bool:
-    return _read_env_value(root, "PO_DB_WATCHER_ENABLED", "true").strip().lower() in {
         "true",
         "1",
         "yes",
@@ -294,8 +260,6 @@ def main() -> None:
     api_exe = root / "idp-api" / "idp-api.exe"
     watcher_exe = root / "idp-watcher" / "idp-watcher.exe"
     tally_bridge_exe = root / "tally-bridge" / "tally-bridge.exe"
-    po_db_exe = root / "po-db" / "po-db.exe"
-    po_db_dir = root / "po-db"
 
     if not api_exe.is_file():
         print(f"[ERROR] API executable not found: {api_exe}")
@@ -312,26 +276,6 @@ def main() -> None:
                 processes.append(mongo_proc)
         else:
             print("Using external MongoDB from MONGO_URI (bundled MongoDB skipped).")
-
-        if _po_db_watcher_enabled(root) and _read_env_value(root, "POSTGRES_HOST", "localhost").strip():
-            if po_db_exe.is_file():
-                po_db_port = int(_read_env_value(root, "POSTGRES_PORT", "5432"))
-                print(f"Starting PO_DB service: {po_db_exe}")
-                processes.append(_popen_cmd([str(po_db_exe)], po_db_dir))
-                print(f"Waiting for PostgreSQL on port {po_db_port}...")
-                if wait_for_postgres(po_db_port):
-                    print("PostgreSQL is ready.")
-                else:
-                    print(
-                        "[WARN] PostgreSQL did not respond in time. "
-                        "ERP matching may fail until po-db finishes setup."
-                    )
-            else:
-                print(f"[WARN] PO_DB service not found (skipping): {po_db_exe}")
-        elif _po_db_watcher_enabled(root):
-            print("PO_DB service disabled — POSTGRES_HOST is not set.")
-        else:
-            print("PO_DB service disabled (PO_DB_WATCHER_ENABLED=false).")
 
         if watcher_exe.is_file():
             print(f"Starting watcher: {watcher_exe}")
@@ -350,6 +294,8 @@ def main() -> None:
                     print("[WARN] Tally bridge did not respond in time. ERP push may fail until it is up.")
             else:
                 print(f"[WARN] Tally enabled but bridge not found (skipping): {tally_bridge_exe}")
+        else:
+            print("[WARN] TALLY_ENABLED is false — ERP matching and Tally push are disabled.")
 
         print(f"Starting API: {api_exe}")
         processes.append(_popen_cmd([str(api_exe)], root))
@@ -360,8 +306,9 @@ def main() -> None:
             print(f"Opening {url}")
             webbrowser.open(url)
             print(
-                "After login, use Health in the nav bar (or Home alerts) to verify "
-                ".env, MongoDB, license, and services."
+                "After login, refresh Tally master data under Settings → Tally Master Data "
+                "(manual Refresh or Scheduled mode with minutes). "
+                "Then use Health to verify services."
             )
             print(
                 "Use http://127.0.0.1:{0}/ (not localhost) so login sessions persist.".format(

@@ -14,9 +14,10 @@
                 <TDLMESSAGE>
                     <COLLECTION NAME="LedgerCollection">
                         <TYPE>Ledger</TYPE>
-                        <!-- Fetching name and the accounting group it belongs to -->
                         <FETCH>Name</FETCH>
                         <FETCH>Parent</FETCH>
+                        <FETCH>GSTIN</FETCH>
+                        <FETCH>PartyGSTIN</FETCH>
                     </COLLECTION>
                 </TDLMESSAGE>
             </TDL>

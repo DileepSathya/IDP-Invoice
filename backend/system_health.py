@@ -169,38 +169,58 @@ def _check_mongodb() -> dict[str, Any]:
         )
 
 
-def _check_postgres() -> dict[str, Any]:
-    from backend import erp_db
+def _check_erp_master_data() -> dict[str, Any]:
+    from backend import erp_db, tally_master_db
+    from backend.tally_integration.bridge_client import ping_bridge
+    from backend.tally_integration.config import is_tally_configured
 
-    if not erp_db.is_configured():
+    if not is_tally_configured():
         return _item(
-            item_id="postgres",
-            label="PostgreSQL (ERP)",
+            item_id="erp_master",
+            label="ERP master data (Tally)",
             status="disabled",
-            message="POSTGRES_HOST is not set — ERP matching is disabled.",
+            message="TALLY_ENABLED is false — enable Tally for ERP matching.",
+            fix_route="/settings/tally-masters",
+        )
+
+    if not tally_master_db.has_master_data():
+        return _item(
+            item_id="erp_master",
+            label="ERP master data (Tally)",
+            status="warning",
+            message="Tally master data not loaded yet — refresh from Settings.",
+            fix_route="/settings/tally-masters",
+            fix_hint="Open Settings → Tally Master Data and click Refresh from Tally.",
         )
 
     ok, err = erp_db.connection_check()
-    host = _env_value("POSTGRES_HOST")
     if ok:
+        meta = tally_master_db.get_sync_metadata()
+        counts = meta.get("last_result") or {}
         return _item(
-            item_id="postgres",
-            label="PostgreSQL (ERP)",
+            item_id="erp_master",
+            label="ERP master data (Tally)",
             status="ok",
-            message=f"Connected to {host}.",
+            message=(
+                f"Loaded in MongoDB — {counts.get('vendors', '?')} vendors, "
+                f"{counts.get('items', '?')} items, {counts.get('po_headers', '?')} POs."
+            ),
+            fix_route="/settings/tally-masters",
         )
+
+    reachable, bridge_err = ping_bridge()
     return _item(
-        item_id="postgres",
-        label="PostgreSQL (ERP)",
-        status="warning",
-        message=err or f"Cannot connect to PostgreSQL at {host}.",
-        fix_route="/erp/settings",
-        fix_hint="Ensure po-db.exe / PostgreSQL is running and POSTGRES_* values are correct.",
+        item_id="erp_master",
+        label="ERP master data (Tally)",
+        status="warning" if reachable else "error",
+        message=err or bridge_err or "Tally bridge is not reachable.",
+        fix_route="/settings/tally-masters",
+        fix_hint="Start tally-bridge and ensure Tally Prime is open on port 9000.",
     )
 
 
 def _check_services_section(pipeline: dict[str, Any]) -> dict[str, Any]:
-    items = [_check_mongodb(), _check_postgres()]
+    items = [_check_mongodb(), _check_erp_master_data()]
 
     watcher_active = bool(pipeline.get("watcher_active"))
     items.append(
@@ -306,10 +326,60 @@ def _check_integrations_section() -> dict[str, Any]:
                         label="Tally bridge",
                         status="ok" if reachable else "warning",
                         message="Bridge reachable." if reachable else (err or "Bridge not reachable."),
-                        fix_route="/settings/ledger",
+                        fix_route="/settings/tally-masters",
                         fix_hint="Start tally-bridge and ensure TallyPrime is open.",
                     )
                 )
+                try:
+                    from backend import tally_master_db
+
+                    if tally_master_db.has_master_data():
+                        meta = tally_master_db.get_sync_metadata()
+                        last = meta.get("last_synced_at")
+                        synced_label = (
+                            last.isoformat()
+                            if hasattr(last, "isoformat")
+                            else (str(last) if last else "unknown time")
+                        )
+                        items.append(
+                            _item(
+                                item_id="tally_masters",
+                                label="Tally master data",
+                                status="ok",
+                                message=f"Loaded in MongoDB (last refresh: {synced_label}).",
+                                fix_route="/settings/tally-masters",
+                            )
+                        )
+                    else:
+                        items.append(
+                            _item(
+                                item_id="tally_masters",
+                                label="Tally master data",
+                                status="warning",
+                                message="Not loaded — refresh from Settings → Tally Master Data.",
+                                fix_route="/settings/tally-masters",
+                            )
+                        )
+                except Exception:
+                    pass
+                try:
+                    from backend.tally_integration.config import is_mandatory_purchase_order
+
+                    mandatory_po = is_mandatory_purchase_order()
+                    items.append(
+                        _item(
+                            item_id="mandatory_po",
+                            label="Purchase order for Tally push",
+                            status="info",
+                            message=(
+                                "PO ID required before push (MANDATORY_PURCHASE_ORDER=1)."
+                                if mandatory_po
+                                else "Missing PO allowed — invoices push as Not applicable (MANDATORY_PURCHASE_ORDER=0)."
+                            ),
+                        )
+                    )
+                except Exception:
+                    pass
         except Exception as exc:
             items.append(
                 _item(

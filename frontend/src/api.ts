@@ -34,7 +34,7 @@ export type InvoiceSummary = {
   hitl_remarks?: string[] | null;
   deblurred_applied?: boolean | null;
   human_approved?: boolean | null;
-  // ERP / PO_DB (Postgres) fuzzy-match results — see backend/erp_matching.py.
+  // ERP / Tally master-data fuzzy-match results — see backend/erp_matching.py.
   po_id?: string | null;
   vendor_id?: string | null;
   vendor_match_score?: number | null;
@@ -43,7 +43,7 @@ export type InvoiceSummary = {
   po_business_unit?: string | null;
   item_id?: string | null;
   item_match_score?: number | null;
-  /** True when PO_DB matching is current and left no vendor/item/PO gaps. */
+  /** True when ERP matching is current and left no vendor/item/PO gaps. */
   erp_matching_complete?: boolean;
   /** Tally push outcome shown in ERP-Remark column. */
   erp_remark?: string | null;
@@ -522,22 +522,6 @@ export async function fetchErpSyncSettings(): Promise<ErpSyncSettings> {
   return res.json();
 }
 
-export async function saveErpSyncSettings(
-  mode: ErpSyncMode,
-  frequencyMinutes: number,
-): Promise<ErpSyncSettings> {
-  const res = await apiFetch("/api/erp/settings", {
-    method: "PUT",
-    headers: JSON_HEADERS,
-    body: JSON.stringify({ mode, frequency_minutes: frequencyMinutes }),
-  });
-  if (!res.ok) {
-    const msg = await res.text();
-    throw new Error(msg || `Failed to save ERP sync settings (${res.status})`);
-  }
-  return res.json();
-}
-
 export async function forceErpSync(): Promise<ErpSyncSettings> {
   const res = await apiFetch("/api/erp/sync", { method: "POST" });
   if (!res.ok) {
@@ -590,6 +574,108 @@ export async function saveTallyLedgerSettings(
   if (!res.ok) {
     const msg = await res.text();
     throw new Error(msg || `Failed to save ledger settings (${res.status})`);
+  }
+  return res.json();
+}
+
+export type TallyMasterSyncResult = {
+  vendors: number;
+  items: number;
+  po_headers: number;
+  po_lines: number;
+  errors: string[];
+  success: boolean;
+};
+
+export type TallyMasterSyncStatus = {
+  tally_configured: boolean;
+  configured: boolean;
+  syncing: boolean;
+  company?: string | null;
+  last_synced_at?: string | null;
+  last_result?: TallyMasterSyncResult | null;
+  last_error?: string | null;
+  counts: {
+    vendors?: number;
+    items?: number;
+    po_headers?: number;
+    po_lines?: number;
+  };
+};
+
+export type TallyMasterSchedulerMode = "manual" | "scheduled";
+
+export type TallyMasterSchedulerSettings = {
+  mode: TallyMasterSchedulerMode;
+  frequency_minutes: number;
+  rematch_after_scheduled_refresh: boolean;
+  next_refresh_at: string | null;
+  tally_configured: boolean;
+};
+
+export type TallyMasterRefreshResponse = {
+  started: boolean;
+  message: string;
+  status?: TallyMasterSyncStatus;
+};
+
+export async function fetchTallyMasterStatus(): Promise<TallyMasterSyncStatus> {
+  const res = await apiFetch("/api/tally/masters/status");
+  if (!res.ok) {
+    const msg = await res.text();
+    throw new Error(msg || `Failed to load Tally master status (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function refreshTallyMasterData(
+  rematch = true,
+): Promise<TallyMasterRefreshResponse> {
+  const params = new URLSearchParams({
+    rematch: rematch ? "true" : "false",
+    async: "true",
+  });
+  const res = await apiFetch(`/api/tally/masters/refresh?${params.toString()}`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    let msg = await res.text();
+    try {
+      const body = JSON.parse(msg);
+      msg = body.detail || msg;
+    } catch {
+      /* keep raw text */
+    }
+    throw new Error(msg || `Failed to refresh Tally master data (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function fetchTallyMasterSchedulerSettings(): Promise<TallyMasterSchedulerSettings> {
+  const res = await apiFetch("/api/tally/masters/settings");
+  if (!res.ok) {
+    throw new Error(`Failed to load Tally scheduler settings (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function saveTallyMasterSchedulerSettings(
+  mode: TallyMasterSchedulerMode,
+  frequencyMinutes: number,
+  rematchAfterScheduledRefresh: boolean,
+): Promise<TallyMasterSchedulerSettings> {
+  const res = await apiFetch("/api/tally/masters/settings", {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({
+      mode,
+      frequency_minutes: frequencyMinutes,
+      rematch_after_scheduled_refresh: rematchAfterScheduledRefresh,
+    }),
+  });
+  if (!res.ok) {
+    const msg = await res.text();
+    throw new Error(msg || `Failed to save Tally scheduler settings (${res.status})`);
   }
   return res.json();
 }
@@ -743,7 +829,7 @@ export async function fetchInvoiceJsonEditor(
   return (await res.json()) as InvoiceJsonEditorResponse;
 }
 
-/** ERP page download only — blocked until PO_DB matching is complete for this invoice. */
+/** ERP page download only — blocked until ERP matching is complete for this invoice. */
 export async function fetchInvoiceErpExport(
   id: string,
 ): Promise<InvoiceJsonEditorResponse> {

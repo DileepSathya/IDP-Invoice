@@ -360,8 +360,8 @@ def _count_breakdown(col, base_match: dict) -> dict:
             continue
 
         # Read-only aggregate scan over every invoice - reuse the last real ERP match
-        # result (from ingest/edit/Force Sync) instead of hitting Postgres per document
-        # per query, which would otherwise hammer PO_DB on every chat/analytics call.
+        # result (from ingest/edit/Force Sync) instead of re-running ERP matching per document
+        # per query, which would otherwise hammer ERP master lookups on every chat/analytics call.
         hitl_value      = calculate_hitl_flag(gj, run_erp_matching_now=False)
         human_processed = to_bool(af.get("human_processed") or af.get("ever_hitl_true"))
         status          = calculate_status_from_hitl(hitl_value=hitl_value, human_processed=human_processed)
@@ -404,7 +404,7 @@ def _get_hitl_pending_docs(col) -> list[dict]:
             continue
 
         # Read-only scan over every invoice - see _count_breakdown above for why this
-        # reuses the cached ERP match result instead of re-querying Postgres per document.
+        # reuses the cached ERP match result instead of re-running matching per document.
         hitl_value     = calculate_hitl_flag(gj, run_erp_matching_now=False)
         human_processed = to_bool(af.get("human_processed") or af.get("ever_hitl_true"))
         status_value   = calculate_status_from_hitl(hitl_value=hitl_value, human_processed=human_processed)

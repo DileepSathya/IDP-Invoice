@@ -1,4 +1,4 @@
-"""Whether an invoice has completed a current PO_DB (ERP) match — used to gate JSON download."""
+"""Whether an invoice has completed a current ERP master-data match — used to gate JSON download."""
 
 from __future__ import annotations
 
@@ -21,9 +21,9 @@ def invoice_erp_matching_complete(
     gemini_json: dict[str, Any],
     erp_sync_settings: Optional[dict[str, Any]] = None,
 ) -> bool:
-    """True when PO_DB is configured, no sync is in progress, this invoice is not
+    """True when ERP master data is configured, no sync is in progress, this invoice is not
     waiting for a deferred scheduled re-match, the invoice's overall HITL flag is
-    False (i.e. every validation check - not just PO_DB matching - currently passes),
+    False (i.e. every validation check - not just ERP matching - currently passes),
     and the last ERP match run left no unmatched vendor/item/PO reasons."""
     if not erp_db.is_configured():
         return False
@@ -41,7 +41,7 @@ def invoice_erp_matching_complete(
         return False
 
     # The overall HITL flag also covers validation issues that have nothing to do with
-    # PO_DB matching specifically - missing invoice date, missing PO ID, missing payment
+    # ERP matching specifically - missing invoice date, missing PO ID, missing payment
     # term, invoice total vs. sum-of-line-items mismatch, per-line quantity x rate math
     # errors, and low-quality/deblurred scans. Downloads must wait for those to clear
     # too, not just for vendor/item/PO matching - otherwise an invoice still sitting in

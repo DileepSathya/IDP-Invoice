@@ -75,6 +75,9 @@ export const Settings: React.FC = () => {
           <Link to="/settings/notifications" className="button-link">
             HITL Email Notifications
           </Link>
+          <Link to="/settings/tally-masters" className="button-link">
+            Tally Master Data
+          </Link>
           <Link to="/settings/ledger" className="button-link">
             Ledger Settings
           </Link>

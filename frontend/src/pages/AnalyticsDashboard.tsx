@@ -209,7 +209,7 @@ export const AnalyticsDashboard: React.FC = () => {
           {status.erp_configured && (
             <section className="analytics-section">
               <div className="section-header">
-                <h3>ERP — PO_DB Matching</h3>
+                <h3>ERP — Tally Matching</h3>
                 <Link to="/erp" className="button-link">
                   Open ERP page
                 </Link>
@@ -218,13 +218,13 @@ export const AnalyticsDashboard: React.FC = () => {
                 <StatusCard
                   label="Processed for ERP"
                   value={status.erp_matched_files ?? 0}
-                  hint="Vendor, PO, and line items all matched against PO_DB"
+                  hint="Vendor, PO, and line items matched against Tally master data"
                   tone="success"
                 />
                 <StatusCard
                   label="Waiting for human modification"
                   value={status.erp_pending_files ?? 0}
-                  hint="Vendor/item/PO mismatch — needs a correction or a PO_DB update"
+                  hint="Vendor/item/PO mismatch — correct the invoice or refresh Tally master data"
                   tone="warning"
                 />
               </div>

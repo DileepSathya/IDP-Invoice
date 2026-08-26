@@ -4,8 +4,11 @@ import {
   InvoiceSummary,
   InvoiceListResponse,
   ErpSyncSettings,
+  TallyMasterSchedulerSettings,
   fetchInvoices,
   fetchErpSyncSettings,
+  fetchTallyMasterSchedulerSettings,
+  forceErpSync,
   fetchInvoiceErpExport,
   pushInvoiceToTally,
 } from "../api";
@@ -46,7 +49,7 @@ const DownloadButton: React.FC<{
     return (
       <span
         className="download-thumb download-thumb-disabled"
-        title="Download is available once PO_DB matching completes with no unmatched vendor, PO, or line items."
+        title="Download is available once ERP matching completes with no unmatched vendor, PO, or line items."
         aria-disabled="true"
       >
         ⬇
@@ -101,16 +104,11 @@ function FormatTimestamp(iso: string | null | undefined): string {
   return d.toLocaleString();
 }
 
-// next_sync_at is computed server-side (backend/erp_settings.py: next_sync_baseline) from
-// whichever is more recent of the last completed sync or the last settings save, so saving
-// a shorter frequency doesn't make this look like it was already overdue in the past.
-function FormatNextSync(settings: ErpSyncSettings | null): string {
-  if (!settings || !settings.configured) return "—";
-  if (settings.mode !== "scheduled") return "Not scheduled (immediate mode matches per invoice)";
-  if (settings.syncing) return "Running now…";
-  if (!settings.next_sync_at) return "Pending first sync";
-  const next = new Date(settings.next_sync_at);
-  if (Number.isNaN(next.getTime())) return "—";
+function FormatNextTallyRefresh(settings: TallyMasterSchedulerSettings | null): string {
+  if (!settings?.tally_configured) return "—";
+  if (settings.mode !== "scheduled") return "Manual only — configure on Tally Master Data";
+  const next = settings.next_refresh_at ? new Date(settings.next_refresh_at) : null;
+  if (!next || Number.isNaN(next.getTime())) return "Pending first refresh";
   return next.toLocaleString();
 }
 
@@ -172,6 +170,9 @@ export const Erp: React.FC = () => {
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
 
   const [erpSettings, setErpSettings] = useState<ErpSyncSettings | null>(null);
+  const [tallyScheduler, setTallyScheduler] = useState<TallyMasterSchedulerSettings | null>(null);
+  const [forcingSyncNow, setForcingSyncNow] = useState(false);
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
 
   const loadInvoices = useCallback(async (options?: { silent?: boolean }) => {
     const silent = options?.silent ?? false;
@@ -194,25 +195,51 @@ export const Erp: React.FC = () => {
     return () => window.clearInterval(intervalId);
   }, [loadInvoices]);
 
-  // Read-only poll of ERP sync status — used to gate invoice downloads and surface the
-  // "not configured" / "sync unsuccessful" banners. Editing the sync mode/frequency and
-  // triggering a manual sync now lives on its own page (see ErpSettings.tsx).
+  // Read-only poll of ERP sync status — gates downloads and status banners.
   const loadErpSettings = useCallback(async () => {
     try {
       const data = await fetchErpSyncSettings();
       setErpSettings(data);
     } catch {
-      // Non-fatal for this page — the settings page surfaces load errors explicitly.
+      // Non-fatal for this page.
+    }
+  }, []);
+
+  const loadTallyScheduler = useCallback(async () => {
+    try {
+      const data = await fetchTallyMasterSchedulerSettings();
+      setTallyScheduler(data);
+    } catch {
+      // Non-fatal for this page.
     }
   }, []);
 
   useEffect(() => {
     void loadErpSettings();
-    const intervalId = window.setInterval(() => void loadErpSettings(), 5000);
+    void loadTallyScheduler();
+    const intervalId = window.setInterval(() => {
+      void loadErpSettings();
+      void loadTallyScheduler();
+    }, 5000);
     return () => window.clearInterval(intervalId);
-  }, [loadErpSettings]);
+  }, [loadErpSettings, loadTallyScheduler]);
 
-  // Downloads are only allowed once this invoice's PO_DB match is current and complete.
+  const handleForceSync = async () => {
+    try {
+      setForcingSyncNow(true);
+      setSyncMessage(null);
+      setError(null);
+      const data = await forceErpSync();
+      setErpSettings(data);
+      setSyncMessage("Re-match started — this page updates automatically.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to start ERP re-match");
+    } finally {
+      setForcingSyncNow(false);
+    }
+  };
+
+  // Downloads are only allowed once this invoice's ERP match is current and complete.
   // The API exposes erp_matching_complete per row; downloads use /erp-export (gated server-side).
 
   const toggleExpanded = (invoiceId: string) => {
@@ -239,22 +266,32 @@ export const Erp: React.FC = () => {
     <div className="panel">
       <div className="panel-header">
         <div>
-          <h2>ERP — PO_DB Matching</h2>
+          <h2>ERP — Master Data Matching</h2>
           <p>
-            Each invoice&apos;s seller, line items, and PO number are fuzzy-matched against the
-            Postgres PO_DB reference tables (vendor_master, item_master, po_header, po_details).
-            Anything that doesn&apos;t match sits in HITL with the reason shown below.
+            Each invoice&apos;s seller, line items, and PO number are fuzzy-matched against
+            Tally master data stored in MongoDB (vendors, stock items, purchase orders).
+            Refresh master data from Settings → Tally Master Data. Anything that doesn&apos;t
+            match sits in HITL with the reason shown below.
           </p>
         </div>
-        <Link to="/erp/settings" className="button-link">
-          ERP Sync Settings
-        </Link>
+        <div className="panel-header-actions">
+          <button
+            type="button"
+            onClick={() => void handleForceSync()}
+            disabled={forcingSyncNow || !!erpSettings?.syncing || !erpSettings?.configured}
+          >
+            {erpSettings?.syncing ? "Re-matching…" : forcingSyncNow ? "Starting…" : "Force Re-match"}
+          </button>
+          <Link to="/settings/tally-masters" className="button-link">
+            Tally Master Data
+          </Link>
+        </div>
       </div>
 
       {erpSettings?.configured && (
         <div className="erp-settings-sync-times">
           <span className="erp-settings-last-synced">
-            Last synced: {FormatTimestamp(erpSettings.last_synced_at)}
+            Last re-matched: {FormatTimestamp(erpSettings.last_synced_at)}
             {erpSettings.last_sync_result && (
               <>
                 {" "}
@@ -263,7 +300,9 @@ export const Erp: React.FC = () => {
               </>
             )}
           </span>
-          <span className="erp-settings-next-synced">Next sync: {FormatNextSync(erpSettings)}</span>
+          <span className="erp-settings-next-synced">
+            Next Tally refresh: {FormatNextTallyRefresh(tallyScheduler)}
+          </span>
           {erpSettings.tally_configured && erpSettings.last_tally_synced_at && (
             <span className="erp-settings-last-synced">
               Last Tally push: {FormatTimestamp(erpSettings.last_tally_synced_at)}
@@ -284,11 +323,14 @@ export const Erp: React.FC = () => {
 
       {error && <div className="alert alert-error">{error}</div>}
 
+      {syncMessage && !error && <div className="alert">{syncMessage}</div>}
+
       {erpSettings && !erpSettings.configured && (
         <div className="alert">
-          PO_DB is not configured yet (POSTGRES_HOST is not set) — matching will show every
-          invoice as unmatched, and invoice downloads stay disabled until PO_DB matching completes.{" "}
-          <Link to="/erp/settings">Go to ERP Sync Settings</Link>.
+          ERP master data is not loaded yet — open{" "}
+          <Link to="/settings/tally-masters">Settings → Tally Master Data</Link> and click
+          Refresh from Tally (or enable Scheduled refresh). Matching and invoice downloads stay
+          disabled until master data is loaded.
         </div>
       )}
       {erpSettings?.configured && erpSettings.syncing && (
@@ -470,7 +512,7 @@ export const Erp: React.FC = () => {
                           <td colSpan={8}>
                             <div className="invoice-subtable-wrapper">
                               <div className="invoice-subtable-header">
-                                <div className="invoice-subtable-title">Line items — item_master match</div>
+                                <div className="invoice-subtable-title">Line items — stock item match</div>
                               </div>
                               <table className="invoice-subtable">
                                 <thead>

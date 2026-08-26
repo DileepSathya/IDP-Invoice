@@ -289,7 +289,7 @@ def send_test_notification() -> None:
                 "additional_fields": {
                     "hitl_remarks": [
                         "Total amount mismatch",
-                        "Vendor not matched in PO_DB",
+                        "Vendor not matched in ERP master data",
                     ]
                 },
             }
@@ -303,7 +303,7 @@ def send_test_notification() -> None:
                 invoice_number=invoice_number,
                 gemini_json=sample_json,
                 reasons=_hitl_reasons(additional)
-                or ["Total amount mismatch", "Vendor not matched in PO_DB"],
+                or ["Total amount mismatch", "Vendor not matched in ERP master data"],
             )
             + "\n(This is a test message from IDP HITL notification settings.)\n"
         )
@@ -316,7 +316,7 @@ def send_test_notification() -> None:
             },
             {
                 "invoice_number": "SAMPLE-INV-002",
-                "reasons": ["PO ID missing", "Vendor not matched in PO_DB"],
+                "reasons": ["PO ID missing", "Vendor not matched in ERP master data"],
             },
         ]
         body = (

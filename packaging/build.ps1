@@ -3,10 +3,7 @@ param(
     [switch]$SkipFrontend,
     [switch]$SkipPyInstaller,
     [switch]$SkipMongoDB,
-    [switch]$SkipPoDB,
-    [switch]$SkipPostgreSQL,
-    [string]$MongoVersion = "7.0.14",
-    [string]$PostgresVersion = "16.14"
+    [string]$MongoVersion = "7.0.14"
 )
 
 $ErrorActionPreference = "Stop"
@@ -74,7 +71,7 @@ function Test-TallyXmlScripts {
     if (-not (Test-Path $XmlDir)) {
         throw "Tally xml_scripts folder missing: $XmlDir"
     }
-    foreach ($required in @("create_voucher.xml", "ledger_list.xml", "purchase_ledger_list.xml")) {
+    foreach ($required in @("create_voucher.xml", "ledger_list.xml", "purchase_ledger_list.xml", "stock_items.xml")) {
         $path = Join-Path $XmlDir $required
         if (-not (Test-Path $path)) {
             throw "Required Tally XML script missing: $path"
@@ -83,7 +80,7 @@ function Test-TallyXmlScripts {
 }
 
 if (-not $SkipFrontend) {
-    Write-Host "`n[1/6] Building frontend..."
+    Write-Host "`n[1/5] Building frontend..."
     Push-Location (Join-Path $Root "frontend")
     if (-not (Test-Path "node_modules")) {
         npm install
@@ -98,11 +95,11 @@ if (-not $SkipFrontend) {
     }
     Pop-Location
 } else {
-    Write-Host "`n[1/6] Skipping frontend build."
+    Write-Host "`n[1/5] Skipping frontend build."
 }
 
 if (-not $SkipPyInstaller) {
-    Write-Host "`n[2/6] Installing PyInstaller..."
+    Write-Host "`n[2/5] Installing PyInstaller..."
     & $Py -m pip install --upgrade pyinstaller
 
     $tallyBridgeSrc = Join-Path $Root "TALLY INTEGRATION\api_server.py"
@@ -110,8 +107,12 @@ if (-not $SkipPyInstaller) {
         throw "TALLY INTEGRATION source not found ($tallyBridgeSrc). Clone or restore the Tally bridge folder before building."
     }
 
-    Write-Host "`n[3/6] Running PyInstaller (API, watcher, launcher, tally-bridge)..."
+    Write-Host "`n[3/5] Running PyInstaller (API, watcher, launcher, tally-bridge)..."
     New-Item -ItemType Directory -Force -Path $DistRoot, $BuildWork | Out-Null
+
+    Write-Host "Verifying Tally master scheduler modules (bundled into idp-api)..."
+    & $Py -c "import backend.tally_master_settings, backend.tally_master_scheduler; print('  scheduler modules OK')"
+    if ($LASTEXITCODE -ne 0) { throw "Tally master scheduler modules missing from source tree." }
 
     $commonArgs = @(
         "--distpath", $DistRoot,
@@ -121,6 +122,7 @@ if (-not $SkipPyInstaller) {
 
     & $Py -m PyInstaller @commonArgs (Join-Path $Root "packaging\idp_api.spec")
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed for idp_api.spec" }
+    Write-Host "  idp-api.exe built (ERP scheduler + Tally master refresh scheduler bundled)."
 
     & $Py -m PyInstaller @commonArgs (Join-Path $Root "packaging\idp_watcher.spec")
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed for idp_watcher.spec" }
@@ -131,11 +133,11 @@ if (-not $SkipPyInstaller) {
     & $Py -m PyInstaller @commonArgs (Join-Path $Root "packaging\idp_launcher.spec")
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed for idp_launcher.spec" }
 } else {
-    Write-Host "`n[2/6] Skipping PyInstaller."
-    Write-Host "`n[3/6] Skipping PyInstaller."
+    Write-Host "`n[2/5] Skipping PyInstaller."
+    Write-Host "`n[3/5] Skipping PyInstaller."
 }
 
-Write-Host "`n[4/6] Assembling portable folder..."
+Write-Host "`n[4/5] Assembling portable folder..."
 New-Item -ItemType Directory -Force -Path $DistRoot | Out-Null
 
 $frontendOut = Join-Path $DistRoot "frontend"
@@ -216,23 +218,10 @@ if (Test-Path $tallyEnvExampleSrc) {
 }
 
 if (-not $SkipMongoDB) {
-    Write-Host "`n[5/6] Bundling MongoDB $MongoVersion ..."
+    Write-Host "`n[5/5] Bundling MongoDB $MongoVersion ..."
     & (Join-Path $Root "packaging\bundle_mongodb.ps1") -DistRoot $DistRoot -MongoVersion $MongoVersion
 } else {
-    Write-Host "`n[5/6] Skipping MongoDB bundle."
-}
-
-if (-not $SkipPoDB) {
-    Write-Host "`n[6/6] Bundling PO_DB (PostgreSQL + loader/watcher) ..."
-    $poDbArgs = @{
-        DistRoot         = $DistRoot
-        PostgresVersion  = $PostgresVersion
-    }
-    if ($SkipPyInstaller) { $poDbArgs.SkipPyInstaller = $true }
-    if ($SkipPostgreSQL) { $poDbArgs.SkipPostgreSQL = $true }
-    & (Join-Path $Root "packaging\bundle_po_db.ps1") @poDbArgs
-} else {
-    Write-Host "`n[6/6] Skipping PO_DB bundle."
+    Write-Host "`n[5/5] Skipping MongoDB bundle."
 }
 
 Write-Host "`nCopying OCR runtime packages/metadata into frozen bundles ..."
@@ -249,16 +238,18 @@ Write-Host "  $DistRoot"
 Write-Host "  Run: $(Join-Path $DistRoot 'Start IDP Invoice.exe')"
 Write-Host "`nBefore first use:"
 Write-Host "  1. Edit dist\IDP-Invoice\.env and set GEMINI_API_KEY."
-Write-Host "  2. Keep POSTGRES_HOST=localhost for bundled PO_DB (po-db.exe auto-creates DB/tables and watches po-db\data\)."
-Write-Host "  3. Or set IDP_USE_BUNDLED_POSTGRES=0 and POSTGRES_* to use an external PostgreSQL server."
-Write-Host "  4. Place license.lic next to Start IDP Invoice.exe (see licensing\README.md)."
-Write-Host "  5. (Optional) Set TALLY_ENABLED=true in .env and configure tally-bridge\.env (TALLY_URL, TALLY_COMPANY, TALLY_VOUCHER_TYPE, TALLY_PURCHASE_LEDGER)."
-Write-Host "     Then open Settings -> Ledger Settings in the UI to pick the purchase ledger from Tally Prime."
-Write-Host "  6. (Optional) For HITL email alerts, set IDP_APP_URL and SMTP_* in .env and configure Settings -> HITL Email Notifications in the UI."
+Write-Host "  2. Configure dist\IDP-Invoice\tally-bridge\.env (TALLY_URL, TALLY_COMPANY)."
+Write-Host "     Set MANDATORY_PURCHASE_ORDER=0 in .env to push invoices without PO (as Not applicable)."
+Write-Host "     Set MANDATORY_PURCHASE_ORDER=1 to block Tally push when PO ID is missing."
+Write-Host "  3. Sign in, then Settings -> Tally Master Data (Refresh from Tally or Scheduled minutes)."
+Write-Host "     ERP re-match: ERP page -> Force Re-match. No separate ERP settings page."
+Write-Host "  4. Settings -> Ledger Settings to pick the purchase ledger."
+Write-Host "  5. Place license.lic next to Start IDP Invoice.exe (see licensing\README.md)."
+Write-Host "  6. (Optional) For HITL email alerts, set IDP_APP_URL and SMTP_* in .env."
 Write-Host "  7. Sign in at http://127.0.0.1:8000/login (launcher waits for API health first)."
-Write-Host "     Credentials are hardcoded in backend/auth.py (Login ID: IDP_admin, Password: idpadmin@123)."
+Write-Host "     Credentials: IDP_admin / idpadmin@123 (see backend/auth.py)."
 Write-Host "     Use 127.0.0.1 — not localhost — so session cookies persist across restarts."
-Write-Host "  8. Open Health in the nav bar (or Home alerts) to verify .env, MongoDB, license, and services."
-Write-Host "     API endpoint: GET /api/system-health (same in dev and portable builds)."
-Write-Host "Bundled MongoDB starts automatically when MONGO_URI points to localhost."
-Write-Host "po-db.exe handles bundled/external PostgreSQL, schema bootstrap, and CSV watching."
+Write-Host "  8. Open Health to verify .env, MongoDB, Tally master data, and services."
+Write-Host "Bundled MongoDB starts when MONGO_URI points to localhost."
+Write-Host "Tally bridge starts when TALLY_ENABLED=true."
+Write-Host "Tally master refresh scheduler starts automatically with idp-api (no extra service)."

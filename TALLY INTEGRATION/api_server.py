@@ -19,7 +19,9 @@ from pydantic import BaseModel
 
 load_dotenv()
 
+from tally.master_data import fetch_all_masters, fetch_items, fetch_vendors
 from tally.pipeline import push_invoice_by_id
+from tally.purchase_orders import fetch_purchase_orders
 from tally.tally_details import get_purchase_ledgers
 
 logging.basicConfig(level=logging.INFO)
@@ -53,6 +55,16 @@ class PurchaseLedgersResponse(BaseModel):
     ledgers: list[str]
     company: Optional[str] = None
     error: Optional[str] = None
+
+
+class TallyMastersResponse(BaseModel):
+    success: bool
+    company: Optional[str] = None
+    vendors: list[dict[str, Any]] = []
+    items: list[dict[str, Any]] = []
+    po_headers: list[dict[str, Any]] = []
+    po_details: list[dict[str, Any]] = []
+    errors: list[str] = []
 
 
 def _ping_tally() -> tuple[bool, Optional[str]]:
@@ -97,6 +109,61 @@ def list_purchase_ledgers() -> PurchaseLedgersResponse:
     if not ledgers and error:
         logger.warning("[tally_bridge] purchase ledgers fetch failed: %s", error)
     return PurchaseLedgersResponse(ledgers=ledgers, company=company, error=error)
+
+
+@app.get("/masters/all", response_model=TallyMastersResponse)
+def get_all_masters() -> TallyMastersResponse:
+    if not TALLY_COMPANY:
+        return TallyMastersResponse(
+            success=False,
+            company=None,
+            errors=["TALLY_COMPANY is not set in the bridge .env"],
+        )
+    result = fetch_all_masters(TALLY_URL, company_name=TALLY_COMPANY)
+    return TallyMastersResponse(**result)
+
+
+@app.get("/masters/vendors", response_model=TallyMastersResponse)
+def get_vendor_masters() -> TallyMastersResponse:
+    vendors, error = fetch_vendors(TALLY_URL, company_name=TALLY_COMPANY or None)
+    errors = [error] if error else []
+    return TallyMastersResponse(
+        success=not errors,
+        company=TALLY_COMPANY or None,
+        vendors=vendors,
+        errors=errors,
+    )
+
+
+@app.get("/masters/items", response_model=TallyMastersResponse)
+def get_item_masters() -> TallyMastersResponse:
+    items, error = fetch_items(TALLY_URL, company_name=TALLY_COMPANY or None)
+    errors = [error] if error else []
+    return TallyMastersResponse(
+        success=not errors,
+        company=TALLY_COMPANY or None,
+        items=items,
+        errors=errors,
+    )
+
+
+@app.get("/masters/purchase-orders", response_model=TallyMastersResponse)
+def get_purchase_order_masters() -> TallyMastersResponse:
+    if not TALLY_COMPANY:
+        return TallyMastersResponse(
+            success=False,
+            company=None,
+            errors=["TALLY_COMPANY is not set in the bridge .env"],
+        )
+    po_headers, po_details, error = fetch_purchase_orders(TALLY_URL, company_name=TALLY_COMPANY)
+    errors = [error] if error else []
+    return TallyMastersResponse(
+        success=not errors,
+        company=TALLY_COMPANY or None,
+        po_headers=po_headers,
+        po_details=po_details,
+        errors=errors,
+    )
 
 
 @app.post("/push/invoice/{invoice_id}", response_model=PushResponse)

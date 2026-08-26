@@ -74,9 +74,39 @@ def push_invoice_to_tally(doc: dict[str, Any], *, force: bool = False) -> TallyP
     now = datetime.now(timezone.utc)
 
     raw_g = (doc.get("gemini") or {}).get("json") or {}
-    additional_fields = raw_g.get("additional_fields") if isinstance(raw_g, dict) else {}
+    if not isinstance(raw_g, dict):
+        raw_g = {}
+    additional_fields = raw_g.get("additional_fields")
     if not isinstance(additional_fields, dict):
         additional_fields = {}
+
+    blocked, block_reason = config.po_blocks_tally_push(raw_g)
+    if blocked:
+        inv_no = str(raw_g.get("invoice_number") or raw_g.get("invoice") or "")
+        return TallyPushResult(
+            success=False,
+            invoice_id=invoice_id,
+            invoice_number=inv_no,
+            message="Tally push blocked",
+            error_reason=block_reason,
+            tally_company=None,
+            pushed_at=now,
+            skipped=True,
+        )
+
+    if not config.is_mandatory_purchase_order():
+        previous_po = raw_g.get("po_id")
+        resolved_po = config.resolve_po_id(raw_g)
+        if resolved_po and resolved_po != previous_po and doc_id is not None:
+            try:
+                from backend.agents.database import get_invoices_collection
+
+                get_invoices_collection().update_one(
+                    {"_id": doc_id},
+                    {"$set": {"gemini.json.po_id": resolved_po}},
+                )
+            except Exception as exc:
+                log.warning("[tally] Could not persist optional PO value for _id=%s: %s", doc_id, exc)
 
     if not config.is_tally_configured():
         return TallyPushResult(

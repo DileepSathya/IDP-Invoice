@@ -28,6 +28,30 @@ ROUND_OFF_TOLERANCE = float(os.environ.get("TALLY_ROUND_OFF_TOLERANCE", "1.00"))
 # Purchase ledger for ACCOUNTINGALLOCATIONS — separate from voucher type.
 TALLY_PURCHASE_LEDGER = os.environ.get("TALLY_PURCHASE_LEDGER", "Purchase A/c").strip() or "Purchase A/c"
 
+_PO_NOT_APPLICABLE_ALIASES = frozenset(
+    {
+        "not applicable",
+        "not-applicable",
+        "n/a",
+        "na",
+        "none",
+        "-",
+    }
+)
+
+
+def _po_id_for_tally_order(po_id: object) -> str:
+    """Return po_id when it should be sent as an order number; else empty string."""
+    if po_id is None:
+        return ""
+    text = str(po_id).strip()
+    if not text:
+        return ""
+    normalized = text.lower().replace(".", "")
+    if normalized in _PO_NOT_APPLICABLE_ALIASES:
+        return ""
+    return text
+
 # Debits and credits must agree to the paisa, or Tally files the voucher as an
 # import exception ("Mismatch in total amount between Credit and Debit entries").
 BALANCE_EPSILON = 0.01
@@ -168,7 +192,7 @@ def ledger_entries_xml(data):
     # Purchase Order ID - check top-level first, then additional_fields.
     # If this keeps coming through empty, confirm the exact key name your
     # Gemini extraction schema actually uses (it may not be "po_id").
-    po_id = json_data.get("po_id") or additional_fields.get("po_id", "")
+    po_id = _po_id_for_tally_order(json_data.get("po_id") or additional_fields.get("po_id", ""))
 
 
     # NOTE: order date (BASICORDERDATE) was tested and confirmed to have no

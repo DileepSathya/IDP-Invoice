@@ -23,6 +23,9 @@ _tally_lock = threading.Lock()
 def _invoice_eligible(gemini_json: dict[str, Any], erp_sync_settings: dict[str, Any]) -> bool:
     if not config.is_tally_configured():
         return False
+    blocked, _ = config.po_blocks_tally_push(gemini_json)
+    if blocked:
+        return False
     if not invoice_erp_matching_complete(gemini_json, erp_sync_settings):
         return False
     additional = gemini_json.get("additional_fields") or {}
@@ -49,9 +52,13 @@ def push_single_invoice_by_id(invoice_id: str, *, force: bool = False) -> dict[s
     if not isinstance(gemini_json, dict):
         gemini_json = {}
 
+    blocked, block_reason = config.po_blocks_tally_push(gemini_json)
+    if blocked:
+        raise PermissionError(block_reason or "PO ID is required")
+
     erp_settings = get_erp_sync_settings()
     if not force and not invoice_erp_matching_complete(gemini_json, erp_settings):
-        raise PermissionError("PO_DB matching is not complete for this invoice")
+        raise PermissionError("ERP matching is not complete for this invoice")
 
     result = push_invoice_to_tally(doc, force=force)
     if not result.skipped:

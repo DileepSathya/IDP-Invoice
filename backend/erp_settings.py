@@ -1,17 +1,10 @@
-"""Persisted ERP/PO_DB sync settings.
+"""Persisted ERP sync settings.
 
 Two sync modes, chosen from the ERP page:
-- "immediate" (default): PO_DB matching runs synchronously the moment an
-  invoice is first processed, and again on every later edit (e.g. editing
-  the seller/PO in the JSON editor, or a line item), via
-  backend/hitl_status.py.
-- "scheduled": initial processing still matches immediately, but edits to
-  an already-stored invoice do NOT re-match on the spot - see
-  should_match_immediately() below. Instead, a background loop
-  (backend/erp_scheduler.py) re-runs matching over every stored invoice
-  every `frequency_minutes`, so both edits made in this app and changes
-  made directly in Postgres (a vendor added to vendor_master, a new PO,
-  ...) reach invoices together, on the configured schedule.
+- "immediate" (default): ERP matching runs synchronously when an invoice is first
+  processed, and again on every later edit.
+- "scheduled": edits defer re-matching until the next scheduled sync (re-matches
+  all invoices using cached Tally master data in MongoDB).
 
 Settings are stored in MongoDB as a single document so the API process and
 its background scheduler thread always agree on the current mode/frequency,
@@ -142,7 +135,7 @@ def mark_sync_finished(*, scanned: int, updated: int, errored: int) -> None:
 def should_match_immediately(settings: Optional[dict[str, Any]] = None) -> bool:
     """False when mode=="scheduled" - edits to an already-stored invoice should then
     wait for the next scheduled sync (or a manual Force Sync) instead of hitting
-    Postgres synchronously on every keystroke/save. True for "immediate" mode, which
+    Tally master data synchronously on every keystroke/save. True for "immediate" mode, which
     is also the safe default if settings can't be read for some reason."""
     s = settings or get_erp_sync_settings()
     return s.get("mode") != "scheduled"
