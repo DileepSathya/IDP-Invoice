@@ -3,7 +3,7 @@
         <VERSION>1</VERSION>
         <TALLYREQUEST>Export</TALLYREQUEST>
         <TYPE>COLLECTION</TYPE>
-        <ID>PurchaseLedgerCollection</ID>
+        <ID>VendorLedgerCollection</ID>
     </HEADER>
     <BODY>
         <DESC>
@@ -12,12 +12,14 @@
             </STATICVARIABLES>
             <TDL>
                 <TDLMESSAGE>
-                    <COLLECTION NAME="PurchaseLedgerCollection">
+                    <COLLECTION NAME="VendorLedgerCollection">
                         <TYPE>Ledger</TYPE>
-                        <CHILDOF>Purchase Accounts</CHILDOF>
+                        <CHILDOF>Sundry Creditors</CHILDOF>
                         <BELONGSTO>Yes</BELONGSTO>
                         <FETCH>Name</FETCH>
                         <FETCH>Parent</FETCH>
+                        <FETCH>GSTIN</FETCH>
+                        <FETCH>PartyGSTIN</FETCH>
                     </COLLECTION>
                 </TDLMESSAGE>
             </TDL>

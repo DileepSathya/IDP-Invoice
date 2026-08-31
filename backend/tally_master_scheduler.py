@@ -2,13 +2,13 @@
 
 Started from the FastAPI lifespan (backend/api.py). Every
 `_CHECK_INTERVAL_SECONDS` it checks persisted scheduler settings
-(backend/tally_master_settings.py); when mode is "scheduled" and the
-configured frequency has elapsed, it triggers a Tally master refresh
-(backend/tally_master_sync.py). Manual refresh via the Settings UI is
+(backend/tally_master_settings.py); when mode is interval-based ("scheduled")
+or time-based ("time_based") and a run is due, it triggers a Tally master
+refresh (backend/tally_master_sync.py). Manual refresh via the Settings UI is
 unaffected.
 
-Uses the same polling pattern as backend/erp_scheduler.py so saving a new
-frequency from the frontend takes effect within _CHECK_INTERVAL_SECONDS.
+Uses the same polling pattern as backend/erp_scheduler.py so saving new
+settings from the frontend takes effect within _CHECK_INTERVAL_SECONDS.
 """
 
 from __future__ import annotations
@@ -35,14 +35,31 @@ def _loop() -> None:
     while not _stop_event.wait(_CHECK_INTERVAL_SECONDS):
         try:
             settings = tally_master_settings.get_tally_master_scheduler_settings()
-            if tally_master_settings.due_for_scheduled_refresh(settings):
+            if not tally_master_settings.due_for_scheduled_refresh(settings):
+                continue
+
+            due_slots = (
+                tally_master_settings.get_due_time_slots(settings)
+                if settings["mode"] == "time_based"
+                else []
+            )
+            if settings["mode"] == "scheduled":
                 logger.info(
                     "[tally_master_scheduler] Scheduled refresh due (every %s min) — running now.",
                     settings["frequency_minutes"],
                 )
-                run_tally_master_refresh_async(
-                    rematch_invoices=bool(settings.get("rematch_after_scheduled_refresh")),
+            elif due_slots:
+                logger.info(
+                    "[tally_master_scheduler] Time-based refresh due at %s (%s) — running now.",
+                    ", ".join(due_slots),
+                    settings.get("timezone"),
                 )
+
+            started = run_tally_master_refresh_async(
+                rematch_invoices=bool(settings.get("rematch_after_scheduled_refresh")),
+            )
+            if started and due_slots:
+                tally_master_settings.mark_time_slots_run(due_slots)
         except Exception:
             logger.exception("[tally_master_scheduler] Scheduler tick failed; will retry next interval.")
 

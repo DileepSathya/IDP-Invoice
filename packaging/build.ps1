@@ -71,7 +71,7 @@ function Test-TallyXmlScripts {
     if (-not (Test-Path $XmlDir)) {
         throw "Tally xml_scripts folder missing: $XmlDir"
     }
-    foreach ($required in @("create_voucher.xml", "ledger_list.xml", "purchase_ledger_list.xml", "stock_items.xml")) {
+    foreach ($required in @("create_voucher.xml", "ledger_list.xml", "vendor_ledger_list.xml", "purchase_ledger_list.xml", "stock_items.xml")) {
         $path = Join-Path $XmlDir $required
         if (-not (Test-Path $path)) {
             throw "Required Tally XML script missing: $path"

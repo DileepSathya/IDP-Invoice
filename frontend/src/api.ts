@@ -603,12 +603,14 @@ export type TallyMasterSyncStatus = {
   };
 };
 
-export type TallyMasterSchedulerMode = "manual" | "scheduled";
+export type TallyMasterSchedulerMode = "manual" | "scheduled" | "time_based";
 
 export type TallyMasterSchedulerSettings = {
   mode: TallyMasterSchedulerMode;
   frequency_minutes: number;
   rematch_after_scheduled_refresh: boolean;
+  scheduled_times: string[];
+  timezone: string;
   next_refresh_at: string | null;
   tally_configured: boolean;
 };
@@ -659,19 +661,17 @@ export async function fetchTallyMasterSchedulerSettings(): Promise<TallyMasterSc
   return res.json();
 }
 
-export async function saveTallyMasterSchedulerSettings(
-  mode: TallyMasterSchedulerMode,
-  frequencyMinutes: number,
-  rematchAfterScheduledRefresh: boolean,
-): Promise<TallyMasterSchedulerSettings> {
+export async function saveTallyMasterSchedulerSettings(payload: {
+  mode: TallyMasterSchedulerMode;
+  frequency_minutes?: number;
+  rematch_after_scheduled_refresh: boolean;
+  scheduled_times?: string[];
+  timezone?: string;
+}): Promise<TallyMasterSchedulerSettings> {
   const res = await apiFetch("/api/tally/masters/settings", {
     method: "PUT",
     headers: JSON_HEADERS,
-    body: JSON.stringify({
-      mode,
-      frequency_minutes: frequencyMinutes,
-      rematch_after_scheduled_refresh: rematchAfterScheduledRefresh,
-    }),
+    body: JSON.stringify(payload),
   });
   if (!res.ok) {
     const msg = await res.text();

@@ -87,9 +87,19 @@ def fetch_vendors(
     *,
     company_name: Optional[str] = None,
 ) -> tuple[list[dict[str, Any]], Optional[str]]:
-    """Return Sundry Creditors ledgers as vendor_master-shaped rows."""
+    """Return Sundry Creditors ledgers as vendor_master-shaped rows.
+
+    vendor_ledger_list.xml filters the Tally-side collection with
+    <CHILDOF>Sundry Creditors</CHILDOF> + <BELONGSTO>Yes</BELONGSTO>, so Tally
+    itself resolves the full group hierarchy and returns ledgers that sit
+    directly under Sundry Creditors *and* ledgers under any custom sub-group
+    nested under it, at any depth. Because that filtering already happened on
+    the Tally side, we no longer re-filter by an exact PARENT match here -
+    doing so would incorrectly drop every ledger that lives in a sub-group,
+    which was the original bug.
+    """
     try:
-        xml_request = _load_xml_template("ledger_list.xml", company_name=company_name)
+        xml_request = _load_xml_template("vendor_ledger_list.xml", company_name=company_name)
     except FileNotFoundError as exc:
         return [], str(exc)
 
@@ -105,10 +115,13 @@ def fetch_vendors(
 
     vendors: list[dict[str, Any]] = []
     for ledger in root.findall(".//LEDGER"):
+        # Immediate parent group (may be "Sundry Creditors" itself, or a
+        # custom sub-group nested under it, e.g. "Import Creditors").
+        # Kept for auditing/debugging purposes only - not used as a filter,
+        # since the Tally-side CHILDOF/BELONGSTO collection already
+        # guarantees every ledger returned here rolls up to Sundry Creditors.
         parent_tag = ledger.find("PARENT")
         parent = parent_tag.text.strip() if parent_tag is not None and parent_tag.text else ""
-        if parent != SUNDRY_CREDITORS_GROUP:
-            continue
 
         name = (ledger.get("NAME") or "").strip()
         if not name:
@@ -123,6 +136,7 @@ def fetch_vendors(
             {
                 "vendor_id": name,
                 "vendor_name": name,
+                "vendor_group": parent or None,
                 "gst_tax_number": gst,
                 "tin_number": None,
                 "vendor_address_1": None,

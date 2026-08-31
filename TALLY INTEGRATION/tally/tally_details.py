@@ -134,6 +134,19 @@ def _parse_ledger_names(response_text: str) -> list[str]:
     return names
 
 
+def _tally_line_error(response_text: str) -> Optional[str]:
+    cleaned_text = clean_tally_xml(response_text)
+    try:
+        root = ET.fromstring(cleaned_text)
+    except ET.ParseError:
+        return None
+    for tag in ("LINEERROR", "ERROR", "EXCEPTION"):
+        node = root.find(f".//{tag}")
+        if node is not None and node.text and node.text.strip():
+            return node.text.strip()
+    return None
+
+
 def get_purchase_ledgers(
     tally_url: str,
     *,
@@ -157,6 +170,11 @@ def get_purchase_ledgers(
                 continue
 
             raw_text = response.content.decode("utf-8", errors="replace")
+            line_error = _tally_line_error(raw_text)
+            if line_error:
+                errors.append(f"{template}: {line_error}")
+                continue
+
             if template == "purchase_ledger_list.xml":
                 names = _parse_ledger_names(raw_text)
             else:

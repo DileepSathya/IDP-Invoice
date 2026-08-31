@@ -1771,14 +1771,18 @@ class TallyMasterSchedulerSettingsResponse(BaseModel):
     mode: str
     frequency_minutes: int
     rematch_after_scheduled_refresh: bool = False
+    scheduled_times: list[str] = []
+    timezone: str = "UTC"
     next_refresh_at: Optional[str] = None
     tally_configured: bool = False
 
 
 class TallyMasterSchedulerSettingsUpdate(BaseModel):
     mode: str
-    frequency_minutes: int
+    frequency_minutes: int = 60
     rematch_after_scheduled_refresh: bool = False
+    scheduled_times: Optional[list[str]] = None
+    timezone: Optional[str] = None
 
 
 class TallyMasterRefreshResponse(BaseModel):
@@ -2078,25 +2082,21 @@ def _tally_master_status_response() -> TallyMasterSyncStatusResponse:
 
 
 def _tally_master_scheduler_settings_response() -> TallyMasterSchedulerSettingsResponse:
-    from datetime import timedelta
-
     from backend.tally_master_settings import (
+        compute_next_refresh_at,
         get_tally_master_scheduler_settings,
-        next_refresh_baseline,
     )
     from backend.tally_integration.config import is_tally_configured
 
     s = get_tally_master_scheduler_settings()
-    next_refresh_at = None
-    if s["mode"] == "scheduled":
-        baseline = next_refresh_baseline(s)
-        if baseline is not None:
-            next_refresh_at = baseline + timedelta(minutes=s["frequency_minutes"])
+    next_refresh_at = compute_next_refresh_at(s)
 
     return TallyMasterSchedulerSettingsResponse(
         mode=s["mode"],
         frequency_minutes=s["frequency_minutes"],
         rematch_after_scheduled_refresh=bool(s.get("rematch_after_scheduled_refresh")),
+        scheduled_times=list(s.get("scheduled_times") or []),
+        timezone=s.get("timezone") or "UTC",
         next_refresh_at=_iso(next_refresh_at),
         tally_configured=is_tally_configured(),
     )
@@ -2118,6 +2118,8 @@ def put_tally_master_scheduler_settings_route(
             mode=payload.mode,
             frequency_minutes=payload.frequency_minutes,
             rematch_after_scheduled_refresh=payload.rematch_after_scheduled_refresh,
+            scheduled_times=payload.scheduled_times,
+            timezone_name=payload.timezone,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
