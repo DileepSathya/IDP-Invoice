@@ -856,6 +856,19 @@ class InvoiceSummary(BaseModel):
     po_business_unit: Optional[str] = None
     item_id: Optional[str] = None
     item_match_score: Optional[Any] = None
+    line_match_type: Optional[str] = None
+    ledger_id: Optional[str] = None
+    ledger_match_score: Optional[Any] = None
+    erp_ledger_name: Optional[str] = None
+    original_name: Optional[str] = None
+    original_quantity: Optional[Any] = None
+    original_rate: Optional[Any] = None
+    original_amount: Optional[Any] = None
+    matched_name: Optional[str] = None
+    match_type: Optional[str] = None
+    match_score: Optional[Any] = None
+    tally_master_id: Optional[str] = None
+    matching_status: Optional[str] = None
     # True when ERP master data matching is current and left no vendor/item/PO gaps (see erp_match_status.py).
     erp_matching_complete: bool = False
     # Tally push status — bridge to TALLY INTEGRATION service (backend/tally_integration/)
@@ -1069,6 +1082,34 @@ def _invoice_json_editor_response(doc: dict[str, Any]) -> InvoiceJsonEditorRespo
     )
 
 
+def _line_item_classification_fields(li: dict[str, Any]) -> dict[str, Any]:
+    """Unified line-item match fields for API responses (canonical + legacy aliases)."""
+    match_type = li.get("match_type") or li.get("line_match_type")
+    matched_name = (
+        li.get("matched_name")
+        or li.get("erp_item_name")
+        or li.get("erp_ledger_name")
+    )
+    if li.get("match_score") is not None:
+        match_score = li.get("match_score")
+    elif match_type == "LEDGER":
+        match_score = li.get("ledger_match_score")
+    else:
+        match_score = li.get("item_match_score")
+    tally_master_id = li.get("tally_master_id") or li.get("item_id") or li.get("ledger_id")
+    return {
+        "original_name": li.get("original_name") or li.get("service") or li.get("description"),
+        "original_quantity": li.get("original_quantity") or li.get("quantity") or li.get("qty"),
+        "original_rate": li.get("original_rate") or li.get("price_per_unit") or li.get("rate"),
+        "original_amount": li.get("original_amount") or li.get("amount") or li.get("total"),
+        "matched_name": matched_name,
+        "match_type": match_type,
+        "match_score": match_score,
+        "tally_master_id": tally_master_id,
+        "matching_status": li.get("matching_status"),
+    }
+
+
 def _invoice_summary_row_from_doc(
     doc: dict[str, Any],
     *,
@@ -1131,10 +1172,12 @@ def _invoice_summary_row_from_doc(
         hitl_value = None
 
     li_for_erp: dict[str, Any] = {}
+    li_classification: dict[str, Any] = {}
     if isinstance(line_items, list) and line_item_index is not None and 0 <= line_item_index < len(line_items):
         candidate = line_items[line_item_index]
         if isinstance(candidate, dict):
             li_for_erp = candidate
+            li_classification = _line_item_classification_fields(candidate)
 
     deblurred_applied_value: Optional[bool] = None
     try:
@@ -1200,6 +1243,19 @@ def _invoice_summary_row_from_doc(
         po_business_unit=additional_fields.get("po_business_unit"),
         item_id=li_for_erp.get("item_id"),
         item_match_score=li_for_erp.get("item_match_score"),
+        line_match_type=li_for_erp.get("line_match_type") or li_classification.get("match_type"),
+        ledger_id=li_for_erp.get("ledger_id"),
+        ledger_match_score=li_for_erp.get("ledger_match_score"),
+        erp_ledger_name=li_for_erp.get("erp_ledger_name"),
+        original_name=li_classification.get("original_name"),
+        original_quantity=li_classification.get("original_quantity"),
+        original_rate=li_classification.get("original_rate"),
+        original_amount=li_classification.get("original_amount"),
+        matched_name=li_classification.get("matched_name"),
+        match_type=li_classification.get("match_type"),
+        match_score=li_classification.get("match_score"),
+        tally_master_id=li_classification.get("tally_master_id"),
+        matching_status=li_classification.get("matching_status"),
         erp_matching_complete=erp_complete,
         erp_remark=display_erp_remark(
             additional_for_remark, erp_matching_complete=erp_complete
@@ -1750,6 +1806,7 @@ class TallyLedgerSettingsUpdate(BaseModel):
 class TallyMasterSyncResult(BaseModel):
     vendors: int = 0
     items: int = 0
+    expense_ledgers: int = 0
     po_headers: int = 0
     po_lines: int = 0
     errors: list[str] = []
@@ -2056,6 +2113,7 @@ def _tally_master_status_response() -> TallyMasterSyncStatusResponse:
         last_result = TallyMasterSyncResult(
             vendors=int(last_result_raw.get("vendors") or 0),
             items=int(last_result_raw.get("items") or 0),
+            expense_ledgers=int(last_result_raw.get("expense_ledgers") or 0),
             po_headers=int(last_result_raw.get("po_headers") or 0),
             po_lines=int(last_result_raw.get("po_lines") or 0),
             errors=list(last_result_raw.get("errors") or []),
@@ -2065,6 +2123,7 @@ def _tally_master_status_response() -> TallyMasterSyncStatusResponse:
     counts = {
         "vendors": len(tally_master_db.fetch_vendor_master()) if is_tally_configured() else 0,
         "items": len(tally_master_db.fetch_item_master()) if is_tally_configured() else 0,
+        "expense_ledgers": len(tally_master_db.fetch_expense_ledger_master()) if is_tally_configured() else 0,
         "po_headers": len(tally_master_db.fetch_po_header()) if is_tally_configured() else 0,
         "po_lines": len(tally_master_db.fetch_po_details()) if is_tally_configured() else 0,
     }
@@ -2590,6 +2649,7 @@ def list_invoices(
                 li_amount = li.get("amount") or li.get("total")
                 li_tax_rate = li.get("tax_rate")
                 li_tax_amount = li.get("tax_amount")
+                li_class = _line_item_classification_fields(li)
                 li_amount_after_tax = li.get("amount_after_tax")
 
                 rows_for_doc.append(
@@ -2646,6 +2706,19 @@ def list_invoices(
                         po_business_unit=(gemini_json.get("additional_fields") or {}).get("po_business_unit"),
                         item_id=li.get("item_id") if isinstance(li, dict) else None,
                         item_match_score=li.get("item_match_score") if isinstance(li, dict) else None,
+                        line_match_type=li.get("line_match_type") or li_class.get("match_type"),
+                        ledger_id=li.get("ledger_id"),
+                        ledger_match_score=li.get("ledger_match_score"),
+                        erp_ledger_name=li.get("erp_ledger_name"),
+                        original_name=li_class.get("original_name"),
+                        original_quantity=li_class.get("original_quantity"),
+                        original_rate=li_class.get("original_rate"),
+                        original_amount=li_class.get("original_amount"),
+                        matched_name=li_class.get("matched_name"),
+                        match_type=li_class.get("match_type"),
+                        match_score=li_class.get("match_score"),
+                        tally_master_id=li_class.get("tally_master_id"),
+                        matching_status=li_class.get("matching_status"),
                         erp_matching_complete=erp_matching_complete,
                         erp_remark=erp_remark_value,
                         tally_push_status=tally_push_status_value,

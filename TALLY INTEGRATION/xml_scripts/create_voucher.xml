@@ -24,22 +24,16 @@
       <ISINVOICE>Yes</ISINVOICE>
       <EFFECTIVEDATE>{VOUCHER_DATE}</EFFECTIVEDATE>
 
-      <!-- ===== 1. Inventory Items (PO linkage lives per-line inside ORDERDETAILS.LIST below) ===== -->
+      <!-- ===== 1. Inventory Items (stock lines only) ===== -->
 {INVENTORY_ENTRIES_XML}
 
-      <!-- ===== 2. Party Ledger Entry (Total Credit) ===== -->
-      <LEDGERENTRIES.LIST>
-       <LEDGERNAME>{PARTY_LEDGER}</LEDGERNAME>
-       <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
-       <AMOUNT>{TOTAL_AMOUNT}</AMOUNT>
-       <BILLALLOCATIONS.LIST>
-        <NAME>{INVOICE_NUMBER}</NAME>
-        <BILLTYPE>New Ref</BILLTYPE>
-        <AMOUNT>{TOTAL_AMOUNT}</AMOUNT>
-       </BILLALLOCATIONS.LIST>
-      </LEDGERENTRIES.LIST>
+      <!-- ===== 2. Expense ledger entries (non-stock lines) ===== -->
+{EXPENSE_LEDGER_ENTRIES_XML}
 
-      <!-- ===== 3. Taxes, Discounts, and Round Off (Accounting Ledgers) ===== -->
+      <!-- ===== 3. Party Ledger Entry (Total Credit) ===== -->
+{PARTY_LEDGER_ENTRY_XML}
+
+      <!-- ===== 4. Taxes, Discounts, and Round Off (Accounting Ledgers) ===== -->
 {TAX_ENTRIES_XML}
 
      </VOUCHER>

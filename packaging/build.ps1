@@ -64,6 +64,12 @@ function Test-TallyVoucherTemplate {
     if ($content -match '<CLASSNAME>') {
         throw 'create_voucher.xml still contains <CLASSNAME> - remove voucher-class tags for ledger-based import.'
     }
+    if ($content -notmatch '\{EXPENSE_LEDGER_ENTRIES_XML\}') {
+        throw 'create_voucher.xml is missing expense ledger placeholder ({EXPENSE_LEDGER_ENTRIES_XML}).'
+    }
+    if ($content -notmatch '\{PARTY_LEDGER_ENTRY_XML\}') {
+        throw 'create_voucher.xml is missing party ledger placeholder ({PARTY_LEDGER_ENTRY_XML}).'
+    }
 }
 
 function Test-TallyXmlScripts {
@@ -71,7 +77,7 @@ function Test-TallyXmlScripts {
     if (-not (Test-Path $XmlDir)) {
         throw "Tally xml_scripts folder missing: $XmlDir"
     }
-    foreach ($required in @("create_voucher.xml", "ledger_list.xml", "vendor_ledger_list.xml", "purchase_ledger_list.xml", "stock_items.xml")) {
+    foreach ($required in @("create_voucher.xml", "ledger_list.xml", "vendor_ledger_list.xml", "purchase_ledger_list.xml", "expense_ledger.xml", "stock_items.xml")) {
         $path = Join-Path $XmlDir $required
         if (-not (Test-Path $path)) {
             throw "Required Tally XML script missing: $path"

@@ -12,6 +12,7 @@ import requests
 import xml.etree.ElementTree as ET
 
 from tally.configurations.config import clean_tally_xml, normalize_to_bytes
+from tally.expense_vendors import fetch_expense_ledgers
 from tally.purchase_orders import fetch_purchase_orders
 
 logger = logging.getLogger(__name__)
@@ -215,7 +216,7 @@ def fetch_all_masters(
     *,
     company_name: str,
 ) -> dict[str, Any]:
-    """Fetch vendors, items, and purchase orders in one call."""
+    """Fetch vendors, items, expense ledgers, and purchase orders in one call."""
     company = (company_name or "").strip()
     errors: list[str] = []
 
@@ -226,6 +227,10 @@ def fetch_all_masters(
     items, item_err = fetch_items(tally_url, company_name=company or None)
     if item_err:
         errors.append(f"items: {item_err}")
+
+    expense_ledgers, ledger_err = fetch_expense_ledgers(tally_url, company_name=company or None)
+    if ledger_err:
+        errors.append(f"expense_ledgers: {ledger_err}")
 
     po_headers: list[dict[str, Any]] = []
     po_details: list[dict[str, Any]] = []
@@ -240,6 +245,7 @@ def fetch_all_masters(
         "company": company or None,
         "vendors": vendors,
         "items": items,
+        "expense_ledgers": expense_ledgers,
         "po_headers": po_headers,
         "po_details": po_details,
         "errors": errors,

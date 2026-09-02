@@ -77,7 +77,7 @@ def _assert_balanced(data):
 # rounded from 11,390.54 up to a payable 11,391.00 (round off = +0.46 Dr).
 REAL_INVOICE = _invoice(
     "11391.00",
-    [{"erp_item_name": "Waltr A Monthly Subscribe", "quantity": 28,
+    [{"match_type": "STOCK_ITEM", "erp_item_name": "Waltr A Monthly Subscribe", "quantity": 28,
       "price_per_unit": 499.00, "unit": "Nos"}],
     {"discount": 4319, "igst_rate": 18, "igst_amount": 1737.54, "round_off": 0.46,
      "seller_gstin": "29ABCDE1234F1Z5", "buyer_gstin": "36ABCDE1234F1Z5"},
@@ -137,7 +137,7 @@ def test_intra_state_cgst_sgst_split_balances():
     """Same state code on both GSTINs takes the CGST/SGST branch."""
     root = _assert_balanced(_invoice(
         "1180.00", [{"service": "Widget", "quantity": 1, "price_per_unit": 1000, "unit": "Nos"}],
-        {"igst_rate": 18, "igst_amount": 180.00,
+        {"cgst_rate": 9, "sgst_rate": 9, "cgst_amount": 90.00, "sgst_amount": 90.00,
          "seller_gstin": "29AAA", "buyer_gstin": "29BBB"},
     ))
     names = {e.find("LEDGERNAME").text for e in root.iter("LEDGERENTRIES.LIST")}
@@ -174,12 +174,349 @@ def test_large_gap_is_refused_not_plugged():
 
 
 def test_voucher_uses_the_real_invoice_date():
-    """The date was hardcoded to 2025-07-01 for every voucher pushed."""
+    """The voucher date must come from the extracted invoice_date field."""
     _, root = _build(_invoice(
         "1000.00", [{"service": "Widget", "quantity": 4, "price_per_unit": 250, "unit": "Nos"}],
         invoice_date="2026-03-15",
     ))
     assert next(root.iter("DATE")).text == "20260315"
+
+
+def _ledger_entries(root):
+    return list(root.iter("LEDGERENTRIES.LIST"))
+
+
+def _party_ledger_entry(root, party_name):
+    for entry in _ledger_entries(root):
+        name_el = entry.find("LEDGERNAME")
+        if name_el is not None and name_el.text == party_name:
+            flag = entry.find("ISPARTYLEDGER")
+            if flag is not None and flag.text == "Yes":
+                return entry
+    return None
+
+
+def test_ispartyledger_on_all_ledger_entries():
+    """Party entry is Yes; expense/tax/round-off entries are No."""
+    root = _assert_balanced(_invoice(
+        "33251.46",
+        [
+            {
+                "match_type": "STOCK_ITEM",
+                "matched_name": "H.D.P.E 1L Oil Bottle",
+                "original_quantity": 1280,
+                "original_rate": 11.90,
+                "original_amount": 15232.00,
+                "unit": "Nos",
+            },
+            {
+                "match_type": "LEDGER",
+                "matched_name": "Repairs & Maintanance- Factory",
+                "original_amount": 12947.20,
+            },
+        ],
+        {
+            "igst_rate": 18,
+            "igst_amount": 5072.26,
+            "seller_gstin": "29ABCDE1234F1Z5",
+            "buyer_gstin": "36ABCDE1234F1Z5",
+        },
+        po_id="",
+    ))
+    for entry in _ledger_entries(root):
+        flag = entry.find("ISPARTYLEDGER")
+        assert flag is not None, "every LEDGERENTRIES.LIST must include ISPARTYLEDGER"
+        assert flag.text in ("Yes", "No"), flag.text
+
+    party = _party_ledger_entry(root, "Test Vendor")
+    assert party is not None
+    assert party.find("ISPARTYLEDGER").text == "Yes"
+
+    expense = next(
+        e for e in _ledger_entries(root)
+        if e.findtext("LEDGERNAME") == "Repairs & Maintanance- Factory"
+    )
+    assert expense.find("ISPARTYLEDGER").text == "No"
+
+    igst = next(e for e in _ledger_entries(root) if e.findtext("LEDGERNAME") == "IGST")
+    assert igst.find("ISPARTYLEDGER").text == "No"
+
+
+def test_bill_allocation_uses_name_tag_not_n():
+    """Bill reference must serialize as <NAME>, not a corrupted tag from str.format()."""
+    _, root = _build(_invoice(
+        "1000.00",
+        [{"match_type": "STOCK_ITEM", "matched_name": "Widget", "original_quantity": 4,
+          "original_rate": 250, "original_amount": 1000.00, "unit": "Nos"}],
+        invoice_number="337",
+        po_id="",
+    ))
+    payload = _captured["payload"]
+    assert "<NAME>337</NAME>" in payload
+    assert "<n>337</n>" not in payload
+
+    party = _party_ledger_entry(root, "Test Vendor")
+    bill = party.find("BILLALLOCATIONS.LIST")
+    assert bill is not None
+    name_el = bill.find("NAME")
+    assert name_el is not None, "BILLALLOCATIONS must use a NAME child element"
+    assert name_el.text == "337"
+
+
+def test_pure_stock_purchase_invoice():
+    """All STOCK_ITEM lines → only ALLINVENTORYENTRIES, no expense LEDGERENTRIES."""
+    root = _assert_balanced(_invoice(
+        "1180.00",
+        [{
+            "match_type": "STOCK_ITEM",
+            "matched_name": "Widget A",
+            "original_quantity": 10,
+            "original_rate": 100.00,
+            "original_amount": 1000.00,
+            "unit": "Nos",
+            "hsn_number": "84713010",
+        }],
+        {"igst_rate": 18, "igst_amount": 180.00,
+         "seller_gstin": "29AAA", "buyer_gstin": "36AAA"},
+    ))
+    assert len(list(root.iter("ALLINVENTORYENTRIES.LIST"))) == 1
+    inv = next(root.iter("ALLINVENTORYENTRIES.LIST"))
+    assert inv.find("STOCKITEMNAME").text == "Widget A"
+    assert inv.find("ACTUALQTY").text == "10 Nos"
+    assert inv.find("RATE").text == "100.00/Nos"
+    assert inv.find("GSTHSNNAME").text == "84713010"
+    assert inv.find("GSTOVRDNTYPEOFSUPPLY").text == "Goods"
+    expense_ledgers = [
+        e for e in root.iter("LEDGERENTRIES.LIST")
+        if e.find("GSTSOURCETYPE") is not None and e.find("GSTSOURCETYPE").text == "Ledger"
+    ]
+    assert expense_ledgers == []
+
+
+def test_pure_ledger_purchase_invoice():
+    """All LEDGER lines → LEDGERENTRIES with GST metadata, no inventory."""
+    root = _assert_balanced(_invoice(
+        "1180.00",
+        [{
+            "match_type": "LEDGER",
+            "matched_name": "Repairs & Maintanance- Factory",
+            "original_amount": 1000.00,
+            "hsn_number": "998719",
+        }],
+        {"igst_rate": 18, "igst_amount": 180.00,
+         "seller_gstin": "29AAA", "buyer_gstin": "36AAA"},
+    ))
+    assert len(list(root.iter("ALLINVENTORYENTRIES.LIST"))) == 0
+    expense = [
+        e for e in root.iter("LEDGERENTRIES.LIST")
+        if e.find("GSTSOURCETYPE") is not None
+    ]
+    assert len(expense) == 1
+    entry = expense[0]
+    assert entry.find("LEDGERNAME").text == "Repairs & Maintanance- Factory"
+    assert entry.find("GSTSOURCETYPE").text == "Ledger"
+    assert entry.find("GSTOVRDNTYPEOFSUPPLY").text == "Services"
+    assert entry.find("VATEXPAMOUNT").text == "-1000.00"
+    assert entry.find("AMOUNT").text == "-1000.00"
+
+
+def test_mixed_stock_ledger_with_gst_reference_case():
+    """User reference case: H.D.P.E stock + Repairs ledger + IGST."""
+    root = _assert_balanced(_invoice(
+        "33251.46",
+        [
+            {
+                "match_type": "STOCK_ITEM",
+                "original_name": "H.D.P.E 1L Oil Bottle",
+                "matched_name": "H.D.P.E 1L Oil Bottle",
+                "original_quantity": 1280,
+                "original_rate": 11.90,
+                "original_amount": 15232.00,
+                "unit": "Nos",
+                "hsn_number": "39233090",
+            },
+            {
+                "match_type": "LEDGER",
+                "original_name": "Repairs & Maintanance- Factory",
+                "matched_name": "Repairs & Maintanance- Factory",
+                "original_amount": 12947.20,
+                "hsn_number": "998719",
+            },
+        ],
+        {
+            "igst_rate": 18,
+            "igst_amount": 5072.26,
+            "seller_gstin": "29ABCDE1234F1Z5",
+            "buyer_gstin": "36ABCDE1234F1Z5",
+        },
+        invoice_number="MIXED-TEST-001",
+        po_id="",
+    ))
+    inventory = list(root.iter("ALLINVENTORYENTRIES.LIST"))
+    assert len(inventory) == 1
+    stock = inventory[0]
+    assert stock.find("STOCKITEMNAME").text == "H.D.P.E 1L Oil Bottle"
+    assert stock.find("ACTUALQTY").text == "1280 Nos"
+    assert stock.find("BILLEDQTY").text == "1280 Nos"
+    assert stock.find("RATE").text == "11.90/Nos"
+    assert float(stock.find("AMOUNT").text) == -15232.00
+    assert stock.find("GSTOVRDNTYPEOFSUPPLY").text == "Goods"
+
+    expense = [
+        e for e in root.iter("LEDGERENTRIES.LIST")
+        if e.find("GSTSOURCETYPE") is not None and e.find("GSTSOURCETYPE").text == "Ledger"
+    ]
+    assert len(expense) == 1
+    ledger = expense[0]
+    assert ledger.find("LEDGERNAME").text == "Repairs & Maintanance- Factory"
+    assert ledger.find("GSTOVRDNTYPEOFSUPPLY").text == "Services"
+    assert float(ledger.find("VATEXPAMOUNT").text) == -12947.20
+
+    tax_entries = {
+        e.find("LEDGERNAME").text: float(e.find("AMOUNT").text)
+        for e in root.iter("LEDGERENTRIES.LIST")
+        if e.find("LEDGERNAME") is not None and e.find("LEDGERNAME").text == "IGST"
+    }
+    assert tax_entries["IGST"] == -5072.26
+
+
+def test_xml_special_characters_are_escaped():
+    """Ampersands in ledger names must be valid XML."""
+    _, root = _build(_invoice(
+        "500.00",
+        [{
+            "match_type": "LEDGER",
+            "matched_name": "Repair & Maintenance",
+            "original_amount": 500.00,
+        }],
+        po_id="",
+    ))
+    payload = _captured["payload"]
+    assert "Repair &amp; Maintenance" in payload
+    entry = next(
+        e for e in root.iter("LEDGERENTRIES.LIST")
+        if e.find("LEDGERNAME") is not None and e.find("LEDGERNAME").text == "Repair & Maintenance"
+    )
+    assert entry is not None
+
+
+def _child_tags(element):
+    return {child.tag for child in element}
+
+
+def test_mixed_voucher_matches_manual_fixture_structure():
+    """Generated mixed voucher includes tags present in manual Tally export."""
+    fixture_path = Path(__file__).parent / "fixtures" / "manual_mixed_purchase_voucher.xml"
+    fixture_root = ET.parse(fixture_path).getroot()
+    fixture_voucher = next(fixture_root.iter("VOUCHER"))
+
+    data = _invoice(
+        "33251.46",
+        [
+            {
+                "match_type": "STOCK_ITEM",
+                "matched_name": "H.D.P.E 1L Oil Bottle",
+                "original_quantity": 1280,
+                "original_rate": 11.90,
+                "original_amount": 15232.00,
+                "unit": "Nos",
+                "hsn_number": "39233090",
+            },
+            {
+                "match_type": "LEDGER",
+                "matched_name": "Repairs & Maintanance- Factory",
+                "original_amount": 12947.20,
+                "hsn_number": "998719",
+            },
+        ],
+        {
+            "igst_rate": 18,
+            "igst_amount": 5072.26,
+            "seller_gstin": "29ABCDE1234F1Z5",
+            "buyer_gstin": "36ABCDE1234F1Z5",
+        },
+        invoice_number="MIXED-TEST-001",
+        po_id="",
+    )
+    data["gemini"]["json"]["purchase_ledger"] = "Purchase -Local"
+    root = _assert_balanced(data)
+    generated_voucher = next(root.iter("VOUCHER"))
+
+    fixture_stock = next(fixture_voucher.iter("ALLINVENTORYENTRIES.LIST"))
+    gen_stock = next(generated_voucher.iter("ALLINVENTORYENTRIES.LIST"))
+    required_stock_tags = {
+        "STOCKITEMNAME", "ISDEEMEDPOSITIVE", "RATE", "ACTUALQTY", "BILLEDQTY",
+        "AMOUNT", "GSTSOURCETYPE", "GSTITEMSOURCE", "HSNSOURCETYPE", "HSNITEMSOURCE",
+        "GSTOVRDNTYPEOFSUPPLY", "GSTHSNNAME", "ACCOUNTINGALLOCATIONS.LIST",
+    }
+    assert required_stock_tags <= _child_tags(gen_stock)
+
+    fixture_expense = [
+        e for e in fixture_voucher.iter("LEDGERENTRIES.LIST")
+        if e.find("GSTSOURCETYPE") is not None
+    ][0]
+    gen_expense = [
+        e for e in generated_voucher.iter("LEDGERENTRIES.LIST")
+        if e.find("GSTSOURCETYPE") is not None and e.find("GSTSOURCETYPE").text == "Ledger"
+    ][0]
+    required_ledger_tags = {
+        "LEDGERNAME", "ISPARTYLEDGER", "GSTSOURCETYPE", "GSTLEDGERSOURCE", "HSNSOURCETYPE",
+        "HSNLEDGERSOURCE", "GSTOVRDNTYPEOFSUPPLY", "GSTHSNNAME",
+        "ISDEEMEDPOSITIVE", "VATEXPAMOUNT", "AMOUNT",
+    }
+    assert required_ledger_tags <= _child_tags(gen_expense)
+    assert _child_tags(gen_expense) == _child_tags(fixture_expense)
+
+
+def test_mixed_stock_and_ledger_lines():
+    """Stock lines use ALLINVENTORYENTRIES; expense lines use LEDGERENTRIES."""
+    root = _assert_balanced(_invoice(
+        "1500.00",
+        [
+            {
+                "match_type": "STOCK_ITEM",
+                "original_name": "H.D.P.E 1L Oil Bottle",
+                "matched_name": "H.D.P.E 1L Oil Bottle",
+                "erp_item_name": "H.D.P.E 1L Oil Bottle",
+                "original_quantity": 100,
+                "original_rate": 10.00,
+                "original_amount": 1000.00,
+                "quantity": 100,
+                "price_per_unit": 10.00,
+                "unit": "Nos",
+            },
+            {
+                "match_type": "LEDGER",
+                "original_name": "Repair & Maintenance - Factory",
+                "matched_name": "Repair & Maintenance , Installation",
+                "erp_ledger_name": "Repair & Maintenance , Installation",
+                "original_amount": 500.00,
+                "amount": 500.00,
+            },
+        ],
+        po_id="",
+    ))
+    inventory = list(root.iter("ALLINVENTORYENTRIES.LIST"))
+    assert len(inventory) == 1
+    assert inventory[0].find("STOCKITEMNAME").text == "H.D.P.E 1L Oil Bottle"
+
+    ledger_names = [
+        e.find("LEDGERNAME").text
+        for e in root.iter("LEDGERENTRIES.LIST")
+    ]
+    assert "Repair & Maintenance , Installation" in ledger_names
+
+
+def test_unmatched_lines_block_voucher_build():
+    result, payload = _build(_invoice(
+        "1000.00",
+        [
+            {"match_type": "UNMATCHED", "original_name": "Unknown Service", "amount": 1000.00},
+        ],
+    ))
+    assert not result["success"]
+    assert payload is None
+    assert "unmatched line item" in (result.get("error_reason") or "").lower()
 
 
 if __name__ == "__main__":

@@ -20,6 +20,7 @@ _SYNC_DOC_ID = "tally_master_sync"
 _COLLECTIONS = (
     "tally_vendor_master",
     "tally_item_master",
+    "tally_expense_ledger_master",
     "tally_po_header",
     "tally_po_details",
 )
@@ -79,6 +80,7 @@ def mark_sync_finished(
     last_result = {
         "vendors": counts.get("vendors", 0),
         "items": counts.get("items", 0),
+        "expense_ledgers": counts.get("expense_ledgers", 0),
         "po_headers": counts.get("po_headers", 0),
         "po_lines": counts.get("po_lines", 0),
         "errors": errors,
@@ -145,6 +147,10 @@ def fetch_item_master() -> list[dict[str, Any]]:
     return _fetch_collection("tally_item_master")
 
 
+def fetch_expense_ledger_master() -> list[dict[str, Any]]:
+    return _fetch_collection("tally_expense_ledger_master")
+
+
 def fetch_po_header() -> list[dict[str, Any]]:
     return _fetch_collection("tally_po_header")
 
@@ -158,6 +164,7 @@ def replace_master_data(
     company: Optional[str],
     vendors: list[dict[str, Any]],
     items: list[dict[str, Any]],
+    expense_ledgers: list[dict[str, Any]],
     po_headers: list[dict[str, Any]],
     po_details: list[dict[str, Any]],
 ) -> dict[str, int]:
@@ -169,6 +176,7 @@ def replace_master_data(
     payloads = (
         ("tally_vendor_master", vendors),
         ("tally_item_master", items),
+        ("tally_expense_ledger_master", expense_ledgers),
         ("tally_po_header", po_headers),
         ("tally_po_details", po_details),
     )
@@ -193,6 +201,7 @@ def replace_master_data(
     return {
         "vendors": counts["tally_vendor_master"],
         "items": counts["tally_item_master"],
+        "expense_ledgers": counts["tally_expense_ledger_master"],
         "po_headers": counts["tally_po_header"],
         "po_lines": counts["tally_po_details"],
     }

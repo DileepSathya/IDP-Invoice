@@ -20,6 +20,32 @@ function FormatScore(score: unknown): string {
   return n == null ? "—" : `${Math.round(n)}`;
 }
 
+const MatchTypeBadge: React.FC<{ matchType?: string | null }> = ({ matchType }) => {
+  const type = matchType ?? "";
+  if (type === "STOCK_ITEM") {
+    return <span className="erp-match-type erp-match-type-stock">STOCK_ITEM</span>;
+  }
+  if (type === "LEDGER") {
+    return <span className="erp-match-type erp-match-type-ledger">LEDGER</span>;
+  }
+  if (type === "UNMATCHED") {
+    return <span className="erp-match-type erp-match-type-unmatched">UNMATCHED</span>;
+  }
+  return <span className="erp-match-type">—</span>;
+};
+
+const MatchScore: React.FC<{ score?: unknown; matched?: boolean }> = ({ score, matched }) => {
+  const formatted = FormatScore(score);
+  if (formatted === "—") {
+    return <span className="erp-match-score-display">—</span>;
+  }
+  return (
+    <span className={`erp-match-score-display${matched ? " erp-match-score-ok" : " erp-match-score-fail"}`}>
+      {formatted}%
+    </span>
+  );
+};
+
 const MatchBadge: React.FC<{
   matched: boolean;
   label: string;
@@ -269,9 +295,9 @@ export const Erp: React.FC = () => {
           <h2>ERP — Master Data Matching</h2>
           <p>
             Each invoice&apos;s seller, line items, and PO number are fuzzy-matched against
-            Tally master data stored in MongoDB (vendors, stock items, purchase orders).
-            Refresh master data from Settings → Tally Master Data. Anything that doesn&apos;t
-            match sits in HITL with the reason shown below.
+            Tally master data stored in MongoDB (vendors, stock items, expense ledgers,
+            purchase orders). Refresh master data from Settings → Tally Master Data.
+            Anything that doesn&apos;t match sits in HITL with the reason shown below.
           </p>
         </div>
         <div className="panel-header-actions">
@@ -512,33 +538,58 @@ export const Erp: React.FC = () => {
                           <td colSpan={8}>
                             <div className="invoice-subtable-wrapper">
                               <div className="invoice-subtable-header">
-                                <div className="invoice-subtable-title">Line items — stock item match</div>
+                                <div className="invoice-subtable-title">Line items — original vs matched</div>
                               </div>
-                              <table className="invoice-subtable">
+                              <table className="invoice-subtable invoice-subtable-match">
                                 <thead>
                                   <tr>
-                                    <th>Service</th>
-                                    <th>Quantity</th>
-                                    <th>Unit</th>
-                                    <th>Item Match</th>
+                                    <th>Original item</th>
+                                    <th>Matched item</th>
+                                    <th>Type</th>
+                                    <th>Score</th>
+                                    <th>Qty</th>
+                                    <th>Amount</th>
                                   </tr>
                                 </thead>
                                 <tbody>
                                   {group.rows.map((li) => {
-                                    const itemMatched = !!li.item_id;
+                                    const matchType =
+                                      li.match_type ?? li.line_match_type ?? null;
+                                    const isMatched =
+                                      matchType === "STOCK_ITEM" || matchType === "LEDGER";
+                                    const originalName =
+                                      li.original_name ?? li.service_category ?? "—";
+                                    const matchedName = isMatched
+                                      ? (li.matched_name ??
+                                        li.item_id ??
+                                        li.erp_ledger_name ??
+                                        li.ledger_id ??
+                                        "—")
+                                      : "—";
+                                    const score =
+                                      li.match_score ??
+                                      (matchType === "LEDGER"
+                                        ? li.ledger_match_score
+                                        : li.item_match_score);
+                                    const qty =
+                                      li.original_quantity ?? li.quantity ?? null;
+                                    const amount =
+                                      li.original_amount ?? li.amount ?? null;
                                     return (
                                       <tr key={`${group.id}:${li.line_item_index ?? "root"}`}>
-                                        <td>{li.service_category || "—"}</td>
-                                        <td className="subtable-num">
-                                          {li.quantity != null ? String(li.quantity) : "—"}
-                                        </td>
-                                        <td className="subtable-num">{li.unit != null ? String(li.unit) : "—"}</td>
+                                        <td>{originalName}</td>
+                                        <td>{matchedName}</td>
                                         <td>
-                                          <MatchBadge
-                                            matched={itemMatched}
-                                            label={itemMatched ? `${li.item_id}` : "Unmatched"}
-                                            score={li.item_match_score}
-                                          />
+                                          <MatchTypeBadge matchType={matchType} />
+                                        </td>
+                                        <td>
+                                          <MatchScore score={score} matched={isMatched} />
+                                        </td>
+                                        <td className="subtable-num">
+                                          {qty != null ? String(qty) : "—"}
+                                        </td>
+                                        <td className="subtable-num">
+                                          {amount != null ? String(amount) : "—"}
                                         </td>
                                       </tr>
                                     );

@@ -11,6 +11,11 @@ from tally.configurations.config import (
     convert_date_yyyymmdd,
     parse_tally_response,
 )
+from tally.voucher_xml import (
+    build_ledger_entry_block,
+    build_line_entry_fragments,
+    elements_to_fragment,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -162,42 +167,17 @@ def _voucher_imbalance(root):
     return round(sum(amounts), 2)
 
 
-def ledger_entries_xml(data):
-    """Builds the ALLINVENTORYENTRIES.LIST XML block for every line item,
-    integrating standard purchase tracking references for existing PO numbers.
+def line_entries_xml(data):
+    """Build inventory and expense ledger XML blocks from classified line items.
 
-    NOTE ON PO MATCHING: Tally resolves an outstanding Purchase Order by the
-    combination of (party, order type, order number) - and, for date-based
-    disambiguation, the order date. Sending only <ORDERNUMBER> is not enough
-    for Tally to recognize this as a reference to an *existing* order; it
-    needs <ORDERTYPE> alongside it, and ideally <BASICORDERDATE> if you have
-    the PO date available. Without ORDERTYPE, Tally has historically been
-    observed to just store the number as inert text rather than linking/
-    closing the PO line - which matches the "not getting matched" symptom.
-
-    Also note: Tally matches PO lines by exact STOCKITEMNAME (and often
-    unit/godown). If `erp_item_name` doesn't exactly match the stock item
-    name used on the PO inside Tally, the number can be present and still
-    fail to link.
+    Classification (match_type) is resolved upstream; this function only serializes.
     """
-    json_data = data['gemini']['json']
-    line_items = json_data['line_items']
-    purchase_ledger = (
-        json_data.get("purchase_ledger")
-        or TALLY_PURCHASE_LEDGER
-    )
-
+    json_data = data["gemini"]["json"]
     additional_fields = json_data.get("additional_fields", {})
-
-    # Purchase Order ID - check top-level first, then additional_fields.
-    # If this keeps coming through empty, confirm the exact key name your
-    # Gemini extraction schema actually uses (it may not be "po_id").
-    po_id = _po_id_for_tally_order(json_data.get("po_id") or additional_fields.get("po_id", ""))
-
-
-    # NOTE: order date (BASICORDERDATE) was tested and confirmed to have no
-    # bearing on whether Tally matches the PO - deliberately NOT sending it.
-    # Only ORDERTYPE + ORDERNUMBER are sent below.
+    purchase_ledger = json_data.get("purchase_ledger") or TALLY_PURCHASE_LEDGER
+    po_id = _po_id_for_tally_order(
+        json_data.get("po_id") or additional_fields.get("po_id", "")
+    )
 
     if not po_id:
         logger.warning(
@@ -206,146 +186,109 @@ def ledger_entries_xml(data):
             "ORDERDETAILS.LIST, so Tally has nothing to match against."
         )
 
-    total_invoice_amount = 0.0
-    inventory_entries_xml = ""
+    inventory_xml, expense_xml, taxable_total, unmatched_labels = build_line_entry_fragments(
+        data,
+        purchase_ledger=purchase_ledger,
+        po_id=po_id,
+    )
 
-    for item in line_items:
-        item_name = item.get("erp_item_name") or item.get("service") or item.get("description") or "Item"
-        quantity = _num(item.get("quantity") or item.get("qty"))
-        rate = _num(item.get("price_per_unit") or item.get("rate") or item.get("unit_price"))
-        unit = item.get('unit', 'ltr')
+    if unmatched_labels:
+        preview = ", ".join(unmatched_labels[:5])
+        suffix = "..." if len(unmatched_labels) > 5 else ""
+        raise ValueError(
+            f"Cannot build voucher: {len(unmatched_labels)} unmatched line item(s): "
+            f"{preview}{suffix}"
+        )
 
-        item_amount = quantity * rate
-        total_invoice_amount += item_amount
+    return inventory_xml, expense_xml, taxable_total
 
-        formatted_rate = f"{rate:.2f}"
-        qty_str = f"{quantity:g}"
 
-        # Buying stock debits the Purchase ledger, so this line and every
-        # sub-allocation hanging off it carry the same Dr amount.
-        is_deemed, line_amount = _entry(item_amount, "Dr")
+def ledger_entries_xml(data):
+    """Backward-compatible wrapper returning inventory XML and line total only."""
+    inventory_xml, _, total = line_entries_xml(data)
+    return inventory_xml, total
 
-        # Initial inventory object block allocation mapping
-        item_xml = f"""
-                        <ALLINVENTORYENTRIES.LIST>
-                            <STOCKITEMNAME>{_safe(item_name)}</STOCKITEMNAME>
-                            <ISDEEMEDPOSITIVE>{is_deemed}</ISDEEMEDPOSITIVE>
-                            <RATE>{formatted_rate}</RATE>
-                            <ACTUALQTY>{qty_str}</ACTUALQTY>
-                            <BILLEDQTY>{qty_str}</BILLEDQTY>
-                            <AMOUNT>{line_amount}</AMOUNT>"""
 
-        # MATCH PURCHASE ORDER: ORDERTYPE alongside ORDERNUMBER, no date -
-        # order date was tested and confirmed not to affect matching.
-        #
-        # The batch allocation is a sub-allocation of the inventory line above,
-        # so its amount must mirror that line exactly - THIS line's amount, with
-        # the same sign. It previously carried `total_invoice_amount`, the
-        # running cumulative total, which is coincidentally identical on a
-        # single-line invoice and wrong on every line after the first.
-        if po_id:
-            item_xml += f"""
-                            <BATCHALLOCATIONS.LIST>
-                                <TRACKINGNUMBER/>
-                                <ORDERNO>{_safe(po_id)}</ORDERNO>
-                                <ORDERNUMBERS.LIST>{_safe(po_id)}</ORDERNUMBERS.LIST>
-                                <NUMBEROFBUYERITEMS>{qty_str}</NUMBEROFBUYERITEMS>
-                                <AMOUNT>{line_amount}</AMOUNT>
-                            </BATCHALLOCATIONS.LIST>"""
+def _sum_line_item_tax(json_root: dict) -> float:
+    """Sum the ``tax_amount`` field across all line items.
 
-        # Close inventory tags adding financial branch accounts line structures
-        item_xml += f"""
-                            <ACCOUNTINGALLOCATIONS.LIST>
-                                <LEDGERNAME>{_safe(purchase_ledger)}</LEDGERNAME>
-                                <ISDEEMEDPOSITIVE>{is_deemed}</ISDEEMEDPOSITIVE>
-                                <AMOUNT>{line_amount}</AMOUNT>
-                            </ACCOUNTINGALLOCATIONS.LIST>
-                        </ALLINVENTORYENTRIES.LIST>"""
-
-        inventory_entries_xml += item_xml
-
-    return inventory_entries_xml, total_invoice_amount
+    Gemini sometimes stores the GST total at the line-item level rather than
+    as a flat ``igst_amount`` / ``cgst_amount`` / ``sgst_amount`` field inside
+    ``additional_fields``.  When those top-level keys are absent this function
+    provides the fallback total so the reconciliation formula still works.
+    """
+    total = 0.0
+    for li in json_root.get("line_items") or []:
+        if isinstance(li, dict):
+            total += _num(li.get("tax_amount"))
+    return round(total, 2)
 
 
 def tax_entries_xml(data, computed_total):
-    """Builds the LEDGERENTRIES.LIST XML blocks with mathematically balanced
-    accounting signs. Every sign comes from `_entry()` - see its docstring for
-    the convention; do not hand-write ISDEEMEDPOSITIVE/AMOUNT pairs here.
+    """Build tax/discount/round-off LEDGERENTRIES.LIST blocks (ElementTree).
 
-    Raises VoucherImbalanceError if the extracted figures cannot be reconciled
-    into a balanced voucher within ROUND_OFF_TOLERANCE.
+    Raises VoucherImbalanceError if figures cannot be reconciled within tolerance.
     """
-    json_root = data['gemini']['json']
+    json_root = data["gemini"]["json"]
     additional_fields = json_root.get("additional_fields", {})
-    blocks = []
+    elements: list[ET.Element] = []
     total_tax_amount = 0.0
 
-    # 1. Discount Received - a credit: it reduces what we owe for the goods.
-    discount = _num(additional_fields.get("discount"))
+    # Gemini may emit "discount_amount" or the shorter "discount" — accept either.
+    discount = _num(additional_fields.get("discount") or additional_fields.get("discount_amount"))
     if discount > 0:
-        discount_ledger = _safe(additional_fields.get("discount_ledger_name", "Discount Received"))
-        # display_flag="Yes" is a deliberate, empirically-verified deviation. The
-        # amount sign (positive = Cr) is what settles the books; Tally's invoice
-        # view separately needs ISDEEMEDPOSITIVE=Yes to render the discount in
-        # the deductions column as "(-)4,319.00". Do not "correct" this to "No"
-        # without re-checking how the voucher displays in Tally.
-        is_deemed, amount = _entry(discount, "Cr", display_flag="Yes")
-        blocks.append(f"""      <LEDGERENTRIES.LIST>
-       <LEDGERNAME>{discount_ledger}</LEDGERNAME>
-       <ISDEEMEDPOSITIVE>{is_deemed}</ISDEEMEDPOSITIVE>
-       <AMOUNT>{amount}</AMOUNT>
-      </LEDGERENTRIES.LIST>""")
+        discount_ledger = additional_fields.get("discount_ledger_name", "Discount Received")
+        elements.append(
+            build_ledger_entry_block(
+                discount_ledger,
+                discount,
+                "Cr",
+                display_flag="Yes",
+            )
+        )
 
-    # 2. Input GST - a debit (recoverable input tax credit).
-    seller_gst = str(additional_fields.get("seller_gstin") or "")[:2]
-    buyer_gst = str(additional_fields.get("buyer_gstin") or "")[:2]
+    # Gemini may emit GSTIN under any of these key names depending on the prompt version:
+    #   "seller_gstin", "seller_gstin_uin", "gstin_seller"
+    #   "buyer_gstin",  "buyer_gstin_uin",  "gstin_buyer"
+    # Accept all variants so the inter-state (IGST) detection fires correctly.
+    seller_gst = str(
+        additional_fields.get("seller_gstin")
+        or additional_fields.get("seller_gstin_uin")
+        or additional_fields.get("gstin_seller")
+        or ""
+    )[:2]
+    buyer_gst = str(
+        additional_fields.get("buyer_gstin")
+        or additional_fields.get("buyer_gstin_uin")
+        or additional_fields.get("gstin_buyer")
+        or ""
+    )[:2]
 
     if seller_gst and buyer_gst and seller_gst != buyer_gst:
-        # Different state codes -> inter-state supply -> IGST.
         igst_rate = _num(additional_fields.get("igst_rate"))
-        igst_amount = _num(additional_fields.get("igst_amount"))
-
+        # Gemini may store the GST total at line-item level ("tax_amount") rather than
+        # as a flat "igst_amount" in additional_fields.  Fall back to summing line items.
+        igst_amount = _num(additional_fields.get("igst_amount")) or _sum_line_item_tax(json_root)
         if igst_amount > 0:
             total_tax_amount += igst_amount
-            is_deemed, amount = _entry(igst_amount, "Dr")
-            blocks.append(f"""      <LEDGERENTRIES.LIST>
-       <LEDGERNAME>{_safe(IGST_ledger)}</LEDGERNAME>
-       <ISDEEMEDPOSITIVE>{is_deemed}</ISDEEMEDPOSITIVE>
-       <RATE>{igst_rate:.2f}</RATE>
-       <AMOUNT>{amount}</AMOUNT>
-      </LEDGERENTRIES.LIST>""")
+            elements.append(
+                build_ledger_entry_block(IGST_ledger, igst_amount, "Dr", rate=igst_rate)
+            )
     else:
-        # Same state (or GSTINs unavailable) -> split into CGST + SGST.
-        total_rate = _num(additional_fields.get("igst_rate"))
-        total_tax_field = _num(additional_fields.get("igst_amount"))
-
-        cgst_rate = _num(additional_fields.get("cgst_rate")) or (total_rate / 2)
-        sgst_rate = _num(additional_fields.get("sgst_rate")) or (total_rate / 2)
-        cgst_amount = _num(additional_fields.get("cgst_amount")) or (total_tax_field / 2)
-        sgst_amount = _num(additional_fields.get("sgst_amount")) or (total_tax_field / 2)
-
-        tax_map = [("CGST", cgst_rate, cgst_amount), ("SGST", sgst_rate, sgst_amount)]
-
-        for tax_type, rate, tax_amount in tax_map:
+        cgst_rate = _num(additional_fields.get("cgst_rate"))
+        sgst_rate = _num(additional_fields.get("sgst_rate"))
+        cgst_amount = _num(additional_fields.get("cgst_amount"))
+        sgst_amount = _num(additional_fields.get("sgst_amount"))
+        for tax_type, rate, tax_amount in (
+            ("CGST", cgst_rate, cgst_amount),
+            ("SGST", sgst_rate, sgst_amount),
+        ):
             if tax_amount > 0:
                 total_tax_amount += tax_amount
-                is_deemed, amount = _entry(tax_amount, "Dr")
-                blocks.append(f"""      <LEDGERENTRIES.LIST>
-       <LEDGERNAME>{_safe(tax_type)}</LEDGERNAME>
-       <ISDEEMEDPOSITIVE>{is_deemed}</ISDEEMEDPOSITIVE>
-       <RATE>{rate:.2f}</RATE>
-       <AMOUNT>{amount}</AMOUNT>
-      </LEDGERENTRIES.LIST>""")
+                elements.append(
+                    build_ledger_entry_block(tax_type, tax_amount, "Dr", rate=rate)
+                )
 
-    # 3. Round Off - whatever is still needed to make debits equal credits.
-    #
-    # Derived from the gap rather than read from the extracted `round_off` field,
-    # so the voucher balances by construction. The previous implementation took
-    # abs(round_off) in *both* branches of its Dr/Cr test, so it never emitted a
-    # negative amount and round-off was always posted as a credit; the test
-    # itself was also inverted. And because it only fired `if round_off != 0`, an
-    # invoice where extraction missed the round-off line went out unbalanced by
-    # exactly that amount.
     invoice_total = _num(json_root.get("total_amount"))
     computed_from_lines = computed_total - discount + total_tax_amount
     delta = round(invoice_total - computed_from_lines, 2)
@@ -360,17 +303,12 @@ def tax_entries_xml(data, computed_total):
         )
 
     if delta != 0:
-        round_ledger = _safe(additional_fields.get("round_off_ledger_name", "Round Off"))
-        # delta > 0 means the party is credited more than the net debits, so the
-        # balancing entry is a Debit; delta < 0 is the mirror image.
-        is_deemed, amount = _entry(delta, "Dr" if delta > 0 else "Cr")
-        blocks.append(f"""      <LEDGERENTRIES.LIST>
-       <LEDGERNAME>{round_ledger}</LEDGERNAME>
-       <ISDEEMEDPOSITIVE>{is_deemed}</ISDEEMEDPOSITIVE>
-       <AMOUNT>{amount}</AMOUNT>
-      </LEDGERENTRIES.LIST>""")
-
-        extracted_round_off = _num(additional_fields.get("round_off"))
+        round_ledger = additional_fields.get("round_off_ledger_name", "Round Off")
+        elements.append(
+            build_ledger_entry_block(round_ledger, abs(delta), "Dr" if delta > 0 else "Cr")
+        )
+        # Accept both "round_off" and the Gemini-emitted "round_off_amount".
+        extracted_round_off = _num(additional_fields.get("round_off") or additional_fields.get("round_off_amount"))
         if abs(abs(extracted_round_off) - abs(delta)) > BALANCE_EPSILON:
             logger.warning(
                 "Round off computed as %.2f but extraction reported %.2f - "
@@ -379,7 +317,7 @@ def tax_entries_xml(data, computed_total):
                 extracted_round_off,
             )
 
-    return "\n".join(blocks)
+    return elements_to_fragment(elements, indent=" " * 6)
 
 
 def send_template_to_tally(TALLY_URL, path, company_name, data, invoice_number, voucher_type, vendor_name):
@@ -408,12 +346,18 @@ def send_template_to_tally(TALLY_URL, path, company_name, data, invoice_number, 
         with open(path, "r", encoding="utf-8") as file:
             template_content = file.read()
 
-        inventory_entries_xml, cmp_total = ledger_entries_xml(data)
+        inventory_entries_xml, expense_ledger_entries_xml, cmp_total = line_entries_xml(data)
         tax_entries_string = tax_entries_xml(data, cmp_total)
 
-        # Party ledger is the credit side of a purchase. The template hardcodes
-        # ISDEEMEDPOSITIVE=No to match, so only the amount is taken from here.
-        _, total_amount = _entry(_num(json_root.get("total_amount")), "Cr")
+        invoice_total = _num(json_root.get("total_amount"))
+        party_entry = build_ledger_entry_block(
+            vendor_name,
+            invoice_total,
+            "Cr",
+            bill_ref=invoice_number,
+            is_party_ledger=True,
+        )
+        party_ledger_xml = elements_to_fragment([party_entry], indent=" " * 6)
 
         invoice_date = json_root.get("invoice_date") or json_root.get("date")
         if not invoice_date:
@@ -425,9 +369,10 @@ def send_template_to_tally(TALLY_URL, path, company_name, data, invoice_number, 
             VOUCHER_TYPE=_safe(voucher_type),
             VOUCHER_DATE=convert_date_yyyymmdd("2025-07-01"), #invoice_date
             PARTY_LEDGER=_safe(vendor_name),
-            TOTAL_AMOUNT=total_amount,
             INVENTORY_ENTRIES_XML=inventory_entries_xml,
+            EXPENSE_LEDGER_ENTRIES_XML=expense_ledger_entries_xml,
             TAX_ENTRIES_XML=tax_entries_string,
+            PARTY_LEDGER_ENTRY_XML=party_ledger_xml,
         )
 
         xml_payload = clean_tally_xml(xml_payload)

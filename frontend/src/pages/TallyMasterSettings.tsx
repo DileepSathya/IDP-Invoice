@@ -362,6 +362,10 @@ export const TallyMasterSettings: React.FC = () => {
                 <span className="plan-detail-value">{counts.items ?? 0}</span>
               </div>
               <div className="plan-detail-row">
+                <span className="plan-detail-label">Expense ledgers</span>
+                <span className="plan-detail-value">{counts.expense_ledgers ?? 0}</span>
+              </div>
+              <div className="plan-detail-row">
                 <span className="plan-detail-label">Purchase orders</span>
                 <span className="plan-detail-value">{counts.po_headers ?? 0}</span>
               </div>

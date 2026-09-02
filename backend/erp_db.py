@@ -21,9 +21,9 @@ def is_configured() -> bool:
 def get_match_threshold() -> float:
     load_app_dotenv()
     try:
-        return float(os.environ.get("ERP_MATCH_THRESHOLD", "80"))
+        return float(os.environ.get("ERP_MATCH_THRESHOLD", "90"))
     except (TypeError, ValueError):
-        return 80.0
+        return 90.0
 
 
 def fetch_vendor_master() -> list[dict[str, Any]]:
@@ -32,6 +32,10 @@ def fetch_vendor_master() -> list[dict[str, Any]]:
 
 def fetch_item_master() -> list[dict[str, Any]]:
     return tally_master_db.fetch_item_master()
+
+
+def fetch_expense_ledger_master() -> list[dict[str, Any]]:
+    return tally_master_db.fetch_expense_ledger_master()
 
 
 def fetch_po_header() -> list[dict[str, Any]]:

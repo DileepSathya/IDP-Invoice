@@ -50,14 +50,16 @@ def run_tally_master_refresh(*, rematch_invoices: bool = False) -> dict[str, Any
 
         vendors = payload.get("vendors") or []
         items = payload.get("items") or []
+        expense_ledgers = payload.get("expense_ledgers") or []
         po_headers = payload.get("po_headers") or []
         po_details = payload.get("po_details") or []
 
-        if not errors or (vendors or items or po_headers):
+        if not errors or (vendors or items or expense_ledgers or po_headers):
             counts = tally_master_db.replace_master_data(
                 company=company,
                 vendors=vendors,
                 items=items,
+                expense_ledgers=expense_ledgers,
                 po_headers=po_headers,
                 po_details=po_details,
             )

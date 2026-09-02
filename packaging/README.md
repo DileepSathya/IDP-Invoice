@@ -46,7 +46,7 @@ dist/IDP-Invoice/
 
 MongoDB collections for Tally ERP matching (populated via **Settings → Tally Master Data → Refresh** or the scheduler):
 
-- `tally_vendor_master`, `tally_item_master`, `tally_po_header`, `tally_po_details`
+- `tally_vendor_master`, `tally_item_master`, `tally_expense_ledger_master`, `tally_po_header`, `tally_po_details`
 - Scheduler settings: `erp_settings` document `_id: tally_master_scheduler` (mode, frequency, rematch flag)
 
 The Tally master refresh **scheduler runs inside `idp-api.exe`** (same process as the ERP sync scheduler). No extra Windows service or `.env` key is required — configure it from **Settings → Tally Master Data** after deploy.

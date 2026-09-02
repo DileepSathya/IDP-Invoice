@@ -2,9 +2,10 @@
 Tally master data stored in MongoDB and mutates the invoice's gemini_json in place.
 
 Scores are 0-100 via rapidfuzz (same scale requested for the feature). A score
-at/above ERP_MATCH_THRESHOLD (default 80, see backend/erp_db.get_match_threshold)
-is a confirmed match: vendor_id / item_id / PO business_unit get written onto the
-invoice. Anything below that — or a field that doesn't match any candidate at all —
+at/above ERP_MATCH_THRESHOLD (default 90, see backend/erp_db.get_match_threshold)
+is a confirmed match: vendor_id / item_id / ledger_id / PO business_unit get written onto the
+invoice. Line items are matched stock-first, then expense ledger when stock score is below
+threshold. Anything below that — or a field that doesn't match any candidate at all —
 is left unmatched and produces a HITL reason string explaining why, so it surfaces
 in the same "Reason for Human approval" column the rest of HITL already uses.
 
@@ -29,6 +30,10 @@ def _vendor_master_label() -> str:
 
 def _item_master_label() -> str:
     return "Tally stock items"
+
+
+def _expense_ledger_label() -> str:
+    return "Tally expense ledgers"
 
 
 def _po_header_label() -> str:
@@ -125,6 +130,23 @@ def match_item(description: Any) -> dict[str, Any]:
         "category": best_row.get("category") if matched else None,
         "score": score,
         "best_candidate_name": best_row.get("item_name") if best_row else None,
+    }
+
+
+def match_expense_ledger(description: Any) -> dict[str, Any]:
+    """Fuzzy-match a line item's service/description against expense ledger master."""
+    threshold = erp_db.get_match_threshold()
+    ledgers = erp_db.fetch_expense_ledger_master()
+    best_row, score = _best_match(
+        description, ledgers, key_fields=("expense_ledger_name",)
+    )
+    matched = best_row is not None and score >= threshold
+    return {
+        "matched": matched,
+        "ledger_id": best_row.get("expense_ledger_id") if matched else None,
+        "ledger_name": best_row.get("expense_ledger_name") if matched else None,
+        "score": score,
+        "best_candidate_name": best_row.get("expense_ledger_name") if best_row else None,
     }
 
 
@@ -240,6 +262,58 @@ def _match_vendor_into(gemini_json: dict[str, Any], additional_fields: dict[str,
     return [f"Vendor '{seller}' not found in {_vendor_master_label()}{hint}"]
 
 
+def _clear_line_item_stock_fields(li: dict[str, Any]) -> None:
+    li["item_id"] = None
+    li["erp_item_name"] = None
+    li["erp_unit"] = None
+    li["erp_item_group"] = None
+
+
+def _clear_line_item_ledger_fields(li: dict[str, Any]) -> None:
+    li["ledger_id"] = None
+    li["erp_ledger_name"] = None
+    li["ledger_match_score"] = None
+
+
+def _preserve_line_item_originals(li: dict[str, Any]) -> None:
+    """Snapshot OCR/extracted values once — never overwrite on rematch."""
+    li.setdefault("original_name", li.get("service") or li.get("description"))
+    li.setdefault("original_quantity", li.get("quantity") or li.get("qty"))
+    li.setdefault(
+        "original_rate",
+        li.get("price_per_unit") or li.get("rate") or li.get("unit_price"),
+    )
+    original_amount = li.get("amount") or li.get("total")
+    if original_amount is None:
+        try:
+            qty = float(str(li.get("original_quantity") or "").replace(",", "") or 0)
+            rate = float(str(li.get("original_rate") or "").replace(",", "") or 0)
+            if qty and rate:
+                original_amount = round(qty * rate, 2)
+        except (TypeError, ValueError):
+            original_amount = None
+    li.setdefault("original_amount", original_amount)
+
+
+def _apply_line_classification(
+    li: dict[str, Any],
+    *,
+    match_type: str,
+    matched_name: Optional[str],
+    match_score: Optional[float],
+    tally_master_id: Optional[str],
+) -> None:
+    """Write unified classification fields alongside legacy aliases."""
+    li["match_type"] = match_type
+    li["line_match_type"] = match_type
+    li["matched_name"] = matched_name
+    li["match_score"] = match_score
+    li["tally_master_id"] = tally_master_id
+    li["matching_status"] = (
+        "MATCHED" if match_type in ("STOCK_ITEM", "LEDGER") else "HITL_REQUIRED"
+    )
+
+
 def _match_items_into(gemini_json: dict[str, Any]) -> list[str]:
     line_items = gemini_json.get("line_items")
     if not isinstance(line_items, list) or not line_items:
@@ -249,43 +323,83 @@ def _match_items_into(gemini_json: dict[str, Any]) -> list[str]:
     for idx, li in enumerate(line_items):
         if not isinstance(li, dict):
             continue
+
+        _preserve_line_item_originals(li)
         description = li.get("service") or li.get("description")
         if not _clean(description):
-            # No service/description to match against item_master at all - clear any
-            # stale match data and flag it, rather than silently skipping. Previously
-            # this line item was skipped entirely with no HITL reason, so an invoice
-            # could look "fully ERP-matched" while one of its line items was never
-            # actually checked against Tally master data.
+            _clear_line_item_stock_fields(li)
+            _clear_line_item_ledger_fields(li)
             li["item_match_score"] = 0.0
-            li["item_id"] = None
-            li["erp_item_name"] = None
-            li["erp_unit"] = None
-            li["erp_item_group"] = None
-            reasons.append(f"Item {idx + 1}: no service/description to match against {_item_master_label()}")
+            _apply_line_classification(
+                li,
+                match_type="UNMATCHED",
+                matched_name=None,
+                match_score=None,
+                tally_master_id=None,
+            )
+            reasons.append(
+                f"Item {idx + 1}: no service/description to match against "
+                f"{_item_master_label()} or {_expense_ledger_label()}"
+            )
             continue
 
-        result = match_item(description)
-        li["item_match_score"] = result["score"]
+        stock_result = match_item(description)
+        li["item_match_score"] = stock_result["score"]
 
-        if result["matched"]:
-            li["item_id"] = result["item_id"]
-            # Canonical item_master values, kept separate from the OCR-extracted
-            # `service`/`unit` so future ERP/Tally export can use master-data spelling
-            # (item name, unit of measure, category/item group) without disturbing the
-            # originally extracted invoice text or any quantity/rate/amount/HSN/tax field.
-            li["erp_item_name"] = result["item_name"]
-            li["erp_unit"] = result["units"]
-            li["erp_item_group"] = result["category"]
+        if stock_result["matched"]:
+            li["item_id"] = stock_result["item_id"]
+            li["erp_item_name"] = stock_result["item_name"]
+            li["erp_unit"] = stock_result["units"]
+            li["erp_item_group"] = stock_result["category"]
+            _clear_line_item_ledger_fields(li)
+            _apply_line_classification(
+                li,
+                match_type="STOCK_ITEM",
+                matched_name=stock_result["item_name"],
+                match_score=stock_result["score"],
+                tally_master_id=stock_result["item_id"],
+            )
             continue
 
-        li["item_id"] = None
-        li["erp_item_name"] = None
-        li["erp_unit"] = None
-        li["erp_item_group"] = None
+        ledger_result = match_expense_ledger(description)
+        li["ledger_match_score"] = ledger_result["score"]
+
+        if ledger_result["matched"]:
+            li["ledger_id"] = ledger_result["ledger_id"]
+            li["erp_ledger_name"] = ledger_result["ledger_name"]
+            _clear_line_item_stock_fields(li)
+            _apply_line_classification(
+                li,
+                match_type="LEDGER",
+                matched_name=ledger_result["ledger_name"],
+                match_score=ledger_result["score"],
+                tally_master_id=ledger_result["ledger_id"],
+            )
+            continue
+
+        _clear_line_item_stock_fields(li)
+        _clear_line_item_ledger_fields(li)
+        _apply_line_classification(
+            li,
+            match_type="UNMATCHED",
+            matched_name=None,
+            match_score=max(stock_result["score"], ledger_result["score"]) or None,
+            tally_master_id=None,
+        )
         label = f"Item {idx + 1} ('{description}')"
-        best_name = result.get("best_candidate_name")
-        hint = f" (closest match: '{best_name}', score {result['score']:.0f})" if best_name else f" (no items in {_item_master_label()})"
-        reasons.append(f"{label} not found in {_item_master_label()}{hint}")
+        stock_hint = stock_result.get("best_candidate_name")
+        ledger_hint = ledger_result.get("best_candidate_name")
+        stock_part = (
+            f"stock closest: '{stock_hint}', score {stock_result['score']:.0f}"
+            if stock_hint
+            else f"no stock items in {_item_master_label()}"
+        )
+        ledger_part = (
+            f"ledger closest: '{ledger_hint}', score {ledger_result['score']:.0f}"
+            if ledger_hint
+            else f"no expense ledgers in {_expense_ledger_label()}"
+        )
+        reasons.append(f"{label} not matched — {stock_part}; {ledger_part}")
 
     return reasons
 
@@ -327,9 +441,11 @@ def _match_po_into(gemini_json: dict[str, Any], additional_fields: dict[str, Any
         for idx, li in enumerate(line_items):
             if not isinstance(li, dict):
                 continue
+            if li.get("line_match_type") == "LEDGER" or li.get("match_type") == "LEDGER":
+                continue
             item_id = li.get("item_id")
             if not item_id:
-                continue  # already flagged as "not found in item_master" by _match_items_into
+                continue  # already flagged as unmatched by _match_items_into
             if _clean(item_id).upper() not in po_item_ids:
                 description = li.get("service") or li.get("description") or f"line {idx + 1}"
                 reasons.append(

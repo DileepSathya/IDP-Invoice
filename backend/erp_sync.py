@@ -42,11 +42,18 @@ def _sync_one_invoice(coll: Any, doc: dict[str, Any]) -> bool:
         "po_business_unit": additional_fields.get("po_business_unit"),
         "line_items": [
             (
+                li.get("match_type") or li.get("line_match_type"),
+                li.get("matched_name"),
+                li.get("match_score"),
+                li.get("matching_status"),
+                li.get("tally_master_id"),
+                li.get("original_name"),
                 li.get("item_id"),
                 li.get("item_match_score"),
                 li.get("erp_item_name"),
-                li.get("erp_unit"),
-                li.get("erp_item_group"),
+                li.get("ledger_id"),
+                li.get("ledger_match_score"),
+                li.get("erp_ledger_name"),
             )
             for li in (gemini_json.get("line_items") or [])
             if isinstance(li, dict)
@@ -85,11 +92,18 @@ def _sync_one_invoice(coll: Any, doc: dict[str, Any]) -> bool:
 
     after_line_items = [
         (
+            li.get("match_type") or li.get("line_match_type"),
+            li.get("matched_name"),
+            li.get("match_score"),
+            li.get("matching_status"),
+            li.get("tally_master_id"),
+            li.get("original_name"),
             li.get("item_id"),
             li.get("item_match_score"),
             li.get("erp_item_name"),
-            li.get("erp_unit"),
-            li.get("erp_item_group"),
+            li.get("ledger_id"),
+            li.get("ledger_match_score"),
+            li.get("erp_ledger_name"),
         )
         for li in (gemini_json.get("line_items") or [])
         if isinstance(li, dict)

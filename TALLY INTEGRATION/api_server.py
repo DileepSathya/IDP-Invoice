@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 load_dotenv()
 
+from tally.expense_vendors import fetch_expense_ledgers
 from tally.master_data import fetch_all_masters, fetch_items, fetch_vendors
 from tally.pipeline import push_invoice_by_id
 from tally.purchase_orders import fetch_purchase_orders
@@ -62,6 +63,7 @@ class TallyMastersResponse(BaseModel):
     company: Optional[str] = None
     vendors: list[dict[str, Any]] = []
     items: list[dict[str, Any]] = []
+    expense_ledgers: list[dict[str, Any]] = []
     po_headers: list[dict[str, Any]] = []
     po_details: list[dict[str, Any]] = []
     errors: list[str] = []
@@ -143,6 +145,18 @@ def get_item_masters() -> TallyMastersResponse:
         success=not errors,
         company=TALLY_COMPANY or None,
         items=items,
+        errors=errors,
+    )
+
+
+@app.get("/masters/expense-ledgers", response_model=TallyMastersResponse)
+def get_expense_ledger_masters() -> TallyMastersResponse:
+    expense_ledgers, error = fetch_expense_ledgers(TALLY_URL, company_name=TALLY_COMPANY or None)
+    errors = [error] if error else []
+    return TallyMastersResponse(
+        success=not errors,
+        company=TALLY_COMPANY or None,
+        expense_ledgers=expense_ledgers,
         errors=errors,
     )
 

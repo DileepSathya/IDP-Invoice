@@ -203,7 +203,9 @@ def _check_erp_master_data() -> dict[str, Any]:
             status="ok",
             message=(
                 f"Loaded in MongoDB — {counts.get('vendors', '?')} vendors, "
-                f"{counts.get('items', '?')} items, {counts.get('po_headers', '?')} POs."
+                f"{counts.get('items', '?')} items, "
+                f"{counts.get('expense_ledgers', '?')} expense ledgers, "
+                f"{counts.get('po_headers', '?')} POs."
             ),
             fix_route="/settings/tally-masters",
         )

@@ -43,6 +43,19 @@ export type InvoiceSummary = {
   po_business_unit?: string | null;
   item_id?: string | null;
   item_match_score?: number | null;
+  line_match_type?: "STOCK_ITEM" | "LEDGER" | "UNMATCHED" | null;
+  ledger_id?: string | null;
+  ledger_match_score?: number | null;
+  erp_ledger_name?: string | null;
+  original_name?: string | null;
+  original_quantity?: unknown | null;
+  original_rate?: unknown | null;
+  original_amount?: unknown | null;
+  matched_name?: string | null;
+  match_type?: "STOCK_ITEM" | "LEDGER" | "UNMATCHED" | null;
+  match_score?: number | null;
+  tally_master_id?: string | null;
+  matching_status?: "MATCHED" | "HITL_REQUIRED" | null;
   /** True when ERP matching is current and left no vendor/item/PO gaps. */
   erp_matching_complete?: boolean;
   /** Tally push outcome shown in ERP-Remark column. */
@@ -581,6 +594,7 @@ export async function saveTallyLedgerSettings(
 export type TallyMasterSyncResult = {
   vendors: number;
   items: number;
+  expense_ledgers: number;
   po_headers: number;
   po_lines: number;
   errors: string[];
@@ -598,6 +612,7 @@ export type TallyMasterSyncStatus = {
   counts: {
     vendors?: number;
     items?: number;
+    expense_ledgers?: number;
     po_headers?: number;
     po_lines?: number;
   };

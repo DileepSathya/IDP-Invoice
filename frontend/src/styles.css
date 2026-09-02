@@ -2313,6 +2313,44 @@ tbody tr:nth-child(even) {
   font-weight: 500;
 }
 
+.erp-match-type {
+  display: inline-block;
+  padding: 0.12rem 0.45rem;
+  border-radius: 4px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.erp-match-type-stock {
+  background: rgba(34, 197, 94, 0.18);
+  color: #86efac;
+}
+
+.erp-match-type-ledger {
+  background: rgba(59, 130, 246, 0.18);
+  color: #93c5fd;
+}
+
+.erp-match-type-unmatched {
+  background: rgba(239, 68, 68, 0.18);
+  color: #fca5a5;
+}
+
+.erp-match-score-display {
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.erp-match-score-ok {
+  color: #86efac;
+}
+
+.erp-match-score-fail {
+  color: #fca5a5;
+}
+
 .erp-remark-cell {
   display: flex;
   align-items: center;
