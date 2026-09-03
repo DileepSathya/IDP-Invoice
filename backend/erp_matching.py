@@ -343,7 +343,17 @@ def _match_items_into(gemini_json: dict[str, Any]) -> list[str]:
             )
             continue
 
-        stock_result = match_item(description)
+        manual_type = ""
+        if str(li.get("match_type_source") or "").strip().upper() == "MANUAL":
+            requested = str(li.get("match_type") or li.get("line_match_type") or "").strip().upper()
+            if requested in ("STOCK_ITEM", "LEDGER"):
+                manual_type = requested
+
+        stock_result = (
+            match_item(description)
+            if manual_type != "LEDGER"
+            else {"matched": False, "score": 0.0}
+        )
         li["item_match_score"] = stock_result["score"]
 
         if stock_result["matched"]:
@@ -361,7 +371,11 @@ def _match_items_into(gemini_json: dict[str, Any]) -> list[str]:
             )
             continue
 
-        ledger_result = match_expense_ledger(description)
+        ledger_result = (
+            match_expense_ledger(description)
+            if manual_type != "STOCK_ITEM"
+            else {"matched": False, "score": 0.0}
+        )
         li["ledger_match_score"] = ledger_result["score"]
 
         if ledger_result["matched"]:
@@ -399,7 +413,12 @@ def _match_items_into(gemini_json: dict[str, Any]) -> list[str]:
             if ledger_hint
             else f"no expense ledgers in {_expense_ledger_label()}"
         )
-        reasons.append(f"{label} not matched — {stock_part}; {ledger_part}")
+        if manual_type == "STOCK_ITEM":
+            reasons.append(f"{label} not matched as a stock item — {stock_part}")
+        elif manual_type == "LEDGER":
+            reasons.append(f"{label} not matched as an expense ledger — {ledger_part}")
+        else:
+            reasons.append(f"{label} not matched — {stock_part}; {ledger_part}")
 
     return reasons
 

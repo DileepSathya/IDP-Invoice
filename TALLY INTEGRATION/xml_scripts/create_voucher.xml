@@ -23,15 +23,16 @@
       <PERSISTEDVIEW>Invoice Voucher View</PERSISTEDVIEW>
       <ISINVOICE>Yes</ISINVOICE>
       <EFFECTIVEDATE>{VOUCHER_DATE}</EFFECTIVEDATE>
+      <VCHENTRYMODE>{VOUCHER_ENTRY_MODE}</VCHENTRYMODE>
 
       <!-- ===== 1. Inventory Items (stock lines only) ===== -->
 {INVENTORY_ENTRIES_XML}
 
-      <!-- ===== 2. Expense ledger entries (non-stock lines) ===== -->
-{EXPENSE_LEDGER_ENTRIES_XML}
-
-      <!-- ===== 3. Party Ledger Entry (Total Credit) ===== -->
+      <!-- ===== 2. Party Ledger Entry (must precede accounting lines) ===== -->
 {PARTY_LEDGER_ENTRY_XML}
+
+      <!-- ===== 3. Expense ledger entries (non-stock lines) ===== -->
+{EXPENSE_LEDGER_ENTRIES_XML}
 
       <!-- ===== 4. Taxes, Discounts, and Round Off (Accounting Ledgers) ===== -->
 {TAX_ENTRIES_XML}

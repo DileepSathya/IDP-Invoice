@@ -42,8 +42,10 @@ type InvoiceEditorFormState = {
 };
 
 type InvoiceEditorLineItem = {
+  [key: string]: unknown;
   hsn_number: string;
   service: string;
+  match_type: "STOCK_ITEM" | "LEDGER" | "";
   quantity: string;
   unit: string;
   price_per_unit: string;
@@ -699,9 +701,19 @@ export const Dashboard: React.FC = () => {
       setJsonEditorLineItems(
         lineItemsRaw.map((item) => {
           const li = item as Record<string, unknown>;
+          // Preserve the stored match_type so the bridge knows if this line is
+          // a stock item or an expense ledger entry. Default to STOCK_ITEM for
+          // invoices processed before this field existed.
+          const rawMatchType = String(li.match_type ?? "").toUpperCase();
+          const matchType: InvoiceEditorLineItem["match_type"] =
+            rawMatchType === "LEDGER" ? "LEDGER"
+            : rawMatchType === "STOCK_ITEM" ? "STOCK_ITEM"
+            : "STOCK_ITEM"; // legacy default
           return {
+            ...li,
             hsn_number: ToText(li.hsn_number),
             service: ToText(li.service),
+            match_type: matchType,
             quantity: ToText(li.quantity),
             unit: ToText(li.unit),
             price_per_unit: ToText(li.price_per_unit),
@@ -827,6 +839,28 @@ export const Dashboard: React.FC = () => {
         if (idx !== index) return item;
         const next: InvoiceEditorLineItem = { ...item, [field]: value };
 
+        // When switching a line to LEDGER, qty and rate are not meaningful —
+        // clear them so the amount field becomes the sole source of truth and
+        // the bridge doesn't try to use them.
+        if (field === "match_type" && value === "LEDGER") {
+          next.quantity = "";
+          next.unit = "";
+          next.price_per_unit = "";
+          next.matched_name = "";
+          next.erp_item_name = "";
+          next.item_id = "";
+          next.tally_master_id = "";
+          next.line_match_type = "LEDGER";
+          next.match_type_source = "MANUAL";
+        } else if (field === "match_type" && value === "STOCK_ITEM") {
+          next.matched_name = "";
+          next.erp_ledger_name = "";
+          next.ledger_id = "";
+          next.tally_master_id = "";
+          next.line_match_type = "STOCK_ITEM";
+          next.match_type_source = "MANUAL";
+        }
+
         // Real-time calculation: keep amount and amount_after_tax in sync as the
         // underlying quantity/rate/tax values change, so mismatches are caught as
         // the user types rather than only after saving.
@@ -868,6 +902,7 @@ export const Dashboard: React.FC = () => {
       {
         hsn_number: "",
         service: "",
+        match_type: "STOCK_ITEM",
         quantity: "",
         unit: "",
         price_per_unit: "",
@@ -1743,8 +1778,9 @@ export const Dashboard: React.FC = () => {
                 <table className="json-editor-line-items-table">
                   <thead>
                     <tr>
+                      <th title="S = Stock Item (needs Qty &amp; Rate), L = Ledger / Expense (Amount only)">Type</th>
                       <th>HSN</th>
-                      <th>Service</th>
+                      <th>Service / Ledger Name</th>
                       <th>Qty</th>
                       <th>Unit</th>
                       <th>Price/Unit</th>
@@ -1758,29 +1794,65 @@ export const Dashboard: React.FC = () => {
                   <tbody>
                     {jsonEditorLineItems.length === 0 && (
                       <tr>
-                        <td colSpan={10} className="json-editor-empty-cell">No line items. Add one.</td>
+                        <td colSpan={11} className="json-editor-empty-cell">No line items. Add one.</td>
                       </tr>
                     )}
-                    {jsonEditorLineItems.map((li, idx) => (
-                      <tr key={`li-${idx}`}>
+                    {jsonEditorLineItems.map((li, idx) => {
+                      const isLedger = li.match_type === "LEDGER";
+                      return (
+                      <tr key={`li-${idx}`} className={isLedger ? "li-row-ledger" : "li-row-stock"}>
+                        {/* ── L / S toggle ── */}
+                        <td className="li-type-cell">
+                          <div className="ls-toggle" role="group" aria-label="Line type">
+                            <button
+                              type="button"
+                              className={`ls-btn ls-btn-s${!isLedger ? " ls-active" : ""}`}
+                              title="Stock Item — requires Qty and Rate"
+                              onClick={() => updateLineItemField(idx, "match_type", "STOCK_ITEM")}
+                            >S</button>
+                            <button
+                              type="button"
+                              className={`ls-btn ls-btn-l${isLedger ? " ls-active" : ""}`}
+                              title="Ledger / Expense — Amount only, no Qty or Rate needed"
+                              onClick={() => updateLineItemField(idx, "match_type", "LEDGER")}
+                            >L</button>
+                          </div>
+                        </td>
                         <td>
                           <input value={li.hsn_number} onChange={(e) => updateLineItemField(idx, "hsn_number", e.target.value)} />
                         </td>
                         <td>
-                          <input value={li.service} onChange={(e) => updateLineItemField(idx, "service", e.target.value)} />
+                          <input
+                            value={li.service}
+                            placeholder={isLedger ? "Exact Tally ledger name" : "Item description"}
+                            onChange={(e) => updateLineItemField(idx, "service", e.target.value)}
+                          />
                         </td>
-                        <td>
-                          <input value={li.quantity} onChange={(e) => updateLineItemField(idx, "quantity", e.target.value)} />
+                        {/* Qty — disabled & greyed for Ledger lines */}
+                        <td className={isLedger ? "li-cell-disabled" : ""}>
+                          <input
+                            value={li.quantity}
+                            disabled={isLedger}
+                            placeholder={isLedger ? "—" : ""}
+                            onChange={(e) => updateLineItemField(idx, "quantity", e.target.value)}
+                          />
                         </td>
-                        <td>
+                        <td className={isLedger ? "li-cell-disabled" : ""}>
                           <input
                             value={li.unit}
-                            placeholder="nos/ltr/kg..."
+                            disabled={isLedger}
+                            placeholder={isLedger ? "—" : "nos/ltr/kg..."}
                             onChange={(e) => updateLineItemField(idx, "unit", e.target.value)}
                           />
                         </td>
-                        <td>
-                          <input value={li.price_per_unit} onChange={(e) => updateLineItemField(idx, "price_per_unit", e.target.value)} />
+                        {/* Price/Unit — disabled & greyed for Ledger lines */}
+                        <td className={isLedger ? "li-cell-disabled" : ""}>
+                          <input
+                            value={li.price_per_unit}
+                            disabled={isLedger}
+                            placeholder={isLedger ? "—" : ""}
+                            onChange={(e) => updateLineItemField(idx, "price_per_unit", e.target.value)}
+                          />
                         </td>
                         <td>
                           <input value={li.amount} onChange={(e) => updateLineItemField(idx, "amount", e.target.value)} />
@@ -1806,7 +1878,8 @@ export const Dashboard: React.FC = () => {
                           </button>
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

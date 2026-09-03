@@ -1099,8 +1099,70 @@ td {
 .json-editor-line-items-table {
   width: 100%;
   border-collapse: collapse;
-  min-width: 930px;
+  min-width: 980px;
 }
+
+/* ── L / S type toggle ── */
+.li-type-cell {
+  width: 58px;
+  text-align: center;
+}
+
+.ls-toggle {
+  display: inline-flex;
+  border-radius: 0.4rem;
+  overflow: hidden;
+  border: 1px solid rgba(99, 102, 241, 0.45);
+}
+
+.ls-btn {
+  padding: 0.28rem 0.6rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+  border: none;
+  background: rgba(15, 23, 42, 0.9);
+  color: #6b7280;
+  transition: background 0.15s, color 0.15s;
+  letter-spacing: 0.04em;
+}
+
+.ls-btn:hover {
+  background: rgba(99, 102, 241, 0.18);
+  color: #a5b4fc;
+}
+
+.ls-btn-s.ls-active {
+  background: rgba(16, 185, 129, 0.22);
+  color: #34d399;
+}
+
+.ls-btn-l.ls-active {
+  background: rgba(139, 92, 246, 0.25);
+  color: #c084fc;
+}
+
+/* Ledger row subtle accent */
+.li-row-ledger {
+  border-left: 3px solid rgba(139, 92, 246, 0.55);
+}
+
+.li-row-stock {
+  border-left: 3px solid transparent;
+}
+
+/* Greyed-out cells for fields not applicable to ledger lines */
+.li-cell-disabled {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+.li-cell-disabled input {
+  background: rgba(15, 23, 42, 0.5) !important;
+  color: #4b5563 !important;
+  cursor: not-allowed;
+}
+
 
 .json-editor-line-items-table th,
 .json-editor-line-items-table td {

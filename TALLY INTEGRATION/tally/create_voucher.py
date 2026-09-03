@@ -264,21 +264,34 @@ def tax_entries_xml(data, computed_total):
         or ""
     )[:2]
 
-    if seller_gst and buyer_gst and seller_gst != buyer_gst:
-        igst_rate = _num(additional_fields.get("igst_rate"))
-        # Gemini may store the GST total at line-item level ("tax_amount") rather than
-        # as a flat "igst_amount" in additional_fields.  Fall back to summing line items.
-        igst_amount = _num(additional_fields.get("igst_amount")) or _sum_line_item_tax(json_root)
+    igst_rate = _num(additional_fields.get("igst_rate"))
+    cgst_rate = _num(additional_fields.get("cgst_rate"))
+    sgst_rate = _num(additional_fields.get("sgst_rate"))
+    explicit_igst = _num(additional_fields.get("igst_amount"))
+    explicit_cgst = _num(additional_fields.get("cgst_amount"))
+    explicit_sgst = _num(additional_fields.get("sgst_amount"))
+    line_tax_total = _sum_line_item_tax(json_root)
+
+    # Explicit extracted tax amounts are stronger evidence than GSTIN state codes.
+    # GSTIN is frequently absent from OCR, but that must not make a clearly extracted
+    # IGST amount disappear from voucher reconciliation.
+    use_igst = explicit_igst > 0 or (
+        explicit_cgst <= 0
+        and explicit_sgst <= 0
+        and line_tax_total > 0
+        and (igst_rate > 0 or (seller_gst and buyer_gst and seller_gst != buyer_gst))
+    )
+
+    if use_igst:
+        igst_amount = explicit_igst or line_tax_total
         if igst_amount > 0:
             total_tax_amount += igst_amount
             elements.append(
                 build_ledger_entry_block(IGST_ledger, igst_amount, "Dr", rate=igst_rate)
             )
     else:
-        cgst_rate = _num(additional_fields.get("cgst_rate"))
-        sgst_rate = _num(additional_fields.get("sgst_rate"))
-        cgst_amount = _num(additional_fields.get("cgst_amount"))
-        sgst_amount = _num(additional_fields.get("sgst_amount"))
+        cgst_amount = explicit_cgst
+        sgst_amount = explicit_sgst
         for tax_type, rate, tax_amount in (
             ("CGST", cgst_rate, cgst_amount),
             ("SGST", sgst_rate, sgst_amount),
@@ -347,6 +360,9 @@ def send_template_to_tally(TALLY_URL, path, company_name, data, invoice_number, 
             template_content = file.read()
 
         inventory_entries_xml, expense_ledger_entries_xml, cmp_total = line_entries_xml(data)
+        voucher_entry_mode = (
+            "Item Invoice" if inventory_entries_xml.strip() else "Accounting Invoice"
+        )
         tax_entries_string = tax_entries_xml(data, cmp_total)
 
         invoice_total = _num(json_root.get("total_amount"))
@@ -367,7 +383,8 @@ def send_template_to_tally(TALLY_URL, path, company_name, data, invoice_number, 
             COMPANY_NAME=_safe(company_name),
             INVOICE_NUMBER=_safe(invoice_number),
             VOUCHER_TYPE=_safe(voucher_type),
-            VOUCHER_DATE=convert_date_yyyymmdd("2025-07-01"), #invoice_date
+            VOUCHER_DATE=convert_date_yyyymmdd(invoice_date), #invoice_date
+            VOUCHER_ENTRY_MODE=voucher_entry_mode,
             PARTY_LEDGER=_safe(vendor_name),
             INVENTORY_ENTRIES_XML=inventory_entries_xml,
             EXPENSE_LEDGER_ENTRIES_XML=expense_ledger_entries_xml,

@@ -96,7 +96,7 @@ def test_real_invoice_balances():
 
 def test_round_off_direction_flips_when_invoice_rounds_down():
     root = _assert_balanced(_invoice(
-        "1179.00", [{"service": "Widget", "quantity": 1, "price_per_unit": 1000, "unit": "Nos"}],
+        "1179.00", [{"match_type": "STOCK_ITEM", "service": "Widget", "quantity": 1, "price_per_unit": 1000, "unit": "Nos"}],
         {"igst_rate": 18, "igst_amount": 180.00, "round_off": -1.00,
          "seller_gstin": "29AAA", "buyer_gstin": "36AAA"},
     ))
@@ -109,7 +109,7 @@ def test_round_off_closes_gap_even_when_field_missing():
     """Extraction sometimes misses the round-off line. The voucher must still
     balance - the old code emitted no entry at all and went out short."""
     _assert_balanced(_invoice(
-        "11391.00", [{"service": "Waltr", "quantity": 28, "price_per_unit": 499.00, "unit": "Nos"}],
+        "11391.00", [{"match_type": "STOCK_ITEM", "service": "Waltr", "quantity": 28, "price_per_unit": 499.00, "unit": "Nos"}],
         {"discount": 4319, "igst_rate": 18, "igst_amount": 1737.54,
          "seller_gstin": "29AAA", "buyer_gstin": "36AAA"},
     ))
@@ -119,9 +119,9 @@ def test_multi_line_batch_allocations_mirror_their_own_line():
     """Each BATCHALLOCATIONS amount must equal ITS line, not the running total."""
     root = _assert_balanced(_invoice(
         "4720.00",
-        [{"service": "Item A", "quantity": 10, "price_per_unit": 100, "unit": "Nos"},
-         {"service": "Item B", "quantity": 5, "price_per_unit": 200, "unit": "Nos"},
-         {"service": "Item C", "quantity": 2, "price_per_unit": 1000, "unit": "Nos"}],
+        [{"match_type": "STOCK_ITEM", "service": "Item A", "quantity": 10, "price_per_unit": 100, "unit": "Nos"},
+         {"match_type": "STOCK_ITEM", "service": "Item B", "quantity": 5, "price_per_unit": 200, "unit": "Nos"},
+         {"match_type": "STOCK_ITEM", "service": "Item C", "quantity": 2, "price_per_unit": 1000, "unit": "Nos"}],
         {"igst_rate": 18, "igst_amount": 720.00,
          "seller_gstin": "29AAA", "buyer_gstin": "36AAA"},
     ))
@@ -136,7 +136,7 @@ def test_multi_line_batch_allocations_mirror_their_own_line():
 def test_intra_state_cgst_sgst_split_balances():
     """Same state code on both GSTINs takes the CGST/SGST branch."""
     root = _assert_balanced(_invoice(
-        "1180.00", [{"service": "Widget", "quantity": 1, "price_per_unit": 1000, "unit": "Nos"}],
+        "1180.00", [{"match_type": "STOCK_ITEM", "service": "Widget", "quantity": 1, "price_per_unit": 1000, "unit": "Nos"}],
         {"cgst_rate": 9, "sgst_rate": 9, "cgst_amount": 90.00, "sgst_amount": 90.00,
          "seller_gstin": "29AAA", "buyer_gstin": "29BBB"},
     ))
@@ -144,9 +144,34 @@ def test_intra_state_cgst_sgst_split_balances():
     assert {"CGST", "SGST"} <= names, names
 
 
+def test_igst_amount_is_used_when_gstin_state_codes_are_missing():
+    """Invoice 337: explicit IGST must not be discarded just because GSTIN OCR is blank."""
+    root = _assert_balanced(_invoice(
+        "33251.00",
+        [{
+            "match_type": "LEDGER",
+            "matched_name": "Repairs & Maintenance- Factory",
+            "amount": "28179.20",
+        }],
+        {
+            "igst_rate": "18%",
+            "igst_amount": "5072.26",
+            "round_off": "-0.46",
+        },
+        invoice_number="337",
+        po_id="Not applicable",
+    ))
+    entries = {
+        e.findtext("LEDGERNAME"): float(e.findtext("AMOUNT"))
+        for e in root.iter("LEDGERENTRIES.LIST")
+    }
+    assert entries["IGST"] == -5072.26
+    assert entries["Round Off"] == 0.46
+
+
 def test_invoice_with_no_rounding_needed():
     root = _assert_balanced(_invoice(
-        "1000.00", [{"service": "Widget", "quantity": 4, "price_per_unit": 250, "unit": "Nos"}]))
+        "1000.00", [{"match_type": "STOCK_ITEM", "service": "Widget", "quantity": 4, "price_per_unit": 250, "unit": "Nos"}]))
     names = {e.find("LEDGERNAME").text for e in root.iter("LEDGERENTRIES.LIST")}
     assert "Round Off" not in names, names
 
@@ -154,7 +179,7 @@ def test_invoice_with_no_rounding_needed():
 def test_messy_extracted_values_are_parsed():
     """Gemini returns strings, sometimes with separators or a percent sign."""
     _assert_balanced(_invoice(
-        "11,391.00", [{"service": "Waltr", "quantity": "28", "price_per_unit": "499.00", "unit": "Nos"}],
+        "11,391.00", [{"match_type": "STOCK_ITEM", "service": "Waltr", "quantity": "28", "price_per_unit": "499.00", "unit": "Nos"}],
         {"discount": "4,319.00", "igst_rate": "18%", "igst_amount": "1,737.54",
          "round_off": "0.46", "seller_gstin": "29AAA", "buyer_gstin": "36AAA"},
     ))
@@ -164,7 +189,7 @@ def test_large_gap_is_refused_not_plugged():
     """A gap too big to be a rounding artefact means the extraction is wrong.
     Pushing it would create a plausible-looking but incorrect voucher in Tally."""
     result, payload = _build(_invoice(
-        "9999.00", [{"service": "Widget", "quantity": 1, "price_per_unit": 1000, "unit": "Nos"}],
+        "9999.00", [{"match_type": "STOCK_ITEM", "service": "Widget", "quantity": 1, "price_per_unit": 1000, "unit": "Nos"}],
         {"igst_rate": 18, "igst_amount": 180.00,
          "seller_gstin": "29AAA", "buyer_gstin": "36AAA"},
     ))
@@ -176,7 +201,7 @@ def test_large_gap_is_refused_not_plugged():
 def test_voucher_uses_the_real_invoice_date():
     """The voucher date must come from the extracted invoice_date field."""
     _, root = _build(_invoice(
-        "1000.00", [{"service": "Widget", "quantity": 4, "price_per_unit": 250, "unit": "Nos"}],
+        "1000.00", [{"match_type": "STOCK_ITEM", "service": "Widget", "quantity": 4, "price_per_unit": 250, "unit": "Nos"}],
         invoice_date="2026-03-15",
     ))
     assert next(root.iter("DATE")).text == "20260315"
@@ -307,6 +332,7 @@ def test_pure_ledger_purchase_invoice():
          "seller_gstin": "29AAA", "buyer_gstin": "36AAA"},
     ))
     assert len(list(root.iter("ALLINVENTORYENTRIES.LIST"))) == 0
+    assert next(root.iter("VCHENTRYMODE")).text == "Accounting Invoice"
     expense = [
         e for e in root.iter("LEDGERENTRIES.LIST")
         if e.find("GSTSOURCETYPE") is not None
@@ -318,6 +344,95 @@ def test_pure_ledger_purchase_invoice():
     assert entry.find("GSTOVRDNTYPEOFSUPPLY").text == "Services"
     assert entry.find("VATEXPAMOUNT").text == "-1000.00"
     assert entry.find("AMOUNT").text == "-1000.00"
+
+
+def test_accounting_invoice_emits_party_before_expense_ledgers():
+    """Tally uses the first accounting entry as the invoice party/counterparty."""
+    root = _assert_balanced(_invoice(
+        "1180.00",
+        [{
+            "match_type": "LEDGER",
+            "matched_name": "Factory expenses",
+            "amount": "1000.00",
+        }],
+        {
+            "igst_rate": 18,
+            "igst_amount": 180,
+            "seller_gstin": "29AAA",
+            "buyer_gstin": "36AAA",
+        },
+    ))
+    voucher = next(root.iter("VOUCHER"))
+    entries = [child for child in voucher if child.tag == "LEDGERENTRIES.LIST"]
+    assert [entry.findtext("LEDGERNAME") for entry in entries[:2]] == [
+        "Test Vendor",
+        "Factory expenses",
+    ]
+    assert entries[0].findtext("ISPARTYLEDGER") == "Yes"
+    assert entries[0].findtext("ISLASTDEEMEDPOSITIVE") == "No"
+
+
+def test_ledger_line_needs_amount_but_not_quantity_or_rate():
+    """A service/expense purchase is an accounting line, not inventory."""
+    result, payload = _build(_invoice(
+        "1000.00",
+        [{
+            "match_type": "LEDGER",
+            "matched_name": "Factory expenses",
+            "quantity": "",
+            "price_per_unit": "",
+            "amount": "",
+        }],
+    ))
+    assert result.get("success") is False
+    assert "amount" in (result.get("error_reason") or "").lower()
+    assert payload is None
+
+
+def test_stock_line_needs_positive_quantity_and_rate():
+    result, payload = _build(_invoice(
+        "1000.00",
+        [{
+            "match_type": "STOCK_ITEM",
+            "matched_name": "Widget",
+            "quantity": "",
+            "price_per_unit": "",
+            "amount": "1000.00",
+            "unit": "Nos",
+        }],
+    ))
+    assert result.get("success") is False
+    reason = (result.get("error_reason") or "").lower()
+    assert "quantity" in reason
+    assert "rate" in reason
+    assert payload is None
+
+
+def test_editor_corrected_values_override_stale_ocr_snapshots():
+    root = _assert_balanced(_invoice(
+        "1180.00",
+        [{
+            "match_type": "LEDGER",
+            "matched_name": "Factory expenses",
+            "original_name": "Old OCR description",
+            "original_amount": "900.00",
+            "service": "Factory expenses",
+            "amount": "1000.00",
+            "tax_rate": "18",
+        }],
+        {
+            "igst_rate": 18,
+            "igst_amount": 180,
+            "seller_gstin": "29AAA",
+            "buyer_gstin": "36AAA",
+        },
+    ))
+    entry = next(
+        e for e in root.iter("LEDGERENTRIES.LIST")
+        if e.findtext("LEDGERNAME") == "Factory expenses"
+    )
+    assert entry.findtext("RATE") == "18.00"
+    assert entry.findtext("AMOUNT") == "-1000.00"
 
 
 def test_mixed_stock_ledger_with_gst_reference_case():
@@ -353,6 +468,7 @@ def test_mixed_stock_ledger_with_gst_reference_case():
         po_id="",
     ))
     inventory = list(root.iter("ALLINVENTORYENTRIES.LIST"))
+    assert next(root.iter("VCHENTRYMODE")).text == "Item Invoice"
     assert len(inventory) == 1
     stock = inventory[0]
     assert stock.find("STOCKITEMNAME").text == "H.D.P.E 1L Oil Bottle"

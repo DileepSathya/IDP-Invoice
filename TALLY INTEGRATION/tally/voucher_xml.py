@@ -33,31 +33,56 @@ def _entry(amount: float, side: str, *, display_flag: Optional[str] = None) -> t
 
 
 def line_match_type(item: dict[str, Any]) -> str:
-    """Return match_type only — XML generation must not re-run matching."""
+    """Return match_type only — XML generation must not re-run matching.
+
+    When ``match_type`` / ``line_match_type`` is missing we fall back to the
+    legacy heuristic (presence of ``erp_ledger_name`` → LEDGER), but we no
+    longer silently default unclassified lines to STOCK_ITEM.  An item with
+    neither flag set is returned as UNMATCHED so it blocks the push and
+    surfaces to human review, rather than sending a wrong XML element to Tally.
+    """
     match_type = item.get("match_type") or item.get("line_match_type")
     if match_type:
         return str(match_type).strip().upper()
     # Legacy invoices processed before unified match_type existed.
-    if item.get("erp_ledger_name") or item.get("ledger_id"):
+    # Only ``erp_ledger_name`` is a reliable signal; ``ledger_id`` is an
+    # internal DB identifier and must not be used as a classification signal.
+    if item.get("erp_ledger_name"):
         return "LEDGER"
-    return "STOCK_ITEM"
+    if item.get("erp_item_name") or item.get("matched_name"):
+        return "STOCK_ITEM"
+    return "UNMATCHED"
 
 
 def line_quantity(item: dict[str, Any]) -> float:
-    return _num(item.get("original_quantity") or item.get("quantity") or item.get("qty"))
+    return _num(item.get("quantity") or item.get("qty") or item.get("original_quantity"))
 
 
 def line_rate(item: dict[str, Any]) -> float:
     return _num(
-        item.get("original_rate")
-        or item.get("price_per_unit")
+        item.get("price_per_unit")
         or item.get("rate")
         or item.get("unit_price")
+        or item.get("original_rate")
     )
 
 
 def line_amount(item: dict[str, Any]) -> float:
-    raw_amount = item.get("original_amount") or item.get("amount") or item.get("total")
+    """Return the pre-tax line amount.
+
+    Checks several field names because Gemini and different ERP systems use
+    different keys.  For stock items ``quantity × rate`` acts as a fallback;
+    for ledger/service lines there is usually no qty or rate, so the explicit
+    amount field is the only source of truth.
+    """
+    raw_amount = (
+        item.get("amount")
+        or item.get("total")
+        or item.get("net_amount")        # common on service invoices
+        or item.get("service_amount")    # Gemini sometimes emits this
+        or item.get("line_total")        # another Gemini variant
+        or item.get("original_amount")
+    )
     if raw_amount not in (None, ""):
         parsed = _num(raw_amount)
         if parsed > 0:
@@ -90,22 +115,26 @@ def matched_stock_name(item: dict[str, Any]) -> str:
         item.get("matched_name")
         or item.get("erp_item_name")
         or item.get("item_id")
-        or item.get("original_name")
         or item.get("service")
         or item.get("description")
-        or "Item"
+        or item.get("original_name")
+        or ""
     )
 
 
 def matched_ledger_name(item: dict[str, Any]) -> str:
+    """Return the Tally ledger name for an expense line.
+
+    ``ledger_id`` is intentionally excluded — it is a MongoDB / internal
+    identifier that would cause Tally to report "Object: Ledger not found".
+    """
     return (
         item.get("matched_name")
         or item.get("erp_ledger_name")
-        or item.get("ledger_id")
-        or item.get("original_name")
         or item.get("service")
         or item.get("description")
-        or "Expense"
+        or item.get("original_name")
+        or ""
     )
 
 
@@ -185,17 +214,30 @@ def build_stock_inventory_entry(
 
 
 def build_expense_ledger_entry(item: dict[str, Any]) -> ET.Element:
+    """Build a ``LEDGERENTRIES.LIST`` block for an expense / service line.
+
+    Tally Prime expense ledger entries do NOT require quantity or rate fields —
+    only the ledger name, the pre-tax base amount (``VATEXPAMOUNT``), and the
+    final amount are mandatory.  An optional ``RATE`` tag carries the GST rate
+    when present and is used by Tally's internal GST computation.
+    """
     name = matched_ledger_name(item)
     amount = line_amount(item)
     is_deemed, line_amount_str = _entry(amount, "Dr")
+
+    # GST rate on the line — Tally uses this for assessable value computation.
+    # Accept both "tax_rate" (Gemini extraction field) and "gst_rate" (ERP field).
+    gst_rate = _num(item.get("tax_rate") or item.get("gst_rate"))
 
     entry = ET.Element("LEDGERENTRIES.LIST")
     _append_text(entry, "LEDGERNAME", name)
     _append_text(entry, "ISPARTYLEDGER", "No")
     _append_gst_metadata(entry, match_type="LEDGER", source_name=name, hsn=line_hsn(item))
     _append_text(entry, "ISDEEMEDPOSITIVE", is_deemed)
-    _append_text(entry, "VATEXPAMOUNT", line_amount_str)
-    _append_text(entry, "AMOUNT", line_amount_str)
+    if gst_rate > 0:
+        _append_text(entry, "RATE", f"{gst_rate:.2f}")
+    _append_text(entry, "VATEXPAMOUNT", line_amount_str)   # pre-tax assessable value
+    _append_text(entry, "AMOUNT", line_amount_str)         # expense debit (tax posted separately)
     return entry
 
 
@@ -214,6 +256,8 @@ def build_ledger_entry_block(
     _append_text(entry, "LEDGERNAME", ledger_name)
     _append_text(entry, "ISPARTYLEDGER", "Yes" if is_party_ledger else "No")
     _append_text(entry, "ISDEEMEDPOSITIVE", is_deemed)
+    if is_party_ledger:
+        _append_text(entry, "ISLASTDEEMEDPOSITIVE", is_deemed)
     if rate is not None and rate > 0:
         _append_text(entry, "RATE", f"{rate:.2f}")
     _append_text(entry, "AMOUNT", amount_str)
@@ -274,10 +318,28 @@ def build_line_entry_fragments(
             unmatched_labels.append(str(label))
             continue
         if match_type == "LEDGER":
+            if not matched_ledger_name(item).strip():
+                unmatched_labels.append("ledger line missing Tally ledger name")
+                continue
+            if line_amount(item) <= 0:
+                label = item.get("service") or item.get("description") or "ledger line"
+                unmatched_labels.append(f"{label} (amount must be greater than zero)")
+                continue
             expense_elements.append(build_expense_ledger_entry(item))
             taxable_total += line_amount(item)
             continue
         if match_type == "STOCK_ITEM":
+            label = matched_stock_name(item).strip() or "stock line"
+            missing: list[str] = []
+            if not matched_stock_name(item).strip():
+                missing.append("Tally stock item name")
+            if line_quantity(item) <= 0:
+                missing.append("quantity")
+            if line_rate(item) <= 0:
+                missing.append("rate")
+            if missing:
+                unmatched_labels.append(f"{label} (missing/invalid {', '.join(missing)})")
+                continue
             inventory_elements.append(
                 build_stock_inventory_entry(
                     item,

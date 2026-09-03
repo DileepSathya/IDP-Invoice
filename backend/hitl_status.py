@@ -259,9 +259,8 @@ def _amount_math_tolerance(expected: float) -> float:
 
 def evaluate_line_items(line_items: Any) -> tuple[bool, list[str]]:
     """
-    Validate each line item:
-      - quantity and rate (price_per_unit) must both be present, else flag for HITL.
-      - when both are present, quantity * rate must equal the line item amount, else flag for HITL.
+    Validate each line item according to its posting type. Ledger lines require
+    only an amount; stock lines require quantity, rate, and matching arithmetic.
 
     Returns (flagged, concise_reasons) - each reason is a short, single-line point.
     """
@@ -275,6 +274,19 @@ def evaluate_line_items(line_items: Any) -> tuple[bool, list[str]]:
         if not isinstance(li, dict):
             continue
         label = _line_item_label(idx, li)
+
+        match_type = str(
+            li.get("match_type") or li.get("line_match_type") or "STOCK_ITEM"
+        ).strip().upper()
+        if match_type == "LEDGER":
+            amount = _to_float(li.get("amount", li.get("total")))
+            if amount is None:
+                reasons.append(f"{label}: amount missing")
+                flagged = True
+            elif amount <= 0:
+                reasons.append(f"{label}: amount must be greater than zero")
+                flagged = True
+            continue
 
         qty_raw = li.get("quantity", li.get("qty"))
         rate_raw = li.get("price_per_unit", li.get("rate", li.get("unit_price")))
@@ -295,6 +307,10 @@ def evaluate_line_items(line_items: Any) -> tuple[bool, list[str]]:
         rate = _to_float(rate_raw)
         if qty is None or rate is None:
             reasons.append(f"{label}: quantity/rate not numeric")
+            flagged = True
+            continue
+        if qty <= 0 or rate <= 0:
+            reasons.append(f"{label}: quantity/rate must be greater than zero")
             flagged = True
             continue
 
