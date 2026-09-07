@@ -117,8 +117,8 @@ if (-not $SkipPyInstaller) {
     New-Item -ItemType Directory -Force -Path $DistRoot, $BuildWork | Out-Null
 
     Write-Host "Verifying Tally master scheduler modules (bundled into idp-api)..."
-    & $Py -c "import backend.tally_master_settings, backend.tally_master_scheduler; print('  scheduler modules OK')"
-    if ($LASTEXITCODE -ne 0) { throw "Tally master scheduler modules missing from source tree." }
+    & $Py -c "import backend.tally_master_settings, backend.tally_master_scheduler, backend.invoice_merge, backend.erp_scheduler; print('  scheduler and invoice merge modules OK')"
+    if ($LASTEXITCODE -ne 0) { throw "Scheduler or invoice merge modules missing from source tree." }
 
     $commonArgs = @(
         "--distpath", $DistRoot,

@@ -90,7 +90,7 @@ a = Analysis(
         "backend.erp_match_status",
         "backend.erp_settings",
         "backend.erp_sync",
-        "backend.invoice_merge.py"
+        "backend.invoice_merge",
         "backend.erp_scheduler",
         "backend.hitl_notification_settings",
         "backend.hitl_email",

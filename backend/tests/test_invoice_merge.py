@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from bson import ObjectId
 
+from backend.hitl_status import calculate_hitl_flag
 from backend.invoice_merge import (
     _has_older_processed_sibling,
     invoice_number_from_doc,
@@ -25,6 +26,8 @@ class _FakeCollection:
         del kwargs
         for doc in self._docs.values():
             if query and query.get("merged_into") == {"$exists": False} and doc.get("merged_into"):
+                continue
+            if query and query.get("merged_into") == {"$exists": True, "$ne": None} and not doc.get("merged_into"):
                 continue
             yield deepcopy(doc)
 
@@ -73,6 +76,34 @@ def _make_doc(
 
 
 class InvoiceMergeTests(unittest.TestCase):
+    def test_merge_conflicts_keep_materialized_invoice_in_hitl(self) -> None:
+        gemini_json = {
+            "invoice_number": "INV-300",
+            "invoice_date": "2026-09-07",
+            "po_id": "PO-1",
+            "term_to_pay": "30 days",
+            "total_amount": 10,
+            "line_items": [
+                {
+                    "service": "Item",
+                    "quantity": 1,
+                    "price_per_unit": 10,
+                    "amount": 10,
+                }
+            ],
+            "additional_fields": {
+                "summary_total_amount": "10.00",
+                "merge_conflicts": [
+                    {"path": "seller", "canonical": "Seller A", "incoming": "Seller B"}
+                ],
+            },
+        }
+
+        flagged = calculate_hitl_flag(gemini_json, run_erp_matching_now=False)
+
+        self.assertTrue(flagged)
+        self.assertIn("Merged pages conflict: seller", gemini_json["additional_fields"]["hitl_remarks"])
+
     def test_normalize_invoice_number_case_insensitive(self) -> None:
         self.assertEqual(normalize_invoice_number("INV-001"), "inv-001")
         self.assertEqual(normalize_invoice_number("  inv-001  "), "inv-001")
@@ -109,6 +140,94 @@ class InvoiceMergeTests(unittest.TestCase):
         self.assertEqual(result["docs_merged"], 1)
         self.assertEqual(len(coll._docs[doc_a["_id"]]["gemini"]["json"]["line_items"]), 2)
         self.assertEqual(coll._docs[doc_b["_id"]].get("merged_into"), str(doc_a["_id"]))
+
+    @patch("backend.erp_settings.should_merge_hitl_duplicates", return_value=True)
+    def test_merge_materializes_union_of_invoice_data(self, _mock: Any) -> None:
+        shared_item = {
+            "service": "Consulting",
+            "quantity": 1,
+            "price_per_unit": 10,
+            "amount": 10,
+        }
+        second_item = {
+            "service": "Support",
+            "quantity": 1,
+            "price_per_unit": 5,
+            "amount": 5,
+        }
+        doc_a = _make_doc(
+            invoice_number="inv-merge",
+            status=1,
+            line_items=[shared_item],
+        )
+        doc_b = _make_doc(
+            invoice_number="INV-MERGE",
+            status=1,
+            line_items=[shared_item, second_item],
+        )
+        if doc_a["_id"] > doc_b["_id"]:
+            doc_a, doc_b = doc_b, doc_a
+
+        canonical_json = doc_a["gemini"]["json"]
+        canonical_json["seller"] = "Canonical Seller"
+        canonical_json["additional_fields"].update(
+            {
+                "canonical_only": "first page",
+                "tags": ["one", "shared"],
+                "nested": {"left": 1},
+                "vendor_match_score": 51,
+            }
+        )
+        incoming_json = doc_b["gemini"]["json"]
+        incoming_json["seller"] = "Different Seller"
+        incoming_json["currency"] = "INR"
+        incoming_json["additional_fields"].update(
+            {
+                "incoming_only": "second page",
+                "tags": ["shared", "two"],
+                "nested": {"right": 2},
+                "vendor_match_score": 99,
+            }
+        )
+        coll = _FakeCollection([doc_a, doc_b])
+
+        merge_hitl_duplicate_invoices(coll)
+
+        merged = coll._docs[doc_a["_id"]]["gemini"]["json"]
+        additional = merged["additional_fields"]
+        self.assertEqual(merged["currency"], "INR")
+        self.assertEqual(merged["seller"], "Canonical Seller")
+        self.assertEqual(len(merged["line_items"]), 2)
+        self.assertEqual(additional["incoming_only"], "second page")
+        self.assertEqual(additional["tags"], ["one", "shared", "two"])
+        self.assertEqual(additional["nested"], {"left": 1, "right": 2})
+        self.assertNotIn("vendor_match_score", additional)
+        self.assertIn(
+            {
+                "path": "seller",
+                "canonical": "Canonical Seller",
+                "incoming": "Different Seller",
+            },
+            additional["merge_conflicts"],
+        )
+
+    @patch("backend.erp_settings.should_merge_hitl_duplicates", return_value=True)
+    def test_existing_reference_only_merge_is_materialized_on_next_scan(self, _mock: Any) -> None:
+        canonical = _make_doc(invoice_number="INV-LEGACY", status=1)
+        incoming = _make_doc(invoice_number="INV-LEGACY", status=0)
+        if canonical["_id"] > incoming["_id"]:
+            canonical, incoming = incoming, canonical
+            canonical["gemini"]["json"]["additional_fields"].update({"status": 1, "HITL": True})
+            incoming["gemini"]["json"]["additional_fields"].update({"status": 0, "HITL": False})
+        incoming["merged_into"] = str(canonical["_id"])
+        incoming["gemini"]["json"]["additional_fields"]["second_page_note"] = "retain me"
+        coll = _FakeCollection([canonical, incoming])
+
+        merge_hitl_duplicate_invoices(coll)
+
+        merged = coll._docs[canonical["_id"]]["gemini"]["json"]
+        self.assertEqual(merged["additional_fields"]["second_page_note"], "retain me")
+        self.assertIn("merge_materialized_at", coll._docs[incoming["_id"]])
 
     @patch("backend.erp_settings.should_merge_hitl_duplicates", return_value=True)
     def test_no_merge_when_older_system_processed(self, _mock: Any) -> None:

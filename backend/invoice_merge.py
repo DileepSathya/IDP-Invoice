@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
+from copy import deepcopy
 from datetime import datetime
 from typing import Any
 
@@ -25,6 +26,64 @@ from backend.hitl_status import ensure_summary_total_amount
 logger = logging.getLogger(__name__)
 
 ACTIVE_INVOICE_QUERY: dict[str, Any] = {"merged_into": {"$exists": False}}
+
+# These values describe processing state, not invoice content. Carrying them from
+# either page would make the materialized invoice look matched or approved before
+# the normal post-merge sync has evaluated the combined data.
+_RECOMPUTED_ADDITIONAL_FIELDS = frozenset(
+    {
+        "HITL",
+        "status",
+        "hitl_remark",
+        "hitl_remarks",
+        "human_approved",
+        "summary_total_amount",
+        "erp_hitl_reasons",
+        "vendor_id",
+        "vendor_match_score",
+        "vendor_match_name",
+        "erp_vendor_name",
+        "po_match_score",
+        "po_business_unit",
+        "tally_push_status",
+        "tally_error_reason",
+    }
+)
+
+_RECOMPUTED_LINE_ITEM_FIELDS = frozenset(
+    {
+        "item_id",
+        "item_match_score",
+        "ledger_id",
+        "ledger_match_score",
+        "erp_ledger_name",
+        "matched_name",
+        "match_score",
+        "matching_status",
+        "tally_master_id",
+    }
+)
+
+_LINE_ITEM_IDENTITY_FIELDS = (
+    "service",
+    "description",
+    "hsn_number",
+    "HSN_number",
+    "HSN",
+    "quantity",
+    "qty",
+    "unit",
+    "uom",
+    "unit_of_measure",
+    "price_per_unit",
+    "rate",
+    "unit_price",
+    "amount",
+    "total",
+    "tax_rate",
+    "tax_amount",
+    "amount_after_tax",
+)
 
 
 def is_merged_away(doc: dict[str, Any]) -> bool:
@@ -83,6 +142,146 @@ def preview_file_paths(doc: dict[str, Any]) -> list[str]:
     return paths
 
 
+def _is_blank(value: Any) -> bool:
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
+def _values_equivalent(path: str, left: Any, right: Any) -> bool:
+    if left == right:
+        return True
+    leaf = path.rsplit(".", 1)[-1]
+    if leaf in {"invoice_number", "invoice"}:
+        return normalize_invoice_number(left) == normalize_invoice_number(right)
+    return False
+
+
+def _deep_union(
+    canonical: Any,
+    incoming: Any,
+    *,
+    path: str,
+    conflicts: list[dict[str, Any]],
+) -> Any:
+    """Materialize incoming data into canonical data without losing either shape."""
+    if _is_blank(canonical):
+        return deepcopy(incoming)
+    if _is_blank(incoming):
+        return deepcopy(canonical)
+
+    if isinstance(canonical, dict) and isinstance(incoming, dict):
+        merged = deepcopy(canonical)
+        for key, incoming_value in incoming.items():
+            child_path = f"{path}.{key}" if path else key
+            if key not in merged:
+                merged[key] = deepcopy(incoming_value)
+            else:
+                merged[key] = _deep_union(
+                    merged[key], incoming_value, path=child_path, conflicts=conflicts
+                )
+        return merged
+
+    if isinstance(canonical, list) and isinstance(incoming, list):
+        merged = deepcopy(canonical)
+        for value in incoming:
+            if value not in merged:
+                merged.append(deepcopy(value))
+        return merged
+
+    if not _values_equivalent(path, canonical, incoming):
+        conflict = {
+            "path": path,
+            "canonical": deepcopy(canonical),
+            "incoming": deepcopy(incoming),
+        }
+        if conflict not in conflicts:
+            conflicts.append(conflict)
+    return deepcopy(canonical)
+
+
+def _clean_line_item(item: dict[str, Any]) -> dict[str, Any]:
+    return {key: deepcopy(value) for key, value in item.items() if key not in _RECOMPUTED_LINE_ITEM_FIELDS}
+
+
+def _line_item_identity(item: dict[str, Any]) -> tuple[tuple[str, str], ...]:
+    identity: list[tuple[str, str]] = []
+    for key in _LINE_ITEM_IDENTITY_FIELDS:
+        value = item.get(key)
+        if not _is_blank(value):
+            identity.append((key, str(value).strip().casefold()))
+    return tuple(identity)
+
+
+def _union_line_items(
+    canonical_items: Any,
+    incoming_items: Any,
+    conflicts: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    merged = [
+        _clean_line_item(item)
+        for item in (canonical_items if isinstance(canonical_items, list) else [])
+        if isinstance(item, dict)
+    ]
+    identities = {_line_item_identity(item): index for index, item in enumerate(merged)}
+
+    for raw_item in incoming_items if isinstance(incoming_items, list) else []:
+        if not isinstance(raw_item, dict):
+            continue
+        item = _clean_line_item(raw_item)
+        identity = _line_item_identity(item)
+        if identity and identity in identities:
+            index = identities[identity]
+            merged[index] = _deep_union(
+                merged[index],
+                item,
+                path=f"line_items[{index}]",
+                conflicts=conflicts,
+            )
+        elif item not in merged:
+            identities[identity] = len(merged)
+            merged.append(item)
+    return merged
+
+
+def _materialize_merged_json(
+    canonical_json: dict[str, Any], incoming_json: dict[str, Any]
+) -> dict[str, Any]:
+    canonical = deepcopy(canonical_json)
+    incoming = deepcopy(incoming_json)
+
+    canonical_additional = canonical.pop("additional_fields", {})
+    incoming_additional = incoming.pop("additional_fields", {})
+    if not isinstance(canonical_additional, dict):
+        canonical_additional = {}
+    if not isinstance(incoming_additional, dict):
+        incoming_additional = {}
+
+    existing_conflicts: list[dict[str, Any]] = []
+    for source in (canonical_additional, incoming_additional):
+        raw_conflicts = source.pop("merge_conflicts", [])
+        if isinstance(raw_conflicts, list):
+            for conflict in raw_conflicts:
+                if isinstance(conflict, dict) and conflict not in existing_conflicts:
+                    existing_conflicts.append(deepcopy(conflict))
+        for key in _RECOMPUTED_ADDITIONAL_FIELDS:
+            source.pop(key, None)
+
+    canonical_items = canonical.pop("line_items", [])
+    incoming_items = incoming.pop("line_items", [])
+    conflicts = existing_conflicts
+    merged = _deep_union(canonical, incoming, path="", conflicts=conflicts)
+    merged["line_items"] = _union_line_items(canonical_items, incoming_items, conflicts)
+    merged_additional = _deep_union(
+        canonical_additional,
+        incoming_additional,
+        path="additional_fields",
+        conflicts=conflicts,
+    )
+    if conflicts:
+        merged_additional["merge_conflicts"] = conflicts
+    merged["additional_fields"] = merged_additional
+    return merged
+
+
 def _merge_document_into_canonical(coll: Any, canonical: dict[str, Any], incoming: dict[str, Any]) -> bool:
     canonical_id = canonical["_id"]
     incoming_id = incoming["_id"]
@@ -96,13 +295,7 @@ def _merge_document_into_canonical(coll: Any, canonical: dict[str, Any], incomin
     if not isinstance(incoming_json, dict):
         incoming_json = {}
 
-    canonical_items = canonical_json.get("line_items")
-    if not isinstance(canonical_items, list):
-        canonical_items = []
-    incoming_items = incoming_json.get("line_items")
-    if isinstance(incoming_items, list) and incoming_items:
-        canonical_items = list(canonical_items) + [li for li in incoming_items if isinstance(li, dict)]
-        canonical_json["line_items"] = canonical_items
+    canonical_json = _materialize_merged_json(canonical_json, incoming_json)
 
     canonical_paths = _file_paths(canonical)
     for path in _file_paths(incoming):
@@ -121,12 +314,6 @@ def _merge_document_into_canonical(coll: Any, canonical: dict[str, Any], incomin
             merged_ocr = incoming_ocr
     else:
         merged_ocr = canonical_ocr
-
-    additional_fields = canonical_json.get("additional_fields")
-    if not isinstance(additional_fields, dict):
-        additional_fields = {}
-        canonical_json["additional_fields"] = additional_fields
-    additional_fields.pop("summary_total_amount", None)
 
     ensure_summary_total_amount(canonical_json)
 
@@ -152,6 +339,7 @@ def _merge_document_into_canonical(coll: Any, canonical: dict[str, Any], incomin
             "$set": {
                 "merged_into": str(canonical_id),
                 "merged_at": datetime.utcnow(),
+                "merge_materialized_at": datetime.utcnow(),
                 "gemini.json.additional_fields.HITL": False,
                 "gemini.json.additional_fields.status": 0,
                 "gemini.json.additional_fields.hitl_remark": "",
@@ -211,6 +399,19 @@ def merge_hitl_duplicate_invoices(coll: Any) -> dict[str, int]:
         return {"groups_found": 0, "docs_merged": 0}
 
     for merged_doc in coll.find({"merged_into": {"$exists": True, "$ne": None}}):
+        # Backfill records produced by the older reference-only merge. The deep
+        # union is idempotent, and the marker prevents repeated work on later scans.
+        if not merged_doc.get("merge_materialized_at"):
+            try:
+                canonical_id = ObjectId(str(merged_doc.get("merged_into")))
+            except Exception:
+                canonical_id = None
+            canonical = coll.find_one({"_id": canonical_id}) if canonical_id else None
+            if canonical:
+                _merge_document_into_canonical(coll, canonical, merged_doc)
+                refreshed = coll.find_one({"_id": merged_doc["_id"]})
+                if refreshed:
+                    merged_doc = refreshed
         _finalize_merged_away_doc(coll, merged_doc)
 
     docs = list(coll.find(ACTIVE_INVOICE_QUERY))
