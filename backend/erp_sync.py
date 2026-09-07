@@ -17,6 +17,7 @@ from backend.agents.database import get_invoices_collection
 from backend.erp_match_status import ERP_MATCH_PENDING_KEY
 from backend.hitl_status import calculate_hitl_flag, calculate_status_from_hitl, to_bool
 from backend.invoice_files import relocate_after_hitl_processed
+from backend.invoice_merge import ACTIVE_INVOICE_QUERY, merge_hitl_duplicate_invoices
 
 logger = logging.getLogger(__name__)
 
@@ -162,8 +163,17 @@ def run_erp_sync() -> dict[str, Any]:
     scanned = 0
     updated = 0
     errored = 0
+    merge_result = {"groups_found": 0, "docs_merged": 0}
     try:
-        cursor = coll.find({}, no_cursor_timeout=True)
+        merge_result = merge_hitl_duplicate_invoices(coll)
+        if merge_result.get("docs_merged"):
+            logger.info(
+                "[erp_sync] Merged duplicate invoice numbers: groups=%d docs=%d",
+                merge_result.get("groups_found", 0),
+                merge_result.get("docs_merged", 0),
+            )
+
+        cursor = coll.find(ACTIVE_INVOICE_QUERY, no_cursor_timeout=True)
         try:
             for doc in cursor:
                 scanned += 1
@@ -178,10 +188,21 @@ def run_erp_sync() -> dict[str, Any]:
         finally:
             cursor.close()
     finally:
-        erp_settings.mark_sync_finished(scanned=scanned, updated=updated, errored=errored)
+        erp_settings.mark_sync_finished(
+            scanned=scanned,
+            updated=updated,
+            errored=errored,
+            merged_groups=merge_result.get("groups_found", 0),
+            merged_docs=merge_result.get("docs_merged", 0),
+        )
 
     logger.info(
-        "[erp_sync] Sync complete: scanned=%d updated=%d errored=%d", scanned, updated, errored
+        "[erp_sync] Sync complete: scanned=%d updated=%d errored=%d merged_groups=%d merged_docs=%d",
+        scanned,
+        updated,
+        errored,
+        merge_result.get("groups_found", 0),
+        merge_result.get("docs_merged", 0),
     )
 
     from backend.tally_integration.config import is_push_on_erp_sync_enabled, is_tally_configured
@@ -190,7 +211,13 @@ def run_erp_sync() -> dict[str, Any]:
     if is_tally_configured() and is_push_on_erp_sync_enabled():
         run_tally_sync_async()
 
-    return {"scanned": scanned, "updated": updated, "errored": errored}
+    return {
+        "scanned": scanned,
+        "updated": updated,
+        "errored": errored,
+        "merged_groups": merge_result.get("groups_found", 0),
+        "merged_docs": merge_result.get("docs_merged", 0),
+    }
 
 
 def run_erp_sync_async() -> bool:

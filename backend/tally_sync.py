@@ -11,6 +11,7 @@ from bson import ObjectId
 from backend.agents.database import get_invoices_collection
 from backend.erp_match_status import invoice_erp_matching_complete
 from backend.erp_settings import get_erp_sync_settings
+from backend.invoice_merge import ACTIVE_INVOICE_QUERY
 from backend.tally_integration import config
 from backend.tally_integration.pipeline import persist_tally_result, push_invoice_to_tally
 
@@ -84,7 +85,7 @@ def run_tally_sync(*, force: bool = False) -> dict[str, Any]:
     skipped = 0
     errored = 0
 
-    cursor = coll.find({}, no_cursor_timeout=True)
+    cursor = coll.find(ACTIVE_INVOICE_QUERY, no_cursor_timeout=True)
     try:
         for doc in cursor:
             scanned += 1

@@ -281,6 +281,9 @@ def _store_invoice_result(
             gemini_json,
             uploaded_file_path=str(final_path),
         )
+        from backend.invoice_merge import merge_and_resync_after_insert
+
+        merge_and_resync_after_insert(coll, inserted_id)
     except Exception as e:
         logger.warning(
             "[Folder watcher → MongoDB] Could not sync HITL/status for %s: %s",

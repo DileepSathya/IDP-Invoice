@@ -34,6 +34,8 @@ GEMINI_API_ERROR_DIR = _invoice_dir(
     "GEMINI_API_ERROR_DIR", "./invoices_data/gemini_api_error"
 )
 COMPLETED_DIR = _invoice_dir("COMPLETED_DIR", "./invoices_data/Completed", "UPLOADS_DIR")
+# Merged duplicate pages are moved here so HITL_pending folder counts stay accurate.
+MERGED_SOURCES_DIR = _invoice_dir("MERGED_SOURCES_DIR", "./invoices_data/merged_sources")
 # UI / API uploads only — not watched by the folder watcher (avoids duplicate OCR).
 API_STAGING_DIR = _invoice_dir("API_STAGING_DIR", "./invoices_data/_api_staging")
 
@@ -47,6 +49,7 @@ _LEGACY_SEARCH_DIRS: tuple[Path, ...] = (
 INVOICE_FILE_DIRS: tuple[Path, ...] = (
     TO_BE_PROCESSED_DIR,
     HITL_PENDING_DIR,
+    MERGED_SOURCES_DIR,
     ERROR_DIR,
     GEMINI_API_ERROR_DIR,
     COMPLETED_DIR,
@@ -171,3 +174,14 @@ def relocate_after_hitl_processed(uploaded_file_path: str | None) -> str | None:
     if new_path is None:
         return uploaded_file_path
     return str(new_path)
+
+
+def archive_merged_source_file(file_path: str | Path | None) -> str | None:
+    """Move a merged-away invoice file out of HITL_pending into merged_sources."""
+    if not file_path:
+        return None
+    path = Path(file_path)
+    if not path.is_file():
+        return str(path) if str(path).strip() else None
+    MERGED_SOURCES_DIR.mkdir(parents=True, exist_ok=True)
+    return str(move_invoice_file(path, MERGED_SOURCES_DIR))

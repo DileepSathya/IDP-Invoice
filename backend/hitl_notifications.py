@@ -137,6 +137,8 @@ def _pending_hitl_invoices() -> list[dict[str, Any]]:
     coll = get_invoices_collection()
     pending: list[dict[str, Any]] = []
     for doc in coll.find({}):
+        if doc.get("merged_into"):
+            continue
         gemini_json = (doc.get("gemini") or {}).get("json") or {}
         if not isinstance(gemini_json, dict):
             continue

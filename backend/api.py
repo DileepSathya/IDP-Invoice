@@ -159,6 +159,8 @@ def _collect_telemetry_overview_counts() -> TelemetryOverviewResponse:
     erp_pending_files = 0
 
     for doc in coll.find({}):
+        if doc.get("merged_into"):
+            continue
         total_uploaded_files += 1
         file_status = str(doc.get("file_status") or "").strip().lower()
         if file_status == "healthy file":
@@ -813,6 +815,7 @@ class InvoiceSummary(BaseModel):
     id: str
     file_path: Optional[str]
     uploaded_file_path: Optional[str]
+    source_files: Optional[List[str]] = None
     file_status: Optional[str] = None
     # Display fields for the main dashboard table
     invoice_number: Optional[Any]
@@ -1059,6 +1062,7 @@ class LineItemCreate(BaseModel):
 class InvoiceJsonEditorResponse(BaseModel):
     id: str
     uploaded_file_path: Optional[str] = None
+    source_files: Optional[List[str]] = None
     gemini_json: dict[str, Any]
     line_items: List[dict[str, Any]]
 
@@ -1074,9 +1078,12 @@ def _invoice_json_editor_response(doc: dict[str, Any]) -> InvoiceJsonEditorRespo
         gemini_json = {}
     line_items = gemini_json.get("line_items") if isinstance(gemini_json.get("line_items"), list) else []
     safe_line_items = [li for li in line_items if isinstance(li, dict)]
+    from backend.invoice_merge import preview_file_paths
+
     return InvoiceJsonEditorResponse(
         id=str(doc.get("_id")),
         uploaded_file_path=doc.get("uploaded_file_path"),
+        source_files=preview_file_paths(doc) or None,
         gemini_json=gemini_json,
         line_items=safe_line_items,
     )
@@ -1199,10 +1206,15 @@ def _invoice_summary_row_from_doc(
         additional_for_remark = {}
     from backend.tally_integration.pipeline import display_erp_remark
 
+    from backend.invoice_merge import preview_file_paths
+
+    source_files = preview_file_paths(doc) or None
+
     return InvoiceSummary(
         id=str(doc.get("_id")),
         file_path=doc.get("file_path"),
         uploaded_file_path=doc.get("uploaded_file_path"),
+        source_files=source_files,
         file_status=doc.get("file_status"),
         invoice_number=invoice_number,
         total_amount=total_amount,
@@ -1749,6 +1761,7 @@ def get_system_health() -> SystemHealthResponse:
 class ErpSyncSettingsResponse(BaseModel):
     mode: str
     frequency_minutes: int
+    merge_hitl_duplicates: bool = True
     last_synced_at: Optional[str] = None
     last_sync_result: Optional[dict[str, Any]] = None
     syncing: bool = False
@@ -1851,6 +1864,7 @@ class TallyMasterRefreshResponse(BaseModel):
 class ErpSyncSettingsUpdate(BaseModel):
     mode: str
     frequency_minutes: int
+    merge_hitl_duplicates: Optional[bool] = None
 
 
 def _erp_sync_settings_response() -> ErpSyncSettingsResponse:
@@ -1879,6 +1893,7 @@ def _erp_sync_settings_response() -> ErpSyncSettingsResponse:
     return ErpSyncSettingsResponse(
         mode=s["mode"],
         frequency_minutes=s["frequency_minutes"],
+        merge_hitl_duplicates=bool(s.get("merge_hitl_duplicates", True)),
         last_synced_at=_iso(s.get("last_synced_at")),
         last_sync_result=s.get("last_sync_result"),
         syncing=s.get("syncing", False),
@@ -1900,7 +1915,11 @@ def put_erp_settings_route(payload: ErpSyncSettingsUpdate) -> ErpSyncSettingsRes
     from backend.erp_settings import save_erp_sync_settings
 
     try:
-        save_erp_sync_settings(mode=payload.mode, frequency_minutes=payload.frequency_minutes)
+        save_erp_sync_settings(
+            mode=payload.mode,
+            frequency_minutes=payload.frequency_minutes,
+            merge_hitl_duplicates=payload.merge_hitl_duplicates,
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     return _erp_sync_settings_response()
@@ -2533,12 +2552,13 @@ def list_invoices(
     coll = get_invoices_collection()
     from backend.erp_match_status import invoice_erp_matching_complete
     from backend.erp_settings import get_erp_sync_settings
+    from backend.invoice_merge import ACTIVE_INVOICE_QUERY, preview_file_paths
 
     erp_sync_settings = get_erp_sync_settings()
 
     # Date strings in the DB can be in various human formats, so we apply most
     # filters in Python rather than in Mongo.
-    cursor = coll.find({}, sort=[("_id", -1)], limit=limit)
+    cursor = coll.find(ACTIVE_INVOICE_QUERY, sort=[("_id", -1)], limit=limit)
 
     start_dt = _parse_invoice_date(start_date) if start_date else None
     end_dt = _parse_invoice_date(end_date) if end_date else None
@@ -2547,6 +2567,8 @@ def list_invoices(
     total_amount_sum = 0.0
     seen_invoice_ids_for_sum: set[str] = set()
     for doc in cursor:
+        if doc.get("merged_into"):
+            continue
         gemini_json = (doc.get("gemini") or {}).get("json") or {}
 
         invoice_number = gemini_json.get("invoice_number") or gemini_json.get("invoice")
@@ -2657,6 +2679,7 @@ def list_invoices(
                         id=doc_id,
                         file_path=doc.get("file_path"),
                         uploaded_file_path=doc.get("uploaded_file_path"),
+                        source_files=preview_file_paths(doc) or None,
                         file_status=file_status_value,
                         invoice_number=invoice_number,
                         total_amount=invoice_total_amount,
@@ -2743,6 +2766,7 @@ def list_invoices(
                     id=doc_id,
                     file_path=doc.get("file_path"),
                     uploaded_file_path=doc.get("uploaded_file_path"),
+                    source_files=preview_file_paths(doc) or None,
                     file_status=file_status_value,
                     invoice_number=invoice_number,
                     total_amount=invoice_total_amount,
@@ -3184,6 +3208,9 @@ async def upload_invoice(file: UploadFile = File(...)) -> InvoiceSummary:
             gemini_json_norm,
             uploaded_file_path=str(final_path),
         )
+        from backend.invoice_merge import merge_and_resync_after_insert
+
+        inserted_id = merge_and_resync_after_insert(coll, inserted_id)
     except Exception as e:
         logger.warning("Failed to sync HITL/status immediately after upload insert: %s", e)
     from license_validator import increment_invoice_count
@@ -3260,6 +3287,10 @@ async def upload_invoice(file: UploadFile = File(...)) -> InvoiceSummary:
         first_item.get("amount_after_tax")
         or gemini_json.get("amount_after_tax")
     )
+
+    response_doc = get_invoices_collection().find_one({"_id": ObjectId(inserted_id)})
+    if response_doc and not response_doc.get("merged_into"):
+        return _invoice_summary_row_from_doc(response_doc, line_item_index=0)
 
     return InvoiceSummary(
         id=inserted_id,

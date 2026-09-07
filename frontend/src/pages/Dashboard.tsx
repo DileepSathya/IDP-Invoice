@@ -108,6 +108,8 @@ export const Dashboard: React.FC = () => {
   const [searchOptions, setSearchOptions] = useState<string[]>([]);
   const [loadingSearchOptions, setLoadingSearchOptions] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewSourcePaths, setPreviewSourcePaths] = useState<string[]>([]);
+  const [previewSourceIndex, setPreviewSourceIndex] = useState(0);
   const [previewZoom, setPreviewZoom] = useState<number>(1);
   const [previewPdfPage, setPreviewPdfPage] = useState(1);
   const [previewPdfPageCount, setPreviewPdfPageCount] = useState(1);
@@ -164,7 +166,12 @@ export const Dashboard: React.FC = () => {
   const panStart = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
   const previewWrapperRef = useRef<HTMLDivElement | null>(null);
   const previewDragStart = useRef<{ x: number; y: number; left: number; top: number } | null>(null);
-  const handleSelectPreview = (url: string, target: HTMLElement) => {
+  const handleSelectPreview = (
+    url: string,
+    target: HTMLElement,
+    sourcePaths: string[] = [],
+    sourceIndex = 0,
+  ) => {
     const rect = target.getBoundingClientRect();
     const panelWidth = 560;
     const panelHeight = 620;
@@ -185,7 +192,10 @@ export const Dashboard: React.FC = () => {
     }
 
     setPreviewPosition({ top, left });
+    setPreviewSourcePaths(sourcePaths.length > 0 ? sourcePaths : []);
+    setPreviewSourceIndex(sourceIndex);
     setPreviewUrl(url);
+    setPreviewPdfPage(1);
     setPreviewZoom(1);
     setIsPreviewOpen(true);
   };
@@ -511,6 +521,7 @@ export const Dashboard: React.FC = () => {
           stored_errors: pipeline.stored_errors,
           hitl_flagged_total: pipeline.hitl_flagged_total,
           hitl_review_pending: pipeline.hitl_review_pending,
+          hitl_pending: pipeline.hitl_pending,
           in_process: pipeline.in_process,
           watcher_active: pipeline.watcher_active,
           queue_total: pipeline.queue_total,
@@ -557,8 +568,8 @@ export const Dashboard: React.FC = () => {
       setUploading(true);
       setError(null);
       setStatus("1) Uploading file and running OCR / Gemini extraction…");
-      const created = await uploadInvoice(file);
-      setAllInvoices((prev) => [created, ...prev]);
+      await uploadInvoice(file);
+      await loadInvoices({ silent: true });
       setStatus(
         "2) Invoice processed and saved to MongoDB.\n3) Table below is refreshed with the new record.",
       );
@@ -729,9 +740,10 @@ export const Dashboard: React.FC = () => {
           .filter(([key]) => !["HITL", "status", "ever_hitl_true", "hitl_remark", "hitl_remarks"].includes(key))
           .map(([key, value]) => ({ key, value: ToText(value) })),
       );
-      setJsonEditorPreviewUrl(
-        data.uploaded_file_path ? `/api/raw/${PathBasename(data.uploaded_file_path)}` : null,
-      );
+      setJsonEditorPreviewUrl(() => {
+        const previewPaths = InvoicePreviewPaths(data);
+        return previewPaths[0] ? RawPreviewUrl(previewPaths[0]) : null;
+      });
       setJsonEditorPreviewZoom(1);
       setJsonEditorPreviewRotate(0);
       setJsonEditorInvoiceId(invoiceId);
@@ -1248,34 +1260,53 @@ export const Dashboard: React.FC = () => {
                             </>
                           )}
                         <td>
-                          {inv.uploaded_file_path ? (
-                            (() => {
-                              const url = `/api/raw/${PathBasename(inv.uploaded_file_path)}`;
-                              const kind = GetPreviewKind(inv.uploaded_file_path);
-                              if (kind === "image") {
-                                return (
-                                  <img
-                                    src={url}
-                                    alt="Invoice preview"
-                                    className="preview-thumb"
-                                    onClick={(e) => handleSelectPreview(url, e.currentTarget)}
-                                  />
-                                );
-                              }
-                              return (
-                                <button
-                                  type="button"
-                                  className="preview-thumb-file"
-                                  onClick={(e) => handleSelectPreview(url, e.currentTarget)}
-                                  title={PathBasename(inv.uploaded_file_path)}
-                                >
-                                  {kind === "pdf" ? "PDF" : "FILE"}
-                                </button>
-                              );
-                            })()
-                          ) : (
-                            "—"
-                          )}
+                          {(() => {
+                            const paths = InvoicePreviewPaths(inv);
+                            if (paths.length === 0) return "—";
+                            return (
+                              <div className="preview-thumb-group">
+                                {paths.map((filePath, index) => {
+                                  const url = RawPreviewUrl(filePath);
+                                  const kind = GetPreviewKind(filePath);
+                                  const label =
+                                    paths.length > 1 ? `Document ${index + 1}` : "Invoice preview";
+                                  if (kind === "image") {
+                                    return (
+                                      <img
+                                        key={`${inv.id}-${index}`}
+                                        src={url}
+                                        alt={label}
+                                        className="preview-thumb"
+                                        title={PathBasename(filePath)}
+                                        onClick={(e) =>
+                                          handleSelectPreview(url, e.currentTarget, paths, index)
+                                        }
+                                      />
+                                    );
+                                  }
+                                  return (
+                                    <button
+                                      key={`${inv.id}-${index}`}
+                                      type="button"
+                                      className="preview-thumb-file"
+                                      onClick={(e) =>
+                                        handleSelectPreview(url, e.currentTarget, paths, index)
+                                      }
+                                      title={PathBasename(filePath)}
+                                    >
+                                      {kind === "pdf"
+                                        ? paths.length > 1
+                                          ? `PDF ${index + 1}`
+                                          : "PDF"
+                                        : paths.length > 1
+                                          ? `FILE ${index + 1}`
+                                          : "FILE"}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            );
+                          })()}
                         </td>
                       </tr>
 
@@ -1613,6 +1644,44 @@ export const Dashboard: React.FC = () => {
             )}
             {previewUrl && (GetPreviewKind(previewUrl) === "image" || GetPreviewKind(previewUrl) === "pdf") && (
               <>
+                {previewSourcePaths.length > 1 && (
+                  <div className="preview-pdf-pager">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const nextIndex = Math.max(0, previewSourceIndex - 1);
+                        setPreviewSourceIndex(nextIndex);
+                        setPreviewUrl(RawPreviewUrl(previewSourcePaths[nextIndex]));
+                        setPreviewPdfPage(1);
+                        setPreviewZoom(1);
+                      }}
+                      disabled={previewSourceIndex <= 0}
+                      aria-label="Previous document"
+                    >
+                      ‹
+                    </button>
+                    <span>
+                      Document {previewSourceIndex + 1} of {previewSourcePaths.length}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const nextIndex = Math.min(
+                          previewSourcePaths.length - 1,
+                          previewSourceIndex + 1,
+                        );
+                        setPreviewSourceIndex(nextIndex);
+                        setPreviewUrl(RawPreviewUrl(previewSourcePaths[nextIndex]));
+                        setPreviewPdfPage(1);
+                        setPreviewZoom(1);
+                      }}
+                      disabled={previewSourceIndex >= previewSourcePaths.length - 1}
+                      aria-label="Next document"
+                    >
+                      ›
+                    </button>
+                  </div>
+                )}
                 {GetPreviewKind(previewUrl) === "pdf" && previewPdfPageCount > 1 && (
                   <div className="preview-pdf-pager">
                     <button
@@ -2329,6 +2398,19 @@ function ApplyLocalFilters(
     }
     return true;
   });
+}
+
+function InvoicePreviewPaths(
+  inv: Pick<InvoiceSummary, "source_files" | "uploaded_file_path">,
+): string[] {
+  const paths = (inv.source_files ?? []).filter(Boolean);
+  if (paths.length > 0) return paths;
+  if (inv.uploaded_file_path) return [inv.uploaded_file_path];
+  return [];
+}
+
+function RawPreviewUrl(filePath: string): string {
+  return `/api/raw/${PathBasename(filePath)}`;
 }
 
 function GroupInvoicesById(items: InvoiceSummary[]): { id: string; rows: InvoiceSummary[] }[] {

@@ -51,9 +51,16 @@ def get_erp_sync_settings() -> dict[str, Any]:
         frequency = DEFAULT_FREQUENCY_MINUTES
     frequency = max(MIN_FREQUENCY_MINUTES, min(MAX_FREQUENCY_MINUTES, frequency))
 
+    merge_hitl_duplicates = doc.get("merge_hitl_duplicates")
+    if merge_hitl_duplicates is None:
+        merge_hitl_duplicates = True
+    else:
+        merge_hitl_duplicates = bool(merge_hitl_duplicates)
+
     return {
         "mode": mode,
         "frequency_minutes": frequency,
+        "merge_hitl_duplicates": merge_hitl_duplicates,
         "last_synced_at": doc.get("last_synced_at"),
         "last_sync_result": doc.get("last_sync_result"),
         "syncing": bool(doc.get("syncing", False)),
@@ -61,7 +68,12 @@ def get_erp_sync_settings() -> dict[str, Any]:
     }
 
 
-def save_erp_sync_settings(*, mode: str, frequency_minutes: int) -> dict[str, Any]:
+def save_erp_sync_settings(
+    *,
+    mode: str,
+    frequency_minutes: int,
+    merge_hitl_duplicates: bool | None = None,
+) -> dict[str, Any]:
     mode = (mode or "").strip().lower()
     if mode not in ("immediate", "scheduled"):
         raise ValueError("mode must be 'immediate' or 'scheduled'")
@@ -75,20 +87,22 @@ def save_erp_sync_settings(*, mode: str, frequency_minutes: int) -> dict[str, An
             f"frequency_minutes must be between {MIN_FREQUENCY_MINUTES} and {MAX_FREQUENCY_MINUTES}"
         )
 
+    update_fields: dict[str, Any] = {
+        "mode": mode,
+        "frequency_minutes": frequency_minutes,
+        # Anchors the "next sync" countdown to the moment settings were saved
+        # rather than whenever the last sync happened to complete - otherwise
+        # shortening the frequency (e.g. 15min -> 2min) would make the next sync
+        # look like it was already overdue in the past, instead of counting down
+        # from now. See next_sync_baseline().
+        "settings_updated_at": datetime.utcnow(),
+    }
+    if merge_hitl_duplicates is not None:
+        update_fields["merge_hitl_duplicates"] = bool(merge_hitl_duplicates)
+
     _collection().update_one(
         {"_id": _SETTINGS_DOC_ID},
-        {
-            "$set": {
-                "mode": mode,
-                "frequency_minutes": frequency_minutes,
-                # Anchors the "next sync" countdown to the moment settings were saved
-                # rather than whenever the last sync happened to complete - otherwise
-                # shortening the frequency (e.g. 15min -> 2min) would make the next sync
-                # look like it was already overdue in the past, instead of counting down
-                # from now. See next_sync_baseline().
-                "settings_updated_at": datetime.utcnow(),
-            }
-        },
+        {"$set": update_fields},
         upsert=True,
     )
     logger.info(
@@ -118,18 +132,40 @@ def mark_sync_started() -> bool:
     return True
 
 
-def mark_sync_finished(*, scanned: int, updated: int, errored: int) -> None:
+def mark_sync_finished(
+    *,
+    scanned: int,
+    updated: int,
+    errored: int,
+    merged_groups: int = 0,
+    merged_docs: int = 0,
+) -> None:
+    result: dict[str, Any] = {
+        "scanned": scanned,
+        "updated": updated,
+        "errored": errored,
+    }
+    if merged_groups or merged_docs:
+        result["merged_groups"] = merged_groups
+        result["merged_docs"] = merged_docs
+
     _collection().update_one(
         {"_id": _SETTINGS_DOC_ID},
         {
             "$set": {
                 "syncing": False,
                 "last_synced_at": datetime.utcnow(),
-                "last_sync_result": {"scanned": scanned, "updated": updated, "errored": errored},
+                "last_sync_result": result,
             }
         },
         upsert=True,
     )
+
+
+def should_merge_hitl_duplicates(settings: Optional[dict[str, Any]] = None) -> bool:
+    """When True, erp_sync merges duplicate invoice numbers into HITL-pending records."""
+    s = settings or get_erp_sync_settings()
+    return bool(s.get("merge_hitl_duplicates", True))
 
 
 def should_match_immediately(settings: Optional[dict[str, Any]] = None) -> bool:

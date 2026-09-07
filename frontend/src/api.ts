@@ -2,6 +2,7 @@ export type InvoiceSummary = {
   id: string;
   file_path: string | null;
   uploaded_file_path: string | null;
+  source_files?: string[] | null;
   file_status?: string | null;
   invoice_number: unknown;
   total_amount: unknown;
@@ -140,6 +141,7 @@ export type PipelineStatus = {
 export type InvoiceJsonEditorResponse = {
   id: string;
   uploaded_file_path?: string | null;
+  source_files?: string[] | null;
   gemini_json: Record<string, unknown>;
   line_items: Record<string, unknown>[];
 };
@@ -477,6 +479,8 @@ export type ErpSyncResult = {
   scanned: number;
   updated: number;
   errored: number;
+  merged_groups?: number;
+  merged_docs?: number;
 };
 
 export type TallySyncResult = {
@@ -489,6 +493,7 @@ export type TallySyncResult = {
 export type ErpSyncSettings = {
   mode: ErpSyncMode;
   frequency_minutes: number;
+  merge_hitl_duplicates: boolean;
   last_synced_at: string | null;
   last_sync_result: ErpSyncResult | null;
   syncing: boolean;
@@ -540,6 +545,23 @@ export async function forceErpSync(): Promise<ErpSyncSettings> {
   if (!res.ok) {
     const msg = await res.text();
     throw new Error(msg || `Failed to start ERP sync (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function saveErpSyncSettings(payload: {
+  mode: ErpSyncMode;
+  frequency_minutes: number;
+  merge_hitl_duplicates?: boolean;
+}): Promise<ErpSyncSettings> {
+  const res = await apiFetch("/api/erp/settings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const msg = await res.text();
+    throw new Error(msg || `Failed to save ERP sync settings (${res.status})`);
   }
   return res.json();
 }

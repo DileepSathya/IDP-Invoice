@@ -9,6 +9,7 @@ import {
   fetchErpSyncSettings,
   fetchTallyMasterSchedulerSettings,
   forceErpSync,
+  saveErpSyncSettings,
   fetchInvoiceErpExport,
   pushInvoiceToTally,
 } from "../api";
@@ -197,6 +198,7 @@ export const Erp: React.FC = () => {
 
   const [erpSettings, setErpSettings] = useState<ErpSyncSettings | null>(null);
   const [tallyScheduler, setTallyScheduler] = useState<TallyMasterSchedulerSettings | null>(null);
+  const [savingMergeSetting, setSavingMergeSetting] = useState(false);
   const [forcingSyncNow, setForcingSyncNow] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
 
@@ -265,6 +267,24 @@ export const Erp: React.FC = () => {
     }
   };
 
+  const handleMergeSettingChange = async (enabled: boolean) => {
+    if (!erpSettings) return;
+    try {
+      setSavingMergeSetting(true);
+      setError(null);
+      const data = await saveErpSyncSettings({
+        mode: erpSettings.mode,
+        frequency_minutes: erpSettings.frequency_minutes,
+        merge_hitl_duplicates: enabled,
+      });
+      setErpSettings(data);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to save merge setting");
+    } finally {
+      setSavingMergeSetting(false);
+    }
+  };
+
   // Downloads are only allowed once this invoice's ERP match is current and complete.
   // The API exposes erp_matching_complete per row; downloads use /erp-export (gated server-side).
 
@@ -316,13 +336,32 @@ export const Erp: React.FC = () => {
 
       {erpSettings?.configured && (
         <div className="erp-settings-sync-times">
+          <label className="erp-merge-setting">
+            <input
+              type="checkbox"
+              checked={erpSettings.merge_hitl_duplicates}
+              disabled={savingMergeSetting || !!erpSettings.syncing}
+              onChange={(e) => void handleMergeSettingChange(e.target.checked)}
+            />
+            <span>
+              Merge duplicate invoice numbers into HITL pending before re-match (runs on Force
+              Re-match and scheduled sync)
+            </span>
+          </label>
           <span className="erp-settings-last-synced">
             Last re-matched: {FormatTimestamp(erpSettings.last_synced_at)}
             {erpSettings.last_sync_result && (
               <>
                 {" "}
                 ({erpSettings.last_sync_result.scanned} scanned, {erpSettings.last_sync_result.updated}{" "}
-                updated{erpSettings.last_sync_result.errored > 0 ? `, ${erpSettings.last_sync_result.errored} errored` : ""})
+                updated
+                {(erpSettings.last_sync_result.merged_docs ?? 0) > 0
+                  ? `, ${erpSettings.last_sync_result.merged_docs} merged`
+                  : ""}
+                {erpSettings.last_sync_result.errored > 0
+                  ? `, ${erpSettings.last_sync_result.errored} errored`
+                  : ""}
+                )
               </>
             )}
           </span>
