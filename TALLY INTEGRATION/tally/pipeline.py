@@ -61,7 +61,7 @@ def _vendor_name(doc: dict[str, Any]) -> str:
     if not isinstance(additional, dict):
         additional = {}
     return str(
-        additional.get("erp_vendor_name")
+        additional.get("vendor_match_name")
         or gemini_json.get("seller")
         or ""
     ).strip()
