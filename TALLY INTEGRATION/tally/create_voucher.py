@@ -235,7 +235,9 @@ def tax_entries_xml(data, computed_total):
     total_tax_amount = 0.0
 
     # Gemini may emit "discount_amount" or the shorter "discount" — accept either.
-    discount = _num(additional_fields.get("discount") or additional_fields.get("discount_amount"))
+    # A discount is a reduction regardless of whether OCR preserved the
+    # invoice's printed accounting marker, e.g. ``(-)100.00``.
+    discount = abs(_num(additional_fields.get("discount") or additional_fields.get("discount_amount")))
     if discount > 0:
         discount_ledger = additional_fields.get("discount_ledger_name", "Discount Received")
         elements.append(
@@ -318,7 +320,15 @@ def tax_entries_xml(data, computed_total):
     if delta != 0:
         round_ledger = additional_fields.get("round_off_ledger_name", "Round Off")
         elements.append(
-            build_ledger_entry_block(round_ledger, abs(delta), "Dr" if delta > 0 else "Cr")
+            build_ledger_entry_block(
+                round_ledger,
+                abs(delta),
+                "Dr" if delta > 0 else "Cr",
+                # For a round-down, Tally still needs a positive credit amount
+                # to balance the books, but this display hint makes Invoice
+                # Voucher View subtract it from the visible payable total.
+                display_flag="Yes",
+            )
         )
         # Accept both "round_off" and the Gemini-emitted "round_off_amount".
         extracted_round_off = _num(additional_fields.get("round_off") or additional_fields.get("round_off_amount"))

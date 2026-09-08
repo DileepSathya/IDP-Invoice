@@ -105,6 +105,37 @@ def test_round_off_direction_flips_when_invoice_rounds_down():
     assert entries["Round Off"] == 1.00, entries  # positive = credit
 
 
+def test_observed_invoice_accounting_round_off_balances_without_manual_retyping():
+    """OCR emits the printed ``(-)0.02`` form used by invoice 293."""
+    root = _assert_balanced(_invoice(
+        "7695.00",
+        [{"match_type": "STOCK_ITEM", "service": "H.D.P.E 1L Oil Bottle",
+          "quantity": 548, "price_per_unit": 11.90, "unit": "Nos"}],
+        {"igst_rate": 18, "igst_amount": "1,173.82", "round_off": "(-)0.02"},
+        invoice_number="293",
+    ))
+    entries = {e.findtext("LEDGERNAME"): float(e.findtext("AMOUNT"))
+               for e in root.iter("LEDGERENTRIES.LIST")}
+    assert entries["Round Off"] == 0.02, entries
+    round_entry = next(
+        e for e in root.iter("LEDGERENTRIES.LIST")
+        if e.findtext("LEDGERNAME") == "Round Off"
+    )
+    assert round_entry.findtext("ISDEEMEDPOSITIVE") == "Yes"
+
+
+def test_accounting_notation_discount_is_posted_as_reduction():
+    root = _assert_balanced(_invoice(
+        "1062.00",
+        [{"match_type": "STOCK_ITEM", "service": "Widget", "quantity": 1,
+          "price_per_unit": 1000, "unit": "Nos"}],
+        {"discount": "(-)100.00", "igst_rate": 18, "igst_amount": 162.00},
+    ))
+    entries = {e.findtext("LEDGERNAME"): float(e.findtext("AMOUNT"))
+               for e in root.iter("LEDGERENTRIES.LIST")}
+    assert entries["Discount Received"] == 100.00, entries
+
+
 def test_round_off_closes_gap_even_when_field_missing():
     """Extraction sometimes misses the round-off line. The voucher must still
     balance - the old code emitted no entry at all and went out short."""

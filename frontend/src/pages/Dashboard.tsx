@@ -641,13 +641,13 @@ export const Dashboard: React.FC = () => {
 
   // Real-time JSON editor totals: recomputed on every keystroke so mismatches (and a
   // missing invoice date) are visible before the user saves, not only after.
-  const jsonEditorExpectedTotal = useMemo(
-    () => CalculateEditorExpectedTotal(jsonEditorLineItems, jsonEditorAdditionalFields),
-    [jsonEditorLineItems, jsonEditorAdditionalFields],
-  );
   const jsonEditorEnteredTotal = useMemo(
     () => ParseAmount(jsonEditorForm.total_amount),
     [jsonEditorForm.total_amount],
+  );
+  const jsonEditorExpectedTotal = useMemo(
+    () => CalculateEditorExpectedTotal(jsonEditorLineItems, jsonEditorAdditionalFields, jsonEditorEnteredTotal),
+    [jsonEditorLineItems, jsonEditorAdditionalFields, jsonEditorEnteredTotal],
   );
   const jsonEditorTotalMismatch =
     jsonEditorExpectedTotal != null &&
@@ -795,7 +795,11 @@ export const Dashboard: React.FC = () => {
           nextAdditionalFields[lifecycleKey] = prevAdditional[lifecycleKey];
         }
       }
-      const summaryTotalAmount = CalculateEditorExpectedTotal(jsonEditorLineItems, jsonEditorAdditionalFields);
+      const summaryTotalAmount = CalculateEditorExpectedTotal(
+        jsonEditorLineItems,
+        jsonEditorAdditionalFields,
+        ParseAmount(jsonEditorForm.total_amount),
+      );
       if (summaryTotalAmount != null) {
         nextAdditionalFields.summary_total_amount = summaryTotalAmount.toFixed(2);
       }
@@ -2260,10 +2264,13 @@ function SumLineItemAmount(items: InvoiceSummary[]): number | null {
 function ParseAmount(value: unknown): number | null {
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
   if (typeof value === "string") {
-    const cleaned = value.replace(/,/g, "").trim();
+    const text = value.trim();
+    const negativeAccounting = text.includes("(-)") || (text.startsWith("(") && text.endsWith(")"));
+    const cleaned = text.replace("(-)", "-").replace(/[^0-9.+-]/g, "");
     if (!cleaned) return null;
     const n = Number(cleaned);
-    return Number.isFinite(n) ? n : null;
+    if (!Number.isFinite(n)) return null;
+    return negativeAccounting ? -Math.abs(n) : n;
   }
   return null;
 }
@@ -2301,19 +2308,24 @@ function FindAdditionalFieldValue(
 function CalculateEditorExpectedTotal(
   items: InvoiceEditorLineItem[],
   additionalFields: InvoiceEditorAdditionalField[],
+  statedTotal: number | null = null,
 ): number | null {
   let amountAfterTaxSum = 0;
   let hasAmountAfterTax = false;
+  let allItemsHaveAmountAfterTax = items.length > 0;
   for (const item of items) {
     const parsed = ParseAmount(item.amount_after_tax);
     if (parsed != null) {
       amountAfterTaxSum += parsed;
       hasAmountAfterTax = true;
+    } else {
+      allItemsHaveAmountAfterTax = false;
     }
   }
 
   let base: number | null;
-  if (hasAmountAfterTax) {
+  let subtotalAlreadyDiscounted = false;
+  if (hasAmountAfterTax && allItemsHaveAmountAfterTax) {
     base = amountAfterTaxSum;
   } else {
     let amountSum = 0;
@@ -2325,9 +2337,11 @@ function CalculateEditorExpectedTotal(
         hasAmount = true;
       }
     }
-    base = hasAmount
-      ? amountSum
-      : FindAdditionalFieldValue(additionalFields, ["sub_total", "subtotal_after_discount"]);
+    base = hasAmount ? amountSum : FindAdditionalFieldValue(additionalFields, ["sub_total"]);
+    if (base == null) {
+      base = FindAdditionalFieldValue(additionalFields, ["subtotal_after_discount"]);
+      subtotalAlreadyDiscounted = base != null;
+    }
     if (base != null) {
       const sgst = FindAdditionalFieldValue(additionalFields, ["sgst_amount"]) ?? 0;
       const cgst = FindAdditionalFieldValue(additionalFields, ["cgst_amount"]) ?? 0;
@@ -2338,17 +2352,36 @@ function CalculateEditorExpectedTotal(
 
   if (base == null) return null;
 
-  const discount = FindAdditionalFieldValue(additionalFields, ["discount", "discount_amount", "total_discount"]) ?? 0;
-  const roundOff =
-    FindAdditionalFieldValue(additionalFields, [
+  const discount = Math.abs(
+    FindAdditionalFieldValue(additionalFields, ["discount", "discount_amount", "total_discount"]) ?? 0,
+  );
+  const roundOffKeys = [
       "round_off",
       "roundoff",
       "round_off_amount",
       "square_off",
       "square_off_amount",
       "rounding",
-    ]) ?? 0;
-  return base - discount + roundOff;
+    ];
+  const roundOffRow = additionalFields.find((field) => roundOffKeys.includes(field.key));
+  let roundOff = ParseAmount(roundOffRow?.value) ?? 0;
+  const roundOffText = String(roundOffRow?.value ?? "").trim();
+  const hasExplicitDirection =
+    roundOff < 0 ||
+    roundOffText.startsWith("+") ||
+    roundOffText.includes("(-)") ||
+    (roundOffText.startsWith("(") && roundOffText.endsWith(")"));
+  const beforeRoundOff = base - (subtotalAlreadyDiscounted ? 0 : discount);
+  if (roundOff !== 0 && statedTotal != null) {
+    const magnitude = Math.abs(roundOff);
+    const candidates = hasExplicitDirection ? [roundOff, 0] : [magnitude, -magnitude, 0];
+    roundOff = candidates.reduce((best, candidate) =>
+      Math.abs(beforeRoundOff + candidate - statedTotal) < Math.abs(beforeRoundOff + best - statedTotal)
+        ? candidate
+        : best,
+    );
+  }
+  return beforeRoundOff + roundOff;
 }
 
 function ApplyLocalFilters(

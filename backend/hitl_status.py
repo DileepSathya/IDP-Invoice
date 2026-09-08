@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 # Absolute currency tolerance for the invoice-level total vs. sum-of-line-items check.
@@ -74,8 +75,20 @@ def to_bool(value: Any) -> bool:
 def _to_float(value: Any) -> float | None:
     if value is None:
         return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip()
+    if not text:
+        return None
+    negative_accounting = "(-)" in text or (
+        text.startswith("(") and text.endswith(")")
+    )
+    cleaned = re.sub(r"[^0-9.\-+]", "", text.replace("(-)", "-"))
     try:
-        return float(str(value).replace(",", "").strip())
+        parsed = float(cleaned)
+        return -abs(parsed) if negative_accounting else parsed
     except Exception:
         return None
 
@@ -106,7 +119,9 @@ def _sum_line_item_amounts_after_tax(line_items: list) -> float | None:
             continue
         n = _to_float(li.get("amount_after_tax"))
         if n is None:
-            continue
+            # A partial after-tax population must not silently drop the other
+            # lines. Fall back to pre-tax amounts plus summary tax instead.
+            return None
         running += n
         seen = True
     return running if seen else None
@@ -143,6 +158,7 @@ def compute_expected_total(gemini_json: dict[str, Any]) -> float | None:
 
     line_items = gemini_json.get("line_items") or []
 
+    subtotal_already_discounted = False
     amount_after_tax_sum = _sum_line_item_amounts_after_tax(line_items)
     if amount_after_tax_sum is not None:
         # Line items already carry their own tax; do not add billing-summary tax again.
@@ -150,7 +166,10 @@ def compute_expected_total(gemini_json: dict[str, Any]) -> float | None:
     else:
         base = _sum_line_item_amounts(line_items)
         if base is None:
-            base = _first_float(additional_fields, ("sub_total", "subtotal_after_discount"))
+            base = _first_float(additional_fields, ("sub_total",))
+        if base is None:
+            base = _first_float(additional_fields, ("subtotal_after_discount",))
+            subtotal_already_discounted = base is not None
         if base is None:
             base = _to_float(gemini_json.get("amount"))
         if base is not None:
@@ -162,9 +181,43 @@ def compute_expected_total(gemini_json: dict[str, Any]) -> float | None:
     if base is None:
         return None
 
-    discount = _first_float(additional_fields, _DISCOUNT_KEYS) or 0.0
-    round_off = _first_float(additional_fields, _ROUND_OFF_KEYS) or 0.0
-    return base - discount + round_off
+    discount = abs(_first_float(additional_fields, _DISCOUNT_KEYS) or 0.0)
+    before_round_off = base - (0.0 if subtotal_already_discounted else discount)
+
+    round_off_raw = next(
+        (additional_fields.get(key) for key in _ROUND_OFF_KEYS if additional_fields.get(key) not in (None, "")),
+        None,
+    )
+    round_off = _to_float(round_off_raw) or 0.0
+    round_off_text = str(round_off_raw).strip() if round_off_raw is not None else ""
+    has_explicit_direction = (
+        round_off < 0
+        or round_off_text.startswith("+")
+        or "(-)" in round_off_text
+        or (round_off_text.startswith("(") and round_off_text.endswith(")"))
+    )
+    stated_total = _to_float(
+        gemini_json.get("total_amount")
+        or gemini_json.get("grand_total")
+        or gemini_json.get("amount")
+    )
+    if round_off and stated_total is not None:
+        magnitude = abs(round_off)
+        candidate_adjustments = (
+            [round_off]
+            if has_explicit_direction
+            else [magnitude, -magnitude]
+        )
+        # amount_after_tax is sometimes populated with the invoice-level total,
+        # which already contains round-off. Include zero so we do not apply the
+        # same adjustment twice when the base already reconciles.
+        candidate_adjustments.append(0.0)
+        round_off = min(
+            candidate_adjustments,
+            key=lambda adjustment: abs(before_round_off + adjustment - stated_total),
+        )
+
+    return before_round_off + round_off
 
 
 def normalize_po_id(gemini_json: dict[str, Any]) -> str | None:
@@ -225,9 +278,6 @@ def ensure_summary_total_amount(gemini_json: dict[str, Any]) -> None:
     if not isinstance(additional_fields, dict):
         additional_fields = {}
         gemini_json["additional_fields"] = additional_fields
-
-    if _to_float(additional_fields.get("summary_total_amount")) is not None:
-        return
 
     expected_total = compute_expected_total(gemini_json)
     if expected_total is not None:
