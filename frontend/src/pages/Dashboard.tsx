@@ -23,6 +23,15 @@ import {
   deleteInvoices,
 } from "../api";
 import { PlanBanner } from "../components/PlanBanner";
+import {
+  EMPTY_INVOICE_TAX_DETAILS,
+  invoiceTaxDetailsToRows,
+  normalizeInvoiceTaxDetails,
+  preserveInvoiceEditorMetadata,
+  serializeAdditionalFieldRows,
+  serializeInvoiceTaxDetails,
+} from "../invoiceTaxDetails";
+import type { InvoiceAdditionalFieldRow, InvoiceTaxDetails } from "../invoiceTaxDetails";
 
 type InvoiceEditorFormState = {
   invoice_number: string;
@@ -55,10 +64,7 @@ type InvoiceEditorLineItem = {
   amount_after_tax: string;
 };
 
-type InvoiceEditorAdditionalField = {
-  key: string;
-  value: string;
-};
+type InvoiceEditorAdditionalField = InvoiceAdditionalFieldRow;
 
 // Shared across the editing-state, EditableCell props, and the change/commit
 // handlers below so adding a new editable billing-summary field (e.g. IGST,
@@ -145,6 +151,9 @@ export const Dashboard: React.FC = () => {
   });
   const [jsonEditorLineItems, setJsonEditorLineItems] = useState<InvoiceEditorLineItem[]>([]);
   const [jsonEditorAdditionalFields, setJsonEditorAdditionalFields] = useState<InvoiceEditorAdditionalField[]>([]);
+  const [jsonEditorTaxDetails, setJsonEditorTaxDetails] = useState<InvoiceTaxDetails>(() => ({
+    ...EMPTY_INVOICE_TAX_DETAILS,
+  }));
   const [jsonEditorLoading, setJsonEditorLoading] = useState(false);
   const [jsonEditorSaving, setJsonEditorSaving] = useState(false);
   const [saveConfirmOpen, setSaveConfirmOpen] = useState(false);
@@ -645,9 +654,13 @@ export const Dashboard: React.FC = () => {
     () => ParseAmount(jsonEditorForm.total_amount),
     [jsonEditorForm.total_amount],
   );
+  const jsonEditorCalculationFields = useMemo(
+    () => [...jsonEditorAdditionalFields, ...invoiceTaxDetailsToRows(jsonEditorTaxDetails)],
+    [jsonEditorAdditionalFields, jsonEditorTaxDetails],
+  );
   const jsonEditorExpectedTotal = useMemo(
-    () => CalculateEditorExpectedTotal(jsonEditorLineItems, jsonEditorAdditionalFields, jsonEditorEnteredTotal),
-    [jsonEditorLineItems, jsonEditorAdditionalFields, jsonEditorEnteredTotal],
+    () => CalculateEditorExpectedTotal(jsonEditorLineItems, jsonEditorCalculationFields, jsonEditorEnteredTotal),
+    [jsonEditorLineItems, jsonEditorCalculationFields, jsonEditorEnteredTotal],
   );
   const jsonEditorTotalMismatch =
     jsonEditorExpectedTotal != null &&
@@ -691,6 +704,7 @@ export const Dashboard: React.FC = () => {
         geminiJson.additional_fields && typeof geminiJson.additional_fields === "object"
           ? (geminiJson.additional_fields as Record<string, unknown>)
           : {};
+      const normalizedTaxDetails = normalizeInvoiceTaxDetails(additionalFieldsRaw);
 
       setJsonEditorBase(geminiJson);
       setJsonEditorForm({
@@ -736,10 +750,16 @@ export const Dashboard: React.FC = () => {
         }),
       );
       setJsonEditorAdditionalFields(
-        Object.entries(additionalFieldsRaw)
+        Object.entries(normalizedTaxDetails.remainingFields)
           .filter(([key]) => !["HITL", "status", "ever_hitl_true", "hitl_remark", "hitl_remarks"].includes(key))
-          .map(([key, value]) => ({ key, value: ToText(value) })),
+          .map(([key, value]) => ({
+            key,
+            value: ToText(value),
+            originalValue: value,
+            originalText: ToText(value),
+          })),
       );
+      setJsonEditorTaxDetails(normalizedTaxDetails.taxDetails);
       setJsonEditorPreviewUrl(() => {
         const previewPaths = InvoicePreviewPaths(data);
         return previewPaths[0] ? RawPreviewUrl(previewPaths[0]) : null;
@@ -780,24 +800,16 @@ export const Dashboard: React.FC = () => {
     try {
       setError(null);
       setJsonEditorSaving(true);
-      const nextAdditionalFields: Record<string, unknown> = {};
-      for (const row of jsonEditorAdditionalFields) {
-        const key = row.key.trim();
-        if (!key) continue;
-        nextAdditionalFields[key] = row.value;
-      }
+      const editableAdditionalFields = serializeAdditionalFieldRows(jsonEditorAdditionalFields);
+      let nextAdditionalFields = serializeInvoiceTaxDetails(editableAdditionalFields, jsonEditorTaxDetails);
       const prevAdditional =
         jsonEditorBase.additional_fields && typeof jsonEditorBase.additional_fields === "object"
           ? (jsonEditorBase.additional_fields as Record<string, unknown>)
           : {};
-      for (const lifecycleKey of ["HITL", "status", "ever_hitl_true", "deblurred_applied", "human_approved"]) {
-        if (lifecycleKey in prevAdditional) {
-          nextAdditionalFields[lifecycleKey] = prevAdditional[lifecycleKey];
-        }
-      }
+      nextAdditionalFields = preserveInvoiceEditorMetadata(nextAdditionalFields, prevAdditional);
       const summaryTotalAmount = CalculateEditorExpectedTotal(
         jsonEditorLineItems,
-        jsonEditorAdditionalFields,
+        [...jsonEditorAdditionalFields, ...invoiceTaxDetailsToRows(jsonEditorTaxDetails)],
         ParseAmount(jsonEditorForm.total_amount),
       );
       if (summaryTotalAmount != null) {
@@ -938,6 +950,10 @@ export const Dashboard: React.FC = () => {
     setJsonEditorAdditionalFields((prev) =>
       prev.map((row, idx) => (idx === index ? { ...row, [field]: value } : row)),
     );
+  };
+
+  const updateTaxDetailField = (field: keyof InvoiceTaxDetails, value: string) => {
+    setJsonEditorTaxDetails((prev) => ({ ...prev, [field]: value }));
   };
 
   const handleRequestSave = () => {
@@ -1961,6 +1977,98 @@ export const Dashboard: React.FC = () => {
                     </section>
                   );
                 })}
+              </div>
+              <div className="json-editor-section-header json-editor-tax-header">
+                <div>
+                  <h4>Tax &amp; Adjustments</h4>
+                  <span>These fields stay visible even when the invoice does not contain a value.</span>
+                </div>
+              </div>
+              <div className="json-editor-tax-details">
+                <section className="json-editor-tax-card">
+                  <h5>CGST</h5>
+                  <div className="json-editor-tax-pair">
+                    <label className="json-editor-line-field">
+                      <span>Rate (%)</span>
+                      <input
+                        value={jsonEditorTaxDetails.cgst_rate}
+                        placeholder="0"
+                        onChange={(e) => updateTaxDetailField("cgst_rate", e.target.value)}
+                      />
+                    </label>
+                    <label className="json-editor-line-field">
+                      <span>Amount</span>
+                      <input
+                        value={jsonEditorTaxDetails.cgst_amount}
+                        placeholder="0.00"
+                        onChange={(e) => updateTaxDetailField("cgst_amount", e.target.value)}
+                      />
+                    </label>
+                  </div>
+                </section>
+                <section className="json-editor-tax-card">
+                  <h5>SGST</h5>
+                  <div className="json-editor-tax-pair">
+                    <label className="json-editor-line-field">
+                      <span>Rate (%)</span>
+                      <input
+                        value={jsonEditorTaxDetails.sgst_rate}
+                        placeholder="0"
+                        onChange={(e) => updateTaxDetailField("sgst_rate", e.target.value)}
+                      />
+                    </label>
+                    <label className="json-editor-line-field">
+                      <span>Amount</span>
+                      <input
+                        value={jsonEditorTaxDetails.sgst_amount}
+                        placeholder="0.00"
+                        onChange={(e) => updateTaxDetailField("sgst_amount", e.target.value)}
+                      />
+                    </label>
+                  </div>
+                </section>
+                <section className="json-editor-tax-card">
+                  <h5>IGST</h5>
+                  <div className="json-editor-tax-pair">
+                    <label className="json-editor-line-field">
+                      <span>Rate (%)</span>
+                      <input
+                        value={jsonEditorTaxDetails.igst_rate}
+                        placeholder="0"
+                        onChange={(e) => updateTaxDetailField("igst_rate", e.target.value)}
+                      />
+                    </label>
+                    <label className="json-editor-line-field">
+                      <span>Amount</span>
+                      <input
+                        value={jsonEditorTaxDetails.igst_amount}
+                        placeholder="0.00"
+                        onChange={(e) => updateTaxDetailField("igst_amount", e.target.value)}
+                      />
+                    </label>
+                  </div>
+                </section>
+                <section className="json-editor-tax-card json-editor-adjustments-card">
+                  <h5>Adjustments</h5>
+                  <div className="json-editor-tax-pair">
+                    <label className="json-editor-line-field">
+                      <span>Discount</span>
+                      <input
+                        value={jsonEditorTaxDetails.discount}
+                        placeholder="0.00"
+                        onChange={(e) => updateTaxDetailField("discount", e.target.value)}
+                      />
+                    </label>
+                    <label className="json-editor-line-field">
+                      <span>Round Off / Square Off</span>
+                      <input
+                        value={jsonEditorTaxDetails.round_off}
+                        placeholder="0.00"
+                        onChange={(e) => updateTaxDetailField("round_off", e.target.value)}
+                      />
+                    </label>
+                  </div>
+                </section>
               </div>
               <div
                 className={`json-editor-live-total${

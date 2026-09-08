@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "test": "node --test src/*.test.mjs",
     "preview": "vite preview",
     "lint": "echo \"no linter configured\""
   },
@@ -21,4 +22,3 @@
     "vite": "^6.0.0"
   }
 }
-

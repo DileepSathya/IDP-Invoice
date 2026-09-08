@@ -115,7 +115,7 @@ def matched_stock_name(item: dict[str, Any]) -> str:
         item.get("matched_name")
         or item.get("erp_item_name")
         or item.get("item_id")
-        or item.get("service")
+#        or item.get("service")
         or item.get("description")
         or item.get("original_name")
         or ""
