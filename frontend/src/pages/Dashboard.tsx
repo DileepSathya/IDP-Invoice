@@ -1766,9 +1766,12 @@ export const Dashboard: React.FC = () => {
 
         {jsonEditorOpen && (
           <div className="json-editor-backdrop" role="dialog" aria-modal="true" aria-label="Invoice JSON editor">
-            <div className="json-editor-modal">
+            <div className="json-editor-modal json-editor-workspace">
               <div className="json-editor-header">
-                <h3>Edit Invoice JSON</h3>
+                <div>
+                  <h3>Edit Invoice</h3>
+                  <p>Compare the source and correct the complete invoice in one workspace.</p>
+                </div>
                 <button
                   type="button"
                   className="preview-close"
@@ -1786,8 +1789,8 @@ export const Dashboard: React.FC = () => {
               </div>
               <div className="json-editor-split">
                 <div className="json-editor-main">
-              <p className="json-editor-note">Edit invoice details, line items, and additional fields.</p>
-              <div className="json-editor-form-grid">
+              <p className="json-editor-note json-editor-intro">All extracted fields remain visible while you review and edit.</p>
+              <div className="json-editor-form-grid json-editor-primary-fields">
                 <label className="json-editor-label">
                   Invoice Number
                   <input value={jsonEditorForm.invoice_number} onChange={(e) => updateEditorField("invoice_number", e.target.value)} />
@@ -1843,118 +1846,121 @@ export const Dashboard: React.FC = () => {
                 </label>
               </div>
 
-              <div className="json-editor-section-header">
-                <h4>Line Items</h4>
+              <div className="json-editor-section-header json-editor-line-items-header">
+                <div>
+                  <h4>Line Items</h4>
+                  <span>Review description, quantity, pricing, and tax without horizontal scrolling.</span>
+                </div>
                 <button type="button" onClick={addLineItemEditorRow}>+ Add line item</button>
               </div>
-              <div className="json-editor-line-items-table-wrap">
-                <table className="json-editor-line-items-table">
-                  <thead>
-                    <tr>
-                      <th title="S = Stock Item (needs Qty &amp; Rate), L = Ledger / Expense (Amount only)">Type</th>
-                      <th>HSN</th>
-                      <th>Service / Ledger Name</th>
-                      <th>Qty</th>
-                      <th>Unit</th>
-                      <th>Price/Unit</th>
-                      <th>Amount</th>
-                      <th>Tax Rate</th>
-                      <th>Tax Amount</th>
-                      <th>Amount After Tax</th>
-                      <th>Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {jsonEditorLineItems.length === 0 && (
-                      <tr>
-                        <td colSpan={11} className="json-editor-empty-cell">No line items. Add one.</td>
-                      </tr>
-                    )}
-                    {jsonEditorLineItems.map((li, idx) => {
-                      const isLedger = li.match_type === "LEDGER";
-                      return (
-                      <tr key={`li-${idx}`} className={isLedger ? "li-row-ledger" : "li-row-stock"}>
-                        {/* ── L / S toggle ── */}
-                        <td className="li-type-cell">
-                          <div className="ls-toggle" role="group" aria-label="Line type">
+              <div className="json-editor-line-items-list">
+                {jsonEditorLineItems.length === 0 && (
+                  <div className="json-editor-empty-cell">No line items. Add one to begin.</div>
+                )}
+                {jsonEditorLineItems.map((li, idx) => {
+                  const isLedger = li.match_type === "LEDGER";
+                  const itemTitleId = `json-editor-line-item-${idx}`;
+                  return (
+                    <section
+                      key={`li-${idx}`}
+                      className={`json-editor-line-item-card ${isLedger ? "li-row-ledger" : "li-row-stock"}`}
+                      aria-labelledby={itemTitleId}
+                    >
+                      <div className="json-editor-line-item-heading">
+                        <div className="json-editor-line-item-identity">
+                          <strong id={itemTitleId}>Line item {idx + 1}</strong>
+                          <div className="ls-toggle" role="group" aria-label={`Line item ${idx + 1} type`}>
                             <button
                               type="button"
                               className={`ls-btn ls-btn-s${!isLedger ? " ls-active" : ""}`}
-                              title="Stock Item — requires Qty and Rate"
+                              title="Stock Item — requires quantity and price per unit"
+                              aria-pressed={!isLedger}
                               onClick={() => updateLineItemField(idx, "match_type", "STOCK_ITEM")}
-                            >S</button>
+                            >
+                              Stock item
+                            </button>
                             <button
                               type="button"
                               className={`ls-btn ls-btn-l${isLedger ? " ls-active" : ""}`}
-                              title="Ledger / Expense — Amount only, no Qty or Rate needed"
+                              title="Ledger / Expense — amount only"
+                              aria-pressed={isLedger}
                               onClick={() => updateLineItemField(idx, "match_type", "LEDGER")}
-                            >L</button>
+                            >
+                              Ledger / expense
+                            </button>
                           </div>
-                        </td>
-                        <td>
-                          <input value={li.hsn_number} onChange={(e) => updateLineItemField(idx, "hsn_number", e.target.value)} />
-                        </td>
-                        <td>
+                        </div>
+                        <button
+                          type="button"
+                          className="json-editor-delete-icon-btn"
+                          onClick={() => removeLineItemEditorRow(idx)}
+                          aria-label={`Delete line item ${idx + 1}`}
+                          title="Delete line item"
+                        >
+                          🗑
+                        </button>
+                      </div>
+
+                      <div className="json-editor-line-item-grid">
+                        <label className="json-editor-line-field json-editor-line-field-service">
+                          <span>Service / Ledger Name</span>
                           <input
                             value={li.service}
                             placeholder={isLedger ? "Exact Tally ledger name" : "Item description"}
                             onChange={(e) => updateLineItemField(idx, "service", e.target.value)}
                           />
-                        </td>
-                        {/* Qty — disabled & greyed for Ledger lines */}
-                        <td className={isLedger ? "li-cell-disabled" : ""}>
+                        </label>
+                        <label className="json-editor-line-field json-editor-line-field-hsn">
+                          <span>HSN</span>
+                          <input value={li.hsn_number} onChange={(e) => updateLineItemField(idx, "hsn_number", e.target.value)} />
+                        </label>
+                        <label className={`json-editor-line-field json-editor-line-field-quantity${isLedger ? " li-cell-disabled" : ""}`}>
+                          <span>Quantity</span>
                           <input
                             value={li.quantity}
                             disabled={isLedger}
-                            placeholder={isLedger ? "—" : ""}
+                            placeholder={isLedger ? "Not applicable" : "0"}
                             onChange={(e) => updateLineItemField(idx, "quantity", e.target.value)}
                           />
-                        </td>
-                        <td className={isLedger ? "li-cell-disabled" : ""}>
+                        </label>
+                        <label className={`json-editor-line-field json-editor-line-field-unit${isLedger ? " li-cell-disabled" : ""}`}>
+                          <span>Unit</span>
                           <input
                             value={li.unit}
                             disabled={isLedger}
-                            placeholder={isLedger ? "—" : "nos/ltr/kg..."}
+                            placeholder={isLedger ? "Not applicable" : "nos / ltr / kg"}
                             onChange={(e) => updateLineItemField(idx, "unit", e.target.value)}
                           />
-                        </td>
-                        {/* Price/Unit — disabled & greyed for Ledger lines */}
-                        <td className={isLedger ? "li-cell-disabled" : ""}>
+                        </label>
+                        <label className={`json-editor-line-field json-editor-line-field-price${isLedger ? " li-cell-disabled" : ""}`}>
+                          <span>Price / Unit</span>
                           <input
                             value={li.price_per_unit}
                             disabled={isLedger}
-                            placeholder={isLedger ? "—" : ""}
+                            placeholder={isLedger ? "Not applicable" : "0.00"}
                             onChange={(e) => updateLineItemField(idx, "price_per_unit", e.target.value)}
                           />
-                        </td>
-                        <td>
-                          <input value={li.amount} onChange={(e) => updateLineItemField(idx, "amount", e.target.value)} />
-                        </td>
-                        <td>
-                          <input value={li.tax_rate} onChange={(e) => updateLineItemField(idx, "tax_rate", e.target.value)} />
-                        </td>
-                        <td>
-                          <input value={li.tax_amount} onChange={(e) => updateLineItemField(idx, "tax_amount", e.target.value)} />
-                        </td>
-                        <td>
-                          <input value={li.amount_after_tax} onChange={(e) => updateLineItemField(idx, "amount_after_tax", e.target.value)} />
-                        </td>
-                        <td>
-                          <button
-                            type="button"
-                            className="json-editor-delete-icon-btn"
-                            onClick={() => removeLineItemEditorRow(idx)}
-                            aria-label="Delete line item"
-                            title="Delete line item"
-                          >
-                            🗑
-                          </button>
-                        </td>
-                      </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                        </label>
+                        <label className="json-editor-line-field json-editor-line-field-amount">
+                          <span>Amount</span>
+                          <input value={li.amount} placeholder="0.00" onChange={(e) => updateLineItemField(idx, "amount", e.target.value)} />
+                        </label>
+                        <label className="json-editor-line-field json-editor-line-field-tax-rate">
+                          <span>Tax Rate</span>
+                          <input value={li.tax_rate} placeholder="0%" onChange={(e) => updateLineItemField(idx, "tax_rate", e.target.value)} />
+                        </label>
+                        <label className="json-editor-line-field json-editor-line-field-tax-amount">
+                          <span>Tax Amount</span>
+                          <input value={li.tax_amount} placeholder="0.00" onChange={(e) => updateLineItemField(idx, "tax_amount", e.target.value)} />
+                        </label>
+                        <label className="json-editor-line-field json-editor-line-field-total">
+                          <span>Amount After Tax</span>
+                          <input value={li.amount_after_tax} placeholder="0.00" onChange={(e) => updateLineItemField(idx, "amount_after_tax", e.target.value)} />
+                        </label>
+                      </div>
+                    </section>
+                  );
+                })}
               </div>
               <div
                 className={`json-editor-live-total${
