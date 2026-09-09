@@ -23,6 +23,7 @@ import {
   deleteInvoices,
 } from "../api";
 import { PlanBanner } from "../components/PlanBanner";
+import { MasterNameInput } from "../components/MasterNameInput";
 import {
   EMPTY_INVOICE_TAX_DETAILS,
   invoiceTaxDetailsToRows,
@@ -1838,7 +1839,7 @@ export const Dashboard: React.FC = () => {
                 </label>
                 <label className="json-editor-label">
                   Seller
-                  <input value={jsonEditorForm.seller} onChange={(e) => updateEditorField("seller", e.target.value)} />
+                  <MasterNameInput kind="vendors" value={jsonEditorForm.seller} onChange={(value) => updateEditorField("seller", value)} />
                 </label>
                 <label className="json-editor-label">
                   Buyer
@@ -1919,11 +1920,13 @@ export const Dashboard: React.FC = () => {
 
                       <div className="json-editor-line-item-grid">
                         <label className="json-editor-line-field json-editor-line-field-service">
-                          <span>Service / Ledger Name</span>
-                          <input
+                          <span>{isLedger ? "Service / Ledger Name" : "Stock Item Name"}</span>
+                          <MasterNameInput
+                            key={isLedger ? "ledgers" : "items"}
+                            kind={isLedger ? "ledgers" : "items"}
                             value={li.service}
-                            placeholder={isLedger ? "Exact Tally ledger name" : "Item description"}
-                            onChange={(e) => updateLineItemField(idx, "service", e.target.value)}
+                            placeholder={isLedger ? "Search Tally expense ledgers" : "Search Tally stock items"}
+                            onChange={(value) => updateLineItemField(idx, "service", value)}
                           />
                         </label>
                         <label className="json-editor-line-field json-editor-line-field-hsn">

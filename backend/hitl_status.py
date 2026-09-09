@@ -393,15 +393,8 @@ def calculate_hitl_flag(gemini_json: dict[str, Any], *, run_erp_matching_now: bo
     human_approved = to_bool(additional_fields.get("human_approved"))
 
     reasons: list[str] = []
-    merge_conflicts = additional_fields.get("merge_conflicts")
-    if isinstance(merge_conflicts, list) and merge_conflicts:
-        conflict_paths = [
-            str(conflict.get("path") or "unknown field")
-            for conflict in merge_conflicts
-            if isinstance(conflict, dict)
-        ]
-        if conflict_paths:
-            reasons.append(f"Merged pages conflict: {', '.join(dict.fromkeys(conflict_paths))}")
+    # Merge conflicts remain audit metadata. Validate the materialized invoice
+    # normally, but differences between source pages alone do not require HITL.
 
     # A human reviewing/editing the record already looked at the scan, so image quality
     # alone should not keep re-flagging it - but date, totals, and line-item math are
@@ -482,8 +475,7 @@ def calculate_hitl_flag(gemini_json: dict[str, Any], *, run_erp_matching_now: bo
     reasons.extend(erp_reasons)
 
     hitl_value = bool(
-        (isinstance(merge_conflicts, list) and bool(merge_conflicts))
-        or date_missing
+        date_missing
         or total_mismatch
         or deblurred_applied
         or line_items_flagged

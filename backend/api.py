@@ -2209,6 +2209,17 @@ def get_tally_master_status_route() -> TallyMasterSyncStatusResponse:
     return _tally_master_status_response()
 
 
+@app.get("/tally/masters/suggestions")
+def get_tally_master_suggestions(
+    kind: str = Query(pattern="^(items|vendors|ledgers)$"),
+    q: str = Query(default="", max_length=200),
+    limit: int = Query(default=20, ge=1, le=50),
+) -> list[dict[str, str]]:
+    from backend.tally_master_db import search_master
+
+    return search_master(kind, q, limit)
+
+
 @app.post("/tally/masters/refresh", response_model=TallyMasterRefreshResponse)
 def refresh_tally_masters_route(
     rematch: bool = Query(default=True, description="Re-match all invoices after refresh"),

@@ -393,7 +393,7 @@ def send_template_to_tally(TALLY_URL, path, company_name, data, invoice_number, 
             COMPANY_NAME=_safe(company_name),
             INVOICE_NUMBER=_safe(invoice_number),
             VOUCHER_TYPE=_safe(voucher_type),
-            VOUCHER_DATE=convert_date_yyyymmdd(invoice_date), #"2025-07-01"
+            VOUCHER_DATE=convert_date_yyyymmdd("2025-07-01"), #invoice_date
             VOUCHER_ENTRY_MODE=voucher_entry_mode,
             PARTY_LEDGER=_safe(vendor_name),
             INVENTORY_ENTRIES_XML=inventory_entries_xml,

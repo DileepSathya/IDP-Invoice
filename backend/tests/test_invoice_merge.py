@@ -76,7 +76,7 @@ def _make_doc(
 
 
 class InvoiceMergeTests(unittest.TestCase):
-    def test_merge_conflicts_keep_materialized_invoice_in_hitl(self) -> None:
+    def test_merge_conflicts_do_not_keep_materialized_invoice_in_hitl(self) -> None:
         gemini_json = {
             "invoice_number": "INV-300",
             "invoice_date": "2026-09-07",
@@ -101,8 +101,9 @@ class InvoiceMergeTests(unittest.TestCase):
 
         flagged = calculate_hitl_flag(gemini_json, run_erp_matching_now=False)
 
-        self.assertTrue(flagged)
-        self.assertIn("Merged pages conflict: seller", gemini_json["additional_fields"]["hitl_remarks"])
+        self.assertFalse(flagged)
+        self.assertEqual([], gemini_json["additional_fields"]["hitl_remarks"])
+        self.assertEqual("seller", gemini_json["additional_fields"]["merge_conflicts"][0]["path"])
 
     def test_normalize_invoice_number_case_insensitive(self) -> None:
         self.assertEqual(normalize_invoice_number("INV-001"), "inv-001")

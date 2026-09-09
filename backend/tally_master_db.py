@@ -8,6 +8,7 @@ Invoice matching reads exclusively from these collections.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from datetime import datetime
 from typing import Any, Optional
@@ -145,6 +146,59 @@ def fetch_vendor_master() -> list[dict[str, Any]]:
 
 def fetch_item_master() -> list[dict[str, Any]]:
     return _fetch_collection("tally_item_master")
+
+
+def search_master(kind: str, query: str = "", limit: int = 20) -> list[dict[str, str]]:
+    """Rank exact names, phrases, then unordered partial words; preserve labels."""
+    sources = {
+        "items": (fetch_item_master, "item_name", "item_id", ("units", "category")),
+        "vendors": (fetch_vendor_master, "vendor_name", "vendor_id", ("gst_tax_number",)),
+        "ledgers": (fetch_expense_ledger_master, "ledger_name", "ledger_id", ()),
+    }
+    if kind not in sources:
+        raise ValueError("Unknown master type")
+    fetch, name_key, id_key, details = sources[kind]
+    rows = fetch()
+    query = query.strip().casefold()
+    def normalize(text: str) -> str:
+        return " ".join(re.findall(r"[^\W_]+", text.casefold()))
+
+    normalized_query = normalize(query)
+    tokens = normalized_query.split()
+    results = []
+    for row in rows:
+        name = str(row.get(name_key) or "")
+        if not name.strip():
+            continue
+        detail = " · ".join(str(row[key]) for key in details if row.get(key))
+        searchable = f"{name} {detail} {row.get('description') or ''}".casefold()
+        normalized_name = normalize(name)
+        if tokens:
+            words = normalize(searchable).split()
+            if not all(any(word.startswith(token) for word in words) for token in tokens):
+                continue
+            if normalized_name == normalized_query:
+                rank = 0
+            elif normalized_name.startswith(normalized_query):
+                rank = 1
+            elif f" {normalized_query} " in f" {normalized_name} ":
+                rank = 2
+            elif all(any(word.startswith(token) for word in normalized_name.split()) for token in tokens):
+                rank = 3
+            else:
+                rank = 4  # Supplementary fields match after names.
+        else:
+            # Empty input browses; punctuation-only queries remain literal.
+            if query and query not in searchable:
+                continue
+            rank = 0
+        results.append((rank, name.casefold(), {
+            "id": str(row.get(id_key) or ""),
+            "name": name,
+            "detail": detail,
+        }))
+    results.sort(key=lambda entry: (entry[0], entry[1]))
+    return [entry[2] for entry in results[:max(1, min(limit, 50))]]
 
 
 def fetch_expense_ledger_master() -> list[dict[str, Any]]:

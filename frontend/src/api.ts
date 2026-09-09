@@ -1,3 +1,15 @@
+export type MasterKind = "items" | "vendors" | "ledgers";
+export type MasterSuggestion = { id: string; name: string; detail: string };
+
+export async function fetchMasterSuggestions(
+  kind: MasterKind, query: string, signal?: AbortSignal,
+): Promise<MasterSuggestion[]> {
+  const params = new URLSearchParams({ kind, q: query.slice(0, 200) });
+  const res = await apiFetch(`/api/tally/masters/suggestions?${params}`, { signal });
+  if (!res.ok) throw new Error("Suggestions unavailable. You can still enter a name.");
+  return res.json();
+}
+
 export type InvoiceSummary = {
   id: string;
   file_path: string | null;

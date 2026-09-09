@@ -1,0 +1,8 @@
+.master-name-input { display: block; position: relative; min-width: 0; width: 100%; }
+.master-name-input > input { width: 100%; box-sizing: border-box; }
+.master-name-panel { display: block; position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 40; max-height: 260px; overflow-y: auto; background: #fff; color: #172033; border: 1px solid #cbd5e1; border-radius: 8px; box-shadow: 0 8px 24px #0f172a26; }
+.master-name-option { padding: 9px 12px; cursor: pointer; white-space: normal; overflow-wrap: anywhere; }
+.master-name-option[aria-selected="true"] { background: #e8f0fe; }
+.master-name-option strong { display: block; font-size: 13px; font-weight: 500; }
+.master-name-option small { display: block; margin-top: 3px; color: #526176; font-size: 11px; }
+.master-name-hint { display: block; padding: 9px 12px; color: #526176; font-size: 12px; font-weight: 400; border-top: 1px solid #e2e8f0; }
