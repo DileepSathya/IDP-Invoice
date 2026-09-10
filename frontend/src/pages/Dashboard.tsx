@@ -28,6 +28,7 @@ import {
   EMPTY_INVOICE_TAX_DETAILS,
   invoiceTaxDetailsToRows,
   normalizeInvoiceTaxDetails,
+  normalizeHitlRemarks,
   preserveInvoiceEditorMetadata,
   serializeAdditionalFieldRows,
   serializeInvoiceTaxDetails,
@@ -152,6 +153,7 @@ export const Dashboard: React.FC = () => {
   });
   const [jsonEditorLineItems, setJsonEditorLineItems] = useState<InvoiceEditorLineItem[]>([]);
   const [jsonEditorAdditionalFields, setJsonEditorAdditionalFields] = useState<InvoiceEditorAdditionalField[]>([]);
+  const [jsonEditorHitlRemarks, setJsonEditorHitlRemarks] = useState<string[]>([]);
   const [jsonEditorTaxDetails, setJsonEditorTaxDetails] = useState<InvoiceTaxDetails>(() => ({
     ...EMPTY_INVOICE_TAX_DETAILS,
   }));
@@ -708,6 +710,9 @@ export const Dashboard: React.FC = () => {
       const normalizedTaxDetails = normalizeInvoiceTaxDetails(additionalFieldsRaw);
 
       setJsonEditorBase(geminiJson);
+      setJsonEditorHitlRemarks(
+        normalizeHitlRemarks(additionalFieldsRaw.hitl_remark, additionalFieldsRaw.hitl_remarks),
+      );
       setJsonEditorForm({
         invoice_number: ToText(geminiJson.invoice_number),
         invoice_date: ToText(geminiJson.invoice_date),
@@ -1807,6 +1812,21 @@ export const Dashboard: React.FC = () => {
               <div className="json-editor-split">
                 <div className="json-editor-main">
               <p className="json-editor-note json-editor-intro">All extracted fields remain visible while you review and edit.</p>
+              <section className="json-editor-hitl-remarks" aria-labelledby="json-editor-hitl-remarks-title">
+                <div className="json-editor-hitl-remarks-heading">
+                  <h4 id="json-editor-hitl-remarks-title">HITL Remarks</h4>
+                  <span>Read-only</span>
+                </div>
+                {jsonEditorHitlRemarks.length > 0 ? (
+                  <ul>
+                    {jsonEditorHitlRemarks.map((reason, index) => (
+                      <li key={`${reason}-${index}`}>{reason}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p>No HITL remarks available.</p>
+                )}
+              </section>
               <div className="json-editor-form-grid json-editor-primary-fields">
                 <label className="json-editor-label">
                   Invoice Number

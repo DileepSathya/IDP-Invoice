@@ -126,3 +126,27 @@ test("hidden review metadata survives editor saves", async () => {
     hitl_remarks: ["Check vendor", "Confirm tax"],
   });
 });
+
+test("HITL remark arrays render as a clean ordered list of reasons", async () => {
+  const { normalizeHitlRemarks } = await loadModule();
+
+  assert.deepEqual(
+    normalizeHitlRemarks("Legacy reason", [" Check vendor ", "", "Confirm tax"]),
+    ["Check vendor", "Confirm tax"],
+  );
+});
+
+test("legacy semicolon-delimited HITL remarks become separate reasons", async () => {
+  const { normalizeHitlRemarks } = await loadModule();
+
+  assert.deepEqual(normalizeHitlRemarks("Check vendor; Confirm tax ; ", undefined), [
+    "Check vendor",
+    "Confirm tax",
+  ]);
+});
+
+test("missing HITL remarks produce an empty reason list", async () => {
+  const { normalizeHitlRemarks } = await loadModule();
+
+  assert.deepEqual(normalizeHitlRemarks("   ", null), []);
+});

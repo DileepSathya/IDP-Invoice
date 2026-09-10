@@ -53,6 +53,21 @@ function toText(value: unknown): string {
   return value == null ? "" : String(value);
 }
 
+export function normalizeHitlRemarks(
+  hitlRemark: unknown,
+  hitlRemarks: unknown,
+): string[] {
+  if (Array.isArray(hitlRemarks)) {
+    const reasons = hitlRemarks.map(toText).map((reason) => reason.trim()).filter(Boolean);
+    if (reasons.length > 0) return reasons;
+  }
+
+  return toText(hitlRemark)
+    .split(";")
+    .map((reason) => reason.trim())
+    .filter(Boolean);
+}
+
 function readCanonicalValue(fields: Record<string, unknown>, aliases: readonly string[]): string {
   for (const key of aliases) {
     if (Object.prototype.hasOwnProperty.call(fields, key)) {

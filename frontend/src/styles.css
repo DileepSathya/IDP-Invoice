@@ -946,7 +946,7 @@ td {
   background: rgba(2, 6, 23, 0.8);
   padding: 0.55rem;
   grid-column: 1;
-  grid-row: 1 / span 2;
+  grid-row: 1 / span 3;
   min-width: 0;
   align-self: stretch;
 }
@@ -1091,7 +1091,61 @@ td {
 
 .json-editor-primary-fields {
   grid-column: 2;
+  grid-row: 3;
+}
+
+.json-editor-hitl-remarks {
+  grid-column: 2;
   grid-row: 2;
+  margin: 0;
+  padding: 0.9rem 1rem;
+  border: 1px solid rgba(245, 158, 11, 0.72);
+  border-left: 4px solid #f59e0b;
+  border-radius: 0.7rem;
+  background: rgba(120, 53, 15, 0.2);
+  color: #f8fafc;
+}
+
+.json-editor-hitl-remarks-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.json-editor-hitl-remarks-heading h4 {
+  margin: 0;
+  color: #fde68a;
+  font-size: 1rem;
+}
+
+.json-editor-hitl-remarks-heading span {
+  padding: 0.16rem 0.48rem;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.16);
+  color: #fcd34d;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.json-editor-hitl-remarks ul {
+  margin: 0.65rem 0 0;
+  padding-left: 1.35rem;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.json-editor-hitl-remarks li + li {
+  margin-top: 0.25rem;
+}
+
+.json-editor-hitl-remarks > p {
+  margin: 0.6rem 0 0;
+  color: #cbd5e1;
+  font-size: 0.82rem;
+  line-height: 1.5;
 }
 
 .json-editor-span-2 {
@@ -2955,6 +3009,7 @@ tbody tr:nth-child(even) {
 
   .json-editor-preview-side,
   .json-editor-intro,
+  .json-editor-hitl-remarks,
   .json-editor-primary-fields {
     grid-column: 1;
     grid-row: auto;
@@ -2968,8 +3023,12 @@ tbody tr:nth-child(even) {
     order: -2;
   }
 
-  .json-editor-primary-fields {
+  .json-editor-hitl-remarks {
     order: -1;
+  }
+
+  .json-editor-primary-fields {
+    order: 0;
   }
 
   .json-editor-preview-image-wrap {
