@@ -343,7 +343,7 @@ def tax_entries_xml(data, computed_total):
     return elements_to_fragment(elements, indent=" " * 6)
 
 
-def send_template_to_tally(TALLY_URL, path, company_name, data, invoice_number, voucher_type, vendor_name):
+def send_template_to_tally(TALLY_URL, path, company_name, data, invoice_number, voucher_type, vendor_name,user_name,user_password):
     """Build inventory purchase voucher from template and POST to Tally."""
     base_result = {
         "success": False,
@@ -390,6 +390,8 @@ def send_template_to_tally(TALLY_URL, path, company_name, data, invoice_number, 
             raise ValueError("Missing required field: invoice_date")
 
         xml_payload = template_content.format(
+            TALLY_USER_NAME = _safe(user_name),
+            TALLY_USER_PASSWORD = _safe(user_password),
             COMPANY_NAME=_safe(company_name),
             INVOICE_NUMBER=_safe(invoice_number),
             VOUCHER_TYPE=_safe(voucher_type),

@@ -43,6 +43,11 @@ def current_tally_company() -> str:
     """Return the latest saved value, reading disk so no restart is needed."""
     return _read_company_from_file() or os.environ.get(_COMPANY_ENV_KEY, "").strip()
 
+def tallY_user_credential():
+    user_name=os.environ.get("TALLY_USER_NAME","").strip()
+    user_password=os.environ.get("TALLY_USER_PASSWORD","").strip()
+    return user_name,user_password
+
 
 def get_tally_company() -> dict[str, str]:
     return {"company_name": current_tally_company()}

@@ -11,7 +11,7 @@ from typing import Any, Optional
 from dotenv import load_dotenv
 
 from tally import create_voucher, invoice_data_retriver
-from backend.tally_company_settings import current_tally_company
+from backend.tally_company_settings import current_tally_company,tallY_user_credential
 
 load_dotenv()
 
@@ -79,6 +79,7 @@ def push_invoice_document(doc: dict[str, Any]) -> dict[str, Any]:
     vendor_name = _vendor_name(doc)
     pushed_at = datetime.now(timezone.utc).isoformat()
     tally_company = current_tally_company()
+    user_name,user_password = tallY_user_credential()
 
     if not tally_company:
         return {
@@ -128,6 +129,8 @@ def push_invoice_document(doc: dict[str, Any]) -> dict[str, Any]:
         invoice_number=invoice_number,
         voucher_type=VOUCHER_TYPE,
         vendor_name=vendor_name,
+        user_name = user_name,
+        user_password = user_password
     )
 
     return {
