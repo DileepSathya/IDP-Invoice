@@ -14,6 +14,7 @@ import { Login } from "./pages/Login";
 import { AccountMenu } from "./components/AccountMenu";
 import { ProtectedRoute } from "./components/ProtectedRoute";
 import { useCanonicalAppHost } from "./hooks/useCanonicalAppHost";
+import amogaBrand from "./assets/amoga-brand-header.gif";
 import "./styles.css";
 
 const AppLayout: React.FC = () => {
@@ -23,7 +24,10 @@ const AppLayout: React.FC = () => {
   return (
     <div className="app-shell">
       <header className="app-header">
-        <h1>Intelligence Document Processing – Invoices</h1>
+        <div className="app-brand">
+          <img className="app-brand-logo" src={amogaBrand} alt="Amoga Intelligent Machine Labs" />
+          <h1>Intelligence Document Processing – Invoices</h1>
+        </div>
         <div className="app-header-right">
           <nav className="app-nav">
             <NavLink to="/" end>
