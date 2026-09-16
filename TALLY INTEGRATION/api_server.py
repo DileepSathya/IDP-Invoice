@@ -16,6 +16,7 @@ import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
+from backend.tally_company_settings import current_tally_company
 
 load_dotenv()
 
@@ -31,7 +32,6 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="Tally Bridge", version="1.0.0")
 
 TALLY_URL = os.environ.get("TALLY_URL", "http://localhost:9000").strip()
-TALLY_COMPANY = os.environ.get("TALLY_COMPANY", "").strip()
 
 
 class PushResponse(BaseModel):
@@ -106,7 +106,7 @@ def health() -> HealthResponse:
 
 @app.get("/ledgers/purchase", response_model=PurchaseLedgersResponse)
 def list_purchase_ledgers() -> PurchaseLedgersResponse:
-    company = TALLY_COMPANY or None
+    company = current_tally_company() or None
     ledgers, error = get_purchase_ledgers(TALLY_URL, company_name=company)
     if not ledgers and error:
         logger.warning("[tally_bridge] purchase ledgers fetch failed: %s", error)
@@ -115,23 +115,25 @@ def list_purchase_ledgers() -> PurchaseLedgersResponse:
 
 @app.get("/masters/all", response_model=TallyMastersResponse)
 def get_all_masters() -> TallyMastersResponse:
-    if not TALLY_COMPANY:
+    company = current_tally_company()
+    if not company:
         return TallyMastersResponse(
             success=False,
             company=None,
             errors=["TALLY_COMPANY is not set in the bridge .env"],
         )
-    result = fetch_all_masters(TALLY_URL, company_name=TALLY_COMPANY)
+    result = fetch_all_masters(TALLY_URL, company_name=company)
     return TallyMastersResponse(**result)
 
 
 @app.get("/masters/vendors", response_model=TallyMastersResponse)
 def get_vendor_masters() -> TallyMastersResponse:
-    vendors, error = fetch_vendors(TALLY_URL, company_name=TALLY_COMPANY or None)
+    company = current_tally_company()
+    vendors, error = fetch_vendors(TALLY_URL, company_name=company or None)
     errors = [error] if error else []
     return TallyMastersResponse(
         success=not errors,
-        company=TALLY_COMPANY or None,
+        company=company or None,
         vendors=vendors,
         errors=errors,
     )
@@ -139,11 +141,12 @@ def get_vendor_masters() -> TallyMastersResponse:
 
 @app.get("/masters/items", response_model=TallyMastersResponse)
 def get_item_masters() -> TallyMastersResponse:
-    items, error = fetch_items(TALLY_URL, company_name=TALLY_COMPANY or None)
+    company = current_tally_company()
+    items, error = fetch_items(TALLY_URL, company_name=company or None)
     errors = [error] if error else []
     return TallyMastersResponse(
         success=not errors,
-        company=TALLY_COMPANY or None,
+        company=company or None,
         items=items,
         errors=errors,
     )
@@ -151,11 +154,12 @@ def get_item_masters() -> TallyMastersResponse:
 
 @app.get("/masters/expense-ledgers", response_model=TallyMastersResponse)
 def get_expense_ledger_masters() -> TallyMastersResponse:
-    expense_ledgers, error = fetch_expense_ledgers(TALLY_URL, company_name=TALLY_COMPANY or None)
+    company = current_tally_company()
+    expense_ledgers, error = fetch_expense_ledgers(TALLY_URL, company_name=company or None)
     errors = [error] if error else []
     return TallyMastersResponse(
         success=not errors,
-        company=TALLY_COMPANY or None,
+        company=company or None,
         expense_ledgers=expense_ledgers,
         errors=errors,
     )
@@ -163,17 +167,18 @@ def get_expense_ledger_masters() -> TallyMastersResponse:
 
 @app.get("/masters/purchase-orders", response_model=TallyMastersResponse)
 def get_purchase_order_masters() -> TallyMastersResponse:
-    if not TALLY_COMPANY:
+    company = current_tally_company()
+    if not company:
         return TallyMastersResponse(
             success=False,
             company=None,
             errors=["TALLY_COMPANY is not set in the bridge .env"],
         )
-    po_headers, po_details, error = fetch_purchase_orders(TALLY_URL, company_name=TALLY_COMPANY)
+    po_headers, po_details, error = fetch_purchase_orders(TALLY_URL, company_name=company)
     errors = [error] if error else []
     return TallyMastersResponse(
         success=not errors,
-        company=TALLY_COMPANY or None,
+        company=company or None,
         po_headers=po_headers,
         po_details=po_details,
         errors=errors,

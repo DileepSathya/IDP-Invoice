@@ -11,6 +11,7 @@ from typing import Any, Optional
 from dotenv import load_dotenv
 
 from tally import create_voucher, invoice_data_retriver
+from backend.tally_company_settings import current_tally_company
 
 load_dotenv()
 
@@ -21,7 +22,6 @@ _template_env = os.environ.get("TALLY_VOUCHER_TEMPLATE", "").strip()
 VOUCHER_TEMPLATE = Path(_template_env) if _template_env else BASE_DIR / "xml_scripts" / "create_voucher.xml"
 
 TALLY_URL = os.environ.get("TALLY_URL", "http://localhost:9000").strip()
-TALLY_COMPANY = os.environ.get("TALLY_COMPANY", "").strip()
 VOUCHER_TYPE = os.environ.get("TALLY_VOUCHER_TYPE", "Purchase").strip() or "Purchase"
 MONGO_URI = os.environ.get("MONGO_URI", "mongodb://localhost:27017")
 MONGO_DB = os.environ.get("MONGO_DB", "IDP")
@@ -78,8 +78,9 @@ def push_invoice_document(doc: dict[str, Any]) -> dict[str, Any]:
     invoice_number = _invoice_number(doc)
     vendor_name = _vendor_name(doc)
     pushed_at = datetime.now(timezone.utc).isoformat()
+    tally_company = current_tally_company()
 
-    if not TALLY_COMPANY:
+    if not tally_company:
         return {
             "success": False,
             "invoice_id": invoice_id,
@@ -98,7 +99,7 @@ def push_invoice_document(doc: dict[str, Any]) -> dict[str, Any]:
             "invoice_number": invoice_number,
             "message": "Missing vendor name",
             "error_reason": "erp_vendor_name or seller is empty on the invoice",
-            "tally_company": TALLY_COMPANY,
+            "tally_company": tally_company,
             "pushed_at": pushed_at,
             "skipped": False,
         }
@@ -110,7 +111,7 @@ def push_invoice_document(doc: dict[str, Any]) -> dict[str, Any]:
             "invoice_number": invoice_number,
             "message": "Voucher template missing",
             "error_reason": f"Template not found: {VOUCHER_TEMPLATE}",
-            "tally_company": TALLY_COMPANY,
+            "tally_company": tally_company,
             "pushed_at": pushed_at,
             "skipped": False,
         }
@@ -122,7 +123,7 @@ def push_invoice_document(doc: dict[str, Any]) -> dict[str, Any]:
     result = create_voucher.send_template_to_tally(
         TALLY_URL=TALLY_URL,
         path=str(VOUCHER_TEMPLATE),
-        company_name=TALLY_COMPANY,
+        company_name=tally_company,
         data=doc,
         invoice_number=invoice_number,
         voucher_type=VOUCHER_TYPE,
@@ -135,7 +136,7 @@ def push_invoice_document(doc: dict[str, Any]) -> dict[str, Any]:
         "invoice_number": invoice_number,
         "message": result.get("message") or "",
         "error_reason": result.get("error_reason"),
-        "tally_company": TALLY_COMPANY,
+        "tally_company": tally_company,
         "pushed_at": pushed_at,
         "skipped": False,
     }
@@ -150,7 +151,7 @@ def push_invoice_by_id(invoice_id: str) -> dict[str, Any]:
             "invoice_number": "",
             "message": "Invoice not found",
             "error_reason": f"No MongoDB document for _id={invoice_id}",
-            "tally_company": TALLY_COMPANY or None,
+            "tally_company": current_tally_company() or None,
             "pushed_at": datetime.now(timezone.utc).isoformat(),
             "skipped": False,
         }

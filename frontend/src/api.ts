@@ -592,6 +592,39 @@ export type TallyLedgerSettings = {
   tally_configured?: boolean;
 };
 
+export type TallyCompanySettings = {
+  company_name: string;
+};
+
+export async function fetchTallyCompanySettings(): Promise<TallyCompanySettings> {
+  const res = await apiFetch("/api/tally/company-settings");
+  if (!res.ok) {
+    const msg = await res.text();
+    throw new Error(msg || `Failed to load company details (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function saveTallyCompanySettings(
+  companyName: string,
+): Promise<TallyCompanySettings> {
+  const res = await apiFetch("/api/tally/company-settings", {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ company_name: companyName }),
+  });
+  if (!res.ok) {
+    let msg = await res.text();
+    try {
+      msg = (JSON.parse(msg) as { detail?: string }).detail || msg;
+    } catch {
+      // Keep the raw response.
+    }
+    throw new Error(msg || `Failed to save company details (${res.status})`);
+  }
+  return res.json();
+}
+
 export async function fetchTallyPurchaseLedgers(): Promise<TallyPurchaseLedgers> {
   const res = await apiFetch("/api/tally/purchase-ledgers");
   if (!res.ok) {

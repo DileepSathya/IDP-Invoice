@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { Link } from "react-router-dom";
 import {
   HitlNotificationSettings,
   HitlNotificationTriggerMode,
@@ -138,17 +137,14 @@ export const NotificationSettings: React.FC = () => {
   };
 
   return (
-    <div className="panel">
-      <div className="panel-header">
+    <section className="settings-page-content">
+      <div className="settings-content-header">
         <div>
           <h2>HITL Email Notifications</h2>
           <p>
             Configure email alerts when invoices are flagged for human review (HITL pending).
           </p>
         </div>
-        <Link to="/settings" className="button-link">
-          ← Back to Settings
-        </Link>
       </div>
 
       <section className="panel-section erp-settings-section">
@@ -286,6 +282,6 @@ export const NotificationSettings: React.FC = () => {
           </div>
         </div>
       </section>
-    </div>
+    </section>
   );
 };

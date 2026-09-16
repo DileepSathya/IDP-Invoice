@@ -1746,7 +1746,7 @@ def get_config_status() -> ConfigStatusResponse:
     parts = [_CONFIG_MISSING_MESSAGES.get(item, item) for item in missing]
     message = (
         "AI agent is not fully configured (" + "; ".join(parts) + "). "
-        "Open the account menu → Settings → AI agent to finish setup before uploading invoices."
+        "Open the profile menu → Settings → AI to finish setup before uploading invoices."
     )
     return ConfigStatusResponse(configured=False, missing=missing, message=message)
 
@@ -1814,6 +1814,14 @@ class TallyLedgerSettingsResponse(BaseModel):
 
 class TallyLedgerSettingsUpdate(BaseModel):
     purchase_ledger: str
+
+
+class TallyCompanySettingsResponse(BaseModel):
+    company_name: str
+
+
+class TallyCompanySettingsUpdate(BaseModel):
+    company_name: str
 
 
 class TallyMasterSyncResult(BaseModel):
@@ -2119,6 +2127,27 @@ def put_tally_ledger_settings_route(payload: TallyLedgerSettingsUpdate) -> Tally
         updated_at=purchase_ledger_updated_at_iso(settings),
         tally_configured=True,
     )
+
+
+@app.get("/tally/company-settings", response_model=TallyCompanySettingsResponse)
+def get_tally_company_settings_route() -> TallyCompanySettingsResponse:
+    from backend.tally_company_settings import get_tally_company
+
+    return TallyCompanySettingsResponse(**get_tally_company())
+
+
+@app.put("/tally/company-settings", response_model=TallyCompanySettingsResponse)
+def put_tally_company_settings_route(
+    payload: TallyCompanySettingsUpdate,
+) -> TallyCompanySettingsResponse:
+    from backend.tally_company_settings import save_tally_company
+
+    try:
+        settings = save_tally_company(payload.company_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    logger.info("[HTTP API → PUT /tally/company-settings] Tally company updated.")
+    return TallyCompanySettingsResponse(**settings)
 
 
 def _tally_master_status_response() -> TallyMasterSyncStatusResponse:
@@ -3035,7 +3064,7 @@ async def upload_invoice(file: UploadFile = File(...)) -> InvoiceSummary:
         parts = [_CONFIG_MISSING_MESSAGES.get(item, item) for item in missing]
         detail = (
             "AI agent is not configured (" + "; ".join(parts) + "). "
-            "Set the AI model and API key in the account menu → Settings → AI agent before uploading invoices."
+            "Set the AI model and API key in the profile menu → Settings → AI before uploading invoices."
         )
         logger.warning("[HTTP API → POST /upload] Rejected upload — %s", detail)
         raise HTTPException(status_code=400, detail=detail)

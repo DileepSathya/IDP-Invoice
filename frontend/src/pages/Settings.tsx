@@ -1,149 +1,90 @@
 import React, { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
-import { fetchLicenseProfile, type LicenseProfile } from "../api";
+import { fetchAgentSettings, saveAgentSettings, type AgentSettings } from "../api";
 
-function formatPlanType(plan: string): string {
-  switch (plan) {
-    case "monthly":
-      return "Monthly (time-based)";
-    case "yearly":
-      return "Yearly (time-based)";
-    case "quota":
-      return "Quota (invoice count)";
-    case "onetime":
-      return "One-time (unlimited)";
-    case "dev":
-      return "Development";
-    default:
-      return plan;
-  }
-}
-
-function PlanDetailRow({ label, value }: { label: string; value: React.ReactNode }) {
-  if (value === null || value === undefined || value === "") {
-    return null;
-  }
-  return (
-    <div className="plan-detail-row">
-      <span className="plan-detail-label">{label}</span>
-      <span className="plan-detail-value">{value}</span>
-    </div>
-  );
-}
+const MODEL_LABELS: Record<string, string> = { gemini: "Gemini" };
 
 export const Settings: React.FC = () => {
-  const [profile, setProfile] = useState<LicenseProfile | null>(null);
+  const [settings, setSettings] = useState<AgentSettings | null>(null);
+  const [selectedModel, setSelectedModel] = useState("gemini");
+  const [apiKey, setApiKey] = useState("");
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        const data = await fetchLicenseProfile();
+    void fetchAgentSettings()
+      .then((data) => {
         if (!cancelled) {
-          setProfile(data);
+          setSettings(data);
+          setSelectedModel(data.model || "gemini");
         }
-      } catch (e) {
-        if (!cancelled) {
-          setError(e instanceof Error ? e.message : "Failed to load plan details");
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
+      })
+      .catch((reason) => {
+        if (!cancelled) setError(reason instanceof Error ? reason.message : "Failed to load AI settings");
+      })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
   }, []);
 
-  const isTimeBased = profile?.plan === "monthly" || profile?.plan === "yearly";
-  const isQuota = profile?.plan === "quota";
+  const handleSave = async () => {
+    try {
+      setSaving(true);
+      setError(null);
+      setMessage(null);
+      const data = await saveAgentSettings(selectedModel, apiKey);
+      setSettings(data);
+      setApiKey("");
+      setMessage("AI settings saved.");
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Failed to save AI settings");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
-    <div className="panel">
-      <div className="panel-header">
-        <div>
-          <h2>Settings</h2>
-          <p>View your license and subscription details.</p>
-        </div>
-        <div className="panel-header-actions">
-          <Link to="/settings/notifications" className="button-link">
-            HITL Email Notifications
-          </Link>
-          <Link to="/settings/tally-masters" className="button-link">
-            Tally Master Data
-          </Link>
-          <Link to="/settings/ledger" className="button-link">
-            Ledger Settings
-          </Link>
-        </div>
+    <section className="settings-page-content" aria-labelledby="ai-settings-title">
+      <div className="settings-content-header">
+        <h3 id="ai-settings-title">AI</h3>
+        <p>Select the model used for invoice extraction and provide its API key.</p>
       </div>
-
+      {loading && <p className="settings-loading">Loading AI settings…</p>}
       {error && <div className="alert alert-error">{error}</div>}
-
-      <section className="panel-section settings-section">
-        <h3>Plan</h3>
-        {loading && <p className="settings-loading">Loading plan details…</p>}
-        {!loading && profile && (
-          <div className="plan-details-card">
-            <div className="plan-details-header">
-              <span className="plan-details-badge">{profile.planLabel}</span>
-              <span className="plan-details-status">{profile.statusMessage}</span>
-            </div>
-
-            <div className="plan-details-grid">
-              <PlanDetailRow label="Plan type" value={formatPlanType(profile.plan)} />
-              <PlanDetailRow label="Customer ID" value={profile.customerId} />
-              <PlanDetailRow label="Issued at (UTC)" value={profile.issuedAt} />
-
-              {isTimeBased && (
-                <>
-                  <PlanDetailRow label="Expires on" value={profile.expiresAt} />
-                  <PlanDetailRow
-                    label="Days remaining"
-                    value={
-                      profile.remainingDays !== null
-                        ? `${profile.remainingDays} ${profile.remainingDays === 1 ? "day" : "days"}`
-                        : null
-                    }
-                  />
-                  <PlanDetailRow label="Invoice processing" value="Unlimited during subscription" />
-                </>
-              )}
-
-              {isQuota && (
-                <>
-                  <PlanDetailRow label="Invoice limit" value={profile.invoiceLimit} />
-                  <PlanDetailRow label="Invoices processed" value={profile.invoicesUsed} />
-                  <PlanDetailRow
-                    label="Invoices remaining"
-                    value={profile.invoicesRemaining}
-                  />
-                  {profile.expiresAt && (
-                    <PlanDetailRow label="Expires on" value={profile.expiresAt} />
-                  )}
-                </>
-              )}
-
-              {profile.plan === "onetime" && (
-                <PlanDetailRow label="Invoice processing" value="Unlimited (lifetime)" />
-              )}
-
-              {profile.plan === "dev" && (
-                <PlanDetailRow
-                  label="Note"
-                  value="License validation is disabled in development mode."
-                />
-              )}
-            </div>
+      {message && !error && <div className="alert">{message}</div>}
+      {!loading && (
+        <div className="settings-form-card">
+          <fieldset className="settings-fieldset">
+            <legend>AI model</legend>
+            {(settings?.supported_models ?? ["gemini"]).map((model) => (
+              <label key={model} className="settings-radio-row">
+                <input type="radio" name="ai-model" checked={selectedModel === model} onChange={() => setSelectedModel(model)} />
+                <span>{MODEL_LABELS[model] ?? model}</span>
+              </label>
+            ))}
+          </fieldset>
+          <label className="settings-form-field" htmlFor="agent-api-key">
+            <span>API key</span>
+            <input
+              id="agent-api-key"
+              type="password"
+              value={apiKey}
+              onChange={(event) => setApiKey(event.target.value)}
+              placeholder={settings?.api_key_masked ? `Current: ${settings.api_key_masked} (enter to replace)` : "Enter API key"}
+              autoComplete="off"
+            />
+          </label>
+          <p className="search-hint">
+            {settings?.configured ? "AI is configured and ready." : "Select a model and enter an API key before processing invoices."}
+          </p>
+          <div className="settings-form-actions">
+            <button type="button" onClick={() => void handleSave()} disabled={saving || !apiKey.trim()}>
+              {saving ? "Saving…" : "Save AI Settings"}
+            </button>
           </div>
-        )}
-      </section>
-    </div>
+        </div>
+      )}
+    </section>
   );
 };

@@ -318,8 +318,8 @@ export const TallyMasterSettings: React.FC = () => {
   const isScheduledMode = modeInput === "scheduled" || modeInput === "time_based";
 
   return (
-    <div className="panel">
-      <div className="panel-header">
+    <section className="settings-page-content">
+      <div className="settings-content-header">
         <div>
           <h2>Tally Master Data</h2>
           <p>
@@ -328,9 +328,6 @@ export const TallyMasterSettings: React.FC = () => {
             you refresh manually or on the scheduler interval.
           </p>
         </div>
-        <Link to="/settings" className="button-link">
-          ← Back to Settings
-        </Link>
       </div>
 
       <section className="panel-section erp-settings-section">
@@ -340,8 +337,8 @@ export const TallyMasterSettings: React.FC = () => {
           {status && !status.tally_configured && (
             <div className="alert">
               Tally integration is disabled. Enable it in <code>.env</code> with{" "}
-              <code>TALLY_ENABLED=true</code>, set <code>TALLY_BRIDGE_URL</code>, and configure{" "}
-              <code>tally-bridge\.env</code> with <code>TALLY_COMPANY</code>.
+              <code>TALLY_ENABLED=true</code>, set <code>TALLY_BRIDGE_URL</code>, then choose the
+              company under Settings → ERP Settings → Company Details.
             </div>
           )}
 
@@ -586,6 +583,6 @@ export const TallyMasterSettings: React.FC = () => {
           </p>
         </div>
       </section>
-    </div>
+    </section>
   );
 };

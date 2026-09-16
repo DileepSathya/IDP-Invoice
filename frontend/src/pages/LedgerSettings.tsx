@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { Link } from "react-router-dom";
 import {
   fetchTallyLedgerSettings,
   fetchTallyPurchaseLedgers,
@@ -97,8 +96,8 @@ export const LedgerSettings: React.FC = () => {
   };
 
   return (
-    <div className="panel">
-      <div className="panel-header">
+    <section className="settings-page-content">
+      <div className="settings-content-header">
         <div>
           <h2>Ledger Settings</h2>
           <p>
@@ -106,9 +105,6 @@ export const LedgerSettings: React.FC = () => {
             accounting allocations.
           </p>
         </div>
-        <Link to="/settings" className="button-link">
-          ← Back to Settings
-        </Link>
       </div>
 
       <section className="panel-section erp-settings-section">
@@ -199,6 +195,6 @@ export const LedgerSettings: React.FC = () => {
           )}
         </div>
       </section>
-    </div>
+    </section>
   );
 };

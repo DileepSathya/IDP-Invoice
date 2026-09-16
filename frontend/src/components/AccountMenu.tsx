@@ -1,95 +1,41 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import {
-  AgentSettings,
-  LicenseProfile,
-  fetchAgentSettings,
-  fetchLicenseProfile,
-  logoutDashboard,
-  saveAgentSettings,
-} from "../api";
-
-const MODEL_LABELS: Record<string, string> = {
-  gemini: "Gemini",
-};
+import { fetchLicenseProfile, logoutDashboard, type LicenseProfile } from "../api";
 
 function formatPlanType(plan: string): string {
-  switch (plan) {
-    case "monthly":
-      return "Monthly (time-based)";
-    case "yearly":
-      return "Yearly (time-based)";
-    case "quota":
-      return "Quota (invoice count)";
-    case "onetime":
-      return "One-time (unlimited)";
-    case "dev":
-      return "Development";
-    default:
-      return plan;
-  }
+  const labels: Record<string, string> = {
+    monthly: "Monthly (time-based)", yearly: "Yearly (time-based)",
+    quota: "Quota (invoice count)", onetime: "One-time (unlimited)", dev: "Development",
+  };
+  return labels[plan] ?? plan;
 }
 
 export const AccountMenu: React.FC = () => {
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<"profile" | "ai">("profile");
   const [profile, setProfile] = useState<LicenseProfile | null>(null);
-  const [profileError, setProfileError] = useState<string | null>(null);
-  const [agentSettings, setAgentSettings] = useState<AgentSettings | null>(null);
-  const [agentError, setAgentError] = useState<string | null>(null);
-  const [selectedModel, setSelectedModel] = useState<string>("gemini");
-  const [apiKeyInput, setApiKeyInput] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
-  const loadData = async () => {
-    try {
-      setProfileError(null);
-      const data = await fetchLicenseProfile();
-      setProfile(data);
-    } catch (e) {
-      setProfileError(e instanceof Error ? e.message : "Failed to load profile");
-    }
-    try {
-      setAgentError(null);
-      const data = await fetchAgentSettings();
-      setAgentSettings(data);
-      if (data.model) {
-        setSelectedModel(data.model);
-      }
-    } catch (e) {
-      setAgentError(e instanceof Error ? e.message : "Failed to load AI agent settings");
-    }
-  };
-
   const toggleOpen = () => {
-    setOpen((prev) => {
-      const next = !prev;
-      if (next) {
-        setSaveMessage(null);
-        void loadData();
+    setOpen((current) => {
+      const next = !current;
+      if (next && !profile) {
+        setError(null);
+        void fetchLicenseProfile().then(setProfile).catch((reason) => {
+          setError(reason instanceof Error ? reason.message : "Failed to load profile");
+        });
       }
       return next;
     });
   };
 
-  const goToErp = () => {
-    setOpen(false);
-    navigate("/settings/tally-masters");
-  };
-
   useEffect(() => {
     if (!open) return;
-    const handleClickOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
+    const handleClickOutside = (event: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) setOpen(false);
     };
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
+    const handleEscape = (event: KeyboardEvent) => { if (event.key === "Escape") setOpen(false); };
     document.addEventListener("mousedown", handleClickOutside);
     document.addEventListener("keydown", handleEscape);
     return () => {
@@ -98,26 +44,14 @@ export const AccountMenu: React.FC = () => {
     };
   }, [open]);
 
-  const handleSaveAgentSettings = async () => {
-    try {
-      setSaving(true);
-      setSaveMessage(null);
-      setAgentError(null);
-      const data = await saveAgentSettings(selectedModel, apiKeyInput);
-      setAgentSettings(data);
-      setApiKeyInput("");
-      setSaveMessage("AI agent settings saved.");
-    } catch (e) {
-      setAgentError(e instanceof Error ? e.message : "Failed to save AI agent settings");
-    } finally {
-      setSaving(false);
-    }
+  const goToSettings = () => {
+    setOpen(false);
+    navigate("/settings");
   };
 
   const handleLogout = async () => {
-    try {
-      await logoutDashboard();
-    } finally {
+    try { await logoutDashboard(); }
+    finally {
       setOpen(false);
       navigate("/login", { replace: true });
     }
@@ -125,143 +59,32 @@ export const AccountMenu: React.FC = () => {
 
   return (
     <div className="account-menu" ref={menuRef}>
-      <button
-        type="button"
-        className="account-menu-trigger"
-        onClick={toggleOpen}
-        aria-haspopup="true"
-        aria-expanded={open}
-        aria-label="Account menu"
-      >
+      <button type="button" className="account-menu-trigger" onClick={toggleOpen} aria-haspopup="menu" aria-expanded={open} aria-label="Account menu">
         <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
           <circle cx="12" cy="8" r="4" fill="currentColor" />
-          <path
-            d="M4 20c0-4.418 3.582-7 8-7s8 2.582 8 7"
-            fill="currentColor"
-          />
+          <path d="M4 20c0-4.418 3.582-7 8-7s8 2.582 8 7" fill="currentColor" />
         </svg>
       </button>
-
       {open && (
         <div className="account-menu-panel" role="menu">
-          <div className="account-menu-tabs account-menu-tabs-stacked">
-            <button
-              type="button"
-              className={`account-menu-tab${activeTab === "profile" ? " is-active" : ""}`}
-              onClick={() => setActiveTab("profile")}
-            >
-              Profile
-            </button>
-            <button
-              type="button"
-              className={`account-menu-tab${activeTab === "ai" ? " is-active" : ""}`}
-              onClick={() => setActiveTab("ai")}
-            >
-              AI
-            </button>
-            <button
-              type="button"
-              className="account-menu-tab account-menu-tab-link"
-              onClick={goToErp}
-            >
-              Tally Master Data
-              <span className="account-menu-tab-arrow" aria-hidden="true">
-                →
-              </span>
-            </button>
-            <button
-              type="button"
-              className="account-menu-tab account-menu-tab-link account-menu-logout"
-              onClick={() => void handleLogout()}
-            >
-              Log out
-            </button>
+          <div className="account-menu-section">
+            <h4 className="account-menu-pane-title">Profile</h4>
+            {error && <div className="alert alert-error">{error}</div>}
+            {!error && !profile && <p className="settings-loading">Loading…</p>}
+            {profile && (
+              <div className="account-profile-card">
+                <div className="account-profile-row"><span className="account-profile-label">Account</span><span className="account-profile-value">{profile.customerId || "—"}</span></div>
+                <div className="account-profile-row"><span className="account-profile-label">Plan</span><span className="account-profile-value">{profile.planLabel} · {formatPlanType(profile.plan)}</span></div>
+                <div className="account-profile-row"><span className="account-profile-label">Status</span><span className="account-profile-value">{profile.statusMessage}</span></div>
+              </div>
+            )}
           </div>
-
-          {activeTab === "profile" && (
-            <div className="account-menu-section">
-              {profileError && <div className="alert alert-error">{profileError}</div>}
-              {!profileError && !profile && <p className="settings-loading">Loading…</p>}
-              {profile && (
-                <div className="account-profile-card">
-                  <div className="account-profile-row">
-                    <span className="account-profile-label">Account</span>
-                    <span className="account-profile-value">{profile.customerId || "—"}</span>
-                  </div>
-                  <div className="account-profile-row">
-                    <span className="account-profile-label">Plan</span>
-                    <span className="account-profile-value">
-                      {profile.planLabel} · {formatPlanType(profile.plan)}
-                    </span>
-                  </div>
-                  <div className="account-profile-row">
-                    <span className="account-profile-label">Status</span>
-                    <span className="account-profile-value">{profile.statusMessage}</span>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {activeTab === "ai" && (
-            <div className="account-menu-section">
-              <h4 className="account-menu-pane-title">AI agent</h4>
-              {agentError && <div className="alert alert-error">{agentError}</div>}
-              {saveMessage && <div className="alert">{saveMessage}</div>}
-
-              <div className="account-menu-field-group">
-                <span className="account-menu-field-label">AI model</span>
-                {(agentSettings?.supported_models ?? ["gemini"]).map((model) => (
-                  <label key={model} className="account-menu-radio">
-                    <input
-                      type="radio"
-                      name="ai-model"
-                      value={model}
-                      checked={selectedModel === model}
-                      onChange={() => setSelectedModel(model)}
-                    />
-                    {MODEL_LABELS[model] ?? model}
-                  </label>
-                ))}
-              </div>
-
-              <label className="account-menu-field-label" htmlFor="agent-api-key">
-                API key
-              </label>
-              <input
-                id="agent-api-key"
-                type="password"
-                className="account-menu-input"
-                placeholder={
-                  agentSettings?.api_key_masked
-                    ? `Current: ${agentSettings.api_key_masked} (enter to replace)`
-                    : "Enter API key"
-                }
-                value={apiKeyInput}
-                onChange={(e) => setApiKeyInput(e.target.value)}
-                autoComplete="off"
-              />
-
-              <div className="account-menu-status">
-                {agentSettings?.configured ? (
-                  <span className="account-menu-status-ok">✓ AI agent configured</span>
-                ) : (
-                  <span className="account-menu-status-warn">
-                    AI model and API key are required before invoices can be uploaded.
-                  </span>
-                )}
-              </div>
-
-              <button
-                type="button"
-                className="account-menu-save"
-                onClick={() => void handleSaveAgentSettings()}
-                disabled={saving || !apiKeyInput.trim()}
-              >
-                {saving ? "Saving…" : "Save"}
-              </button>
-            </div>
-          )}
+          <div className="account-menu-tabs account-menu-tabs-stacked account-menu-actions">
+            <button type="button" className="account-menu-tab account-menu-tab-link" onClick={goToSettings}>
+              Settings <span className="account-menu-tab-arrow" aria-hidden="true">→</span>
+            </button>
+            <button type="button" className="account-menu-tab account-menu-tab-link account-menu-logout" onClick={() => void handleLogout()}>Log out</button>
+          </div>
         </div>
       )}
     </div>
