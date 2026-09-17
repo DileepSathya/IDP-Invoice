@@ -120,7 +120,7 @@ def get_all_masters() -> TallyMastersResponse:
         return TallyMastersResponse(
             success=False,
             company=None,
-            errors=["TALLY_COMPANY is not set in the bridge .env"],
+            errors=["Tally company is not set — configure it in Settings → Company Details"],
         )
     result = fetch_all_masters(TALLY_URL, company_name=company)
     return TallyMastersResponse(**result)
@@ -172,7 +172,7 @@ def get_purchase_order_masters() -> TallyMastersResponse:
         return TallyMastersResponse(
             success=False,
             company=None,
-            errors=["TALLY_COMPANY is not set in the bridge .env"],
+            errors=["Tally company is not set — configure it in Settings → Company Details"],
         )
     po_headers, po_details, error = fetch_purchase_orders(TALLY_URL, company_name=company)
     errors = [error] if error else []

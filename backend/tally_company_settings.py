@@ -1,15 +1,30 @@
-"""Read and persist the Tally company selected in the Settings UI."""
+"""Read and persist the Tally company selected in the Settings UI.
+
+Settings live in MongoDB (erp_settings collection) so the API, Tally bridge,
+and background jobs always agree on the active company name without editing .env.
+"""
 
 from __future__ import annotations
 
+import logging
 import os
 import re
+from datetime import datetime
 from pathlib import Path
 
+from backend.agents.database import get_db
 from backend.app_paths import tally_bridge_root
 
+logger = logging.getLogger(__name__)
+
+_SETTINGS_DOC_ID = "tally_company"
 _COMPANY_ENV_KEY = "TALLY_COMPANY"
 _ENV_LINE_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$")
+_migration_done = False
+
+
+def _collection():
+    return get_db()["erp_settings"]
 
 
 def _env_path() -> Path:
@@ -39,14 +54,71 @@ def _read_company_from_file() -> str:
     return ""
 
 
-def current_tally_company() -> str:
-    """Return the latest saved value, reading disk so no restart is needed."""
+def _legacy_company_from_env() -> str:
     return _read_company_from_file() or os.environ.get(_COMPANY_ENV_KEY, "").strip()
 
+
+def _migrate_from_env_if_needed() -> None:
+    """One-time import of TALLY_COMPANY from bridge .env when MongoDB has no value."""
+    global _migration_done
+    if _migration_done:
+        return
+    _migration_done = True
+
+    try:
+        doc = _collection().find_one({"_id": _SETTINGS_DOC_ID}) or {}
+        if (doc.get("company_name") or "").strip():
+            return
+
+        legacy = _legacy_company_from_env()
+        if not legacy:
+            return
+
+        try:
+            normalized = _normalize_company_name(legacy)
+        except ValueError:
+            logger.warning(
+                "[tally_company_settings] Skipping invalid legacy TALLY_COMPANY during migration."
+            )
+            return
+
+        _collection().update_one(
+            {"_id": _SETTINGS_DOC_ID},
+            {
+                "$set": {
+                    "company_name": normalized,
+                    "updated_at": datetime.utcnow(),
+                    "migrated_from_env": True,
+                }
+            },
+            upsert=True,
+        )
+        logger.info(
+            "[tally_company_settings] Migrated TALLY_COMPANY from .env to MongoDB: %s",
+            normalized,
+        )
+    except Exception as exc:
+        logger.warning("[tally_company_settings] Could not migrate from .env: %s", exc)
+
+
+def current_tally_company() -> str:
+    """Return the latest saved company name from MongoDB (with one-time .env migration)."""
+    _migrate_from_env_if_needed()
+    try:
+        doc = _collection().find_one({"_id": _SETTINGS_DOC_ID}) or {}
+        name = (doc.get("company_name") or "").strip()
+        if name:
+            return name
+    except Exception as exc:
+        logger.warning("[tally_company_settings] Could not read from MongoDB: %s", exc)
+
+    return _legacy_company_from_env()
+
+
 def tallY_user_credential():
-    user_name=os.environ.get("TALLY_USER_NAME","").strip()
-    user_password=os.environ.get("TALLY_USER_PASSWORD","").strip()
-    return user_name,user_password
+    user_name = os.environ.get("TALLY_USER_NAME", "").strip()
+    user_password = os.environ.get("TALLY_USER_PASSWORD", "").strip()
+    return user_name, user_password
 
 
 def get_tally_company() -> dict[str, str]:
@@ -55,25 +127,10 @@ def get_tally_company() -> dict[str, str]:
 
 def save_tally_company(company_name: str) -> dict[str, str]:
     normalized = _normalize_company_name(company_name)
-    path = _env_path()
-    lines = path.read_text(encoding="utf-8").splitlines() if path.is_file() else []
-
-    replaced = False
-    updated_lines: list[str] = []
-    for line in lines:
-        match = _ENV_LINE_RE.match(line)
-        if match and match.group(1) == _COMPANY_ENV_KEY:
-            updated_lines.append(f"{_COMPANY_ENV_KEY}={normalized}")
-            replaced = True
-        else:
-            updated_lines.append(line)
-
-    if not replaced:
-        if updated_lines and updated_lines[-1].strip():
-            updated_lines.append("")
-        updated_lines.append(f"{_COMPANY_ENV_KEY}={normalized}")
-
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(updated_lines) + "\n", encoding="utf-8")
-    os.environ[_COMPANY_ENV_KEY] = normalized
+    _collection().update_one(
+        {"_id": _SETTINGS_DOC_ID},
+        {"$set": {"company_name": normalized, "updated_at": datetime.utcnow()}},
+        upsert=True,
+    )
+    logger.info("[tally_company_settings] Saved Tally company to MongoDB.")
     return {"company_name": normalized}

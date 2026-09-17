@@ -529,14 +529,25 @@ def _resolve_tally_company(inv: dict) -> str:
     Return the Tally company name to use for this invoice.
 
     Priority:
-      1. TALLY_COMPANY env var — use exactly as set.
-      2. Auto-derive from the invoice date as {prefix}_FY{yy}{yy+1}.
+      1. Company name saved in MongoDB (Settings → Company Details).
+      2. TALLY_COMPANY env var — legacy fallback.
+      3. Auto-derive from the invoice date as {prefix}_FY{yy}{yy+1}.
          e.g. an invoice dated Dec 2025 → IDP_FY2526.
 
     No network call is made here. TallyPrime must already have the target
     company open; the ledger and voucher requests will fail with a meaningful
     LINEERROR if the wrong company is active.
     """
+    try:
+        from backend.tally_company_settings import current_tally_company
+
+        saved = current_tally_company()
+        if saved:
+            log.info("Using Tally company from settings: '%s'", saved)
+            return saved
+    except Exception as exc:
+        log.warning("Could not load Tally company from settings: %s", exc)
+
     if TALLY_COMPANY_ENV:
         log.info("Using TALLY_COMPANY from env: '%s'", TALLY_COMPANY_ENV)
         return TALLY_COMPANY_ENV
@@ -551,7 +562,10 @@ def _resolve_tally_company(inv: dict) -> str:
     fy_start = dt.year if dt.month >= 4 else dt.year - 1
     y0, y1   = fy_start % 100, (fy_start + 1) % 100
     name     = f"{TALLY_COMPANY_PREFIX}_FY{y0:02d}{y1:02d}"
-    log.info("Auto-derived Tally company name: '%s' (set TALLY_COMPANY in .env to override)", name)
+    log.info(
+        "Auto-derived Tally company name: '%s' (set company in Settings → Company Details to override)",
+        name,
+    )
     return name
 
 
