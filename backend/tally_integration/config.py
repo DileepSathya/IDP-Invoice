@@ -59,6 +59,14 @@ def is_mandatory_purchase_order() -> bool:
     return _truthy(raw, default=True)
 
 
+def is_hitl_payment_term_required() -> bool:
+    """When True (HITL_REQUIRE_TERM_TO_PAY=1), missing due_date and term_to_pay triggers HITL."""
+    raw = os.environ.get("HITL_REQUIRE_TERM_TO_PAY")
+    if raw is None or not str(raw).strip():
+        return False
+    return _truthy(raw, default=False)
+
+
 def resolve_po_id(gemini_json: dict[str, Any]) -> str | None:
     """Return canonical po_id, using Not applicable when PO is optional and missing."""
     if not isinstance(gemini_json, dict):

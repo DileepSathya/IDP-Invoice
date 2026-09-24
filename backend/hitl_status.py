@@ -410,7 +410,11 @@ def calculate_hitl_flag(gemini_json: dict[str, Any], *, run_erp_matching_now: bo
     if date_missing:
         reasons.append("Invoice date is missing")
 
-    from backend.tally_integration.config import is_mandatory_purchase_order, resolve_po_id
+    from backend.tally_integration.config import (
+        is_hitl_payment_term_required,
+        is_mandatory_purchase_order,
+        resolve_po_id,
+    )
 
     po_id_value = normalize_po_id(gemini_json)
     if not is_mandatory_purchase_order():
@@ -419,14 +423,14 @@ def calculate_hitl_flag(gemini_json: dict[str, Any], *, run_erp_matching_now: bo
     if po_id_missing and is_mandatory_purchase_order():
         reasons.append("PO ID is missing")
 
-    # Due date and term-to-pay ("Net 30", "30 days", ...) are alternatives for
-    # the same underlying question - when payment is due. Either one being
-    # present is enough; only flag when BOTH are missing.
-    due_date_value = gemini_json.get("due_date")
-    term_to_pay_value = normalize_term_to_pay(gemini_json)
-    payment_term_missing = _is_blank(due_date_value) and _is_blank(term_to_pay_value)
-    if payment_term_missing:
-        reasons.append("Term to pay / Due date is missing")
+    # Due date and term-to-pay are optional HITL checks unless HITL_REQUIRE_TERM_TO_PAY=true.
+    payment_term_missing = False
+    if is_hitl_payment_term_required():
+        due_date_value = gemini_json.get("due_date")
+        term_to_pay_value = normalize_term_to_pay(gemini_json)
+        payment_term_missing = _is_blank(due_date_value) and _is_blank(term_to_pay_value)
+        if payment_term_missing:
+            reasons.append("Term to pay / Due date is missing")
 
     main_total = _to_float(
         gemini_json.get("total_amount") or gemini_json.get("grand_total") or gemini_json.get("amount")
