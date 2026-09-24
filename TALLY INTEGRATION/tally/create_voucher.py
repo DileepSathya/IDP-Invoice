@@ -385,9 +385,18 @@ def send_template_to_tally(TALLY_URL, path, company_name, data, invoice_number, 
         )
         party_ledger_xml = elements_to_fragment([party_entry], indent=" " * 6)
 
-        invoice_date = json_root.get("invoice_date") or json_root.get("date")
+        test_cofig = os.environ.get("mode","prod")
+        if test_cofig == "test":
+            invoice_date="2025-07-01"
+        else:
+            invoice_date = json_root.get("invoice_date") or json_root.get("date")
+
+        
         if not invoice_date:
             raise ValueError("Missing required field: invoice_date")
+
+        
+        
 
         xml_payload = template_content.format(
             TALLY_USER_NAME = _safe(user_name),
@@ -395,7 +404,7 @@ def send_template_to_tally(TALLY_URL, path, company_name, data, invoice_number, 
             COMPANY_NAME=_safe(company_name),
             INVOICE_NUMBER=_safe(invoice_number),
             VOUCHER_TYPE=_safe(voucher_type),
-            VOUCHER_DATE=convert_date_yyyymmdd("2025-07-01"), #invoice_date
+            VOUCHER_DATE=convert_date_yyyymmdd(invoice_date), #invoice_date
             VOUCHER_ENTRY_MODE=voucher_entry_mode,
             PARTY_LEDGER=_safe(vendor_name),
             INVENTORY_ENTRIES_XML=inventory_entries_xml,

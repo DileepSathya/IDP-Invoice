@@ -1818,10 +1818,14 @@ class TallyLedgerSettingsUpdate(BaseModel):
 
 class TallyCompanySettingsResponse(BaseModel):
     company_name: str
+    tally_host: str = ""
+    tally_port: int = 9000
 
 
 class TallyCompanySettingsUpdate(BaseModel):
     company_name: str
+    tally_host: str
+    tally_port: int
 
 
 class TallyMasterSyncResult(BaseModel):
@@ -2143,7 +2147,11 @@ def put_tally_company_settings_route(
     from backend.tally_company_settings import save_tally_company
 
     try:
-        settings = save_tally_company(payload.company_name)
+        settings = save_tally_company(
+            payload.company_name,
+            payload.tally_host,
+            payload.tally_port,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     logger.info("[HTTP API → PUT /tally/company-settings] Tally company updated.")

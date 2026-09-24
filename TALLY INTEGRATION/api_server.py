@@ -9,14 +9,13 @@ Run from this directory:
 from __future__ import annotations
 
 import logging
-import os
 from typing import Any, Optional
 
 import requests
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
-from backend.tally_company_settings import current_tally_company
+from backend.tally_company_settings import current_tally_company, current_tally_url
 
 load_dotenv()
 
@@ -30,9 +29,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Tally Bridge", version="1.0.0")
-
-TALLY_URL = os.environ.get("TALLY_URL", "http://localhost:9000").strip()
-
 
 class PushResponse(BaseModel):
     success: bool
@@ -48,7 +44,7 @@ class PushResponse(BaseModel):
 class HealthResponse(BaseModel):
     bridge_ok: bool = True
     tally_reachable: bool = False
-    tally_url: str = TALLY_URL
+    tally_url: str = ""
     tally_error: Optional[str] = None
 
 
@@ -69,7 +65,7 @@ class TallyMastersResponse(BaseModel):
     errors: list[str] = []
 
 
-def _ping_tally() -> tuple[bool, Optional[str]]:
+def _ping_tally(tally_url: str) -> tuple[bool, Optional[str]]:
     xml = """<ENVELOPE>
   <HEADER>
     <VERSION>1</VERSION>
@@ -87,7 +83,7 @@ def _ping_tally() -> tuple[bool, Optional[str]]:
 </ENVELOPE>"""
     try:
         resp = requests.post(
-            TALLY_URL,
+            tally_url,
             data=xml.encode("utf-8"),
             headers={"Content-Type": "text/xml; charset=utf-8"},
             timeout=10,
@@ -100,14 +96,20 @@ def _ping_tally() -> tuple[bool, Optional[str]]:
 
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
-    reachable, err = _ping_tally()
-    return HealthResponse(bridge_ok=True, tally_reachable=reachable, tally_error=err)
+    tally_url = current_tally_url()
+    reachable, err = _ping_tally(tally_url)
+    return HealthResponse(
+        bridge_ok=True,
+        tally_reachable=reachable,
+        tally_url=tally_url,
+        tally_error=err,
+    )
 
 
 @app.get("/ledgers/purchase", response_model=PurchaseLedgersResponse)
 def list_purchase_ledgers() -> PurchaseLedgersResponse:
     company = current_tally_company() or None
-    ledgers, error = get_purchase_ledgers(TALLY_URL, company_name=company)
+    ledgers, error = get_purchase_ledgers(current_tally_url(), company_name=company)
     if not ledgers and error:
         logger.warning("[tally_bridge] purchase ledgers fetch failed: %s", error)
     return PurchaseLedgersResponse(ledgers=ledgers, company=company, error=error)
@@ -122,14 +124,14 @@ def get_all_masters() -> TallyMastersResponse:
             company=None,
             errors=["Tally company is not set — configure it in Settings → Company Details"],
         )
-    result = fetch_all_masters(TALLY_URL, company_name=company)
+    result = fetch_all_masters(current_tally_url(), company_name=company)
     return TallyMastersResponse(**result)
 
 
 @app.get("/masters/vendors", response_model=TallyMastersResponse)
 def get_vendor_masters() -> TallyMastersResponse:
     company = current_tally_company()
-    vendors, error = fetch_vendors(TALLY_URL, company_name=company or None)
+    vendors, error = fetch_vendors(current_tally_url(), company_name=company or None)
     errors = [error] if error else []
     return TallyMastersResponse(
         success=not errors,
@@ -142,7 +144,7 @@ def get_vendor_masters() -> TallyMastersResponse:
 @app.get("/masters/items", response_model=TallyMastersResponse)
 def get_item_masters() -> TallyMastersResponse:
     company = current_tally_company()
-    items, error = fetch_items(TALLY_URL, company_name=company or None)
+    items, error = fetch_items(current_tally_url(), company_name=company or None)
     errors = [error] if error else []
     return TallyMastersResponse(
         success=not errors,
@@ -155,7 +157,9 @@ def get_item_masters() -> TallyMastersResponse:
 @app.get("/masters/expense-ledgers", response_model=TallyMastersResponse)
 def get_expense_ledger_masters() -> TallyMastersResponse:
     company = current_tally_company()
-    expense_ledgers, error = fetch_expense_ledgers(TALLY_URL, company_name=company or None)
+    expense_ledgers, error = fetch_expense_ledgers(
+        current_tally_url(), company_name=company or None
+    )
     errors = [error] if error else []
     return TallyMastersResponse(
         success=not errors,
@@ -174,7 +178,9 @@ def get_purchase_order_masters() -> TallyMastersResponse:
             company=None,
             errors=["Tally company is not set — configure it in Settings → Company Details"],
         )
-    po_headers, po_details, error = fetch_purchase_orders(TALLY_URL, company_name=company)
+    po_headers, po_details, error = fetch_purchase_orders(
+        current_tally_url(), company_name=company
+    )
     errors = [error] if error else []
     return TallyMastersResponse(
         success=not errors,

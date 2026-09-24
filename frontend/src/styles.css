@@ -2513,6 +2513,14 @@ tbody tr:nth-child(even) {
   color: #f8fafc;
 }
 
+.settings-form-card .settings-fieldset {
+  margin-top: 1.25rem;
+}
+
+.settings-form-card .settings-fieldset .settings-form-field + .settings-form-field {
+  margin-top: 0.85rem;
+}
+
 .settings-fieldset {
   margin: 0 0 1rem;
   padding: 0;

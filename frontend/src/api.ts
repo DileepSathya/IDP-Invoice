@@ -594,6 +594,8 @@ export type TallyLedgerSettings = {
 
 export type TallyCompanySettings = {
   company_name: string;
+  tally_host: string;
+  tally_port: number;
 };
 
 export async function fetchTallyCompanySettings(): Promise<TallyCompanySettings> {
@@ -605,13 +607,19 @@ export async function fetchTallyCompanySettings(): Promise<TallyCompanySettings>
   return res.json();
 }
 
+export type TallyCompanySettingsPayload = {
+  company_name: string;
+  tally_host: string;
+  tally_port: number;
+};
+
 export async function saveTallyCompanySettings(
-  companyName: string,
+  payload: TallyCompanySettingsPayload,
 ): Promise<TallyCompanySettings> {
   const res = await apiFetch("/api/tally/company-settings", {
     method: "PUT",
     headers: JSON_HEADERS,
-    body: JSON.stringify({ company_name: companyName }),
+    body: JSON.stringify(payload),
   });
   if (!res.ok) {
     let msg = await res.text();

@@ -11,7 +11,11 @@ from typing import Any, Optional
 from dotenv import load_dotenv
 
 from tally import create_voucher, invoice_data_retriver
-from backend.tally_company_settings import current_tally_company,tallY_user_credential
+from backend.tally_company_settings import (
+    current_tally_company,
+    current_tally_url,
+    tallY_user_credential,
+)
 
 load_dotenv()
 
@@ -21,7 +25,6 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 _template_env = os.environ.get("TALLY_VOUCHER_TEMPLATE", "").strip()
 VOUCHER_TEMPLATE = Path(_template_env) if _template_env else BASE_DIR / "xml_scripts" / "create_voucher.xml"
 
-TALLY_URL = os.environ.get("TALLY_URL", "http://localhost:9000").strip()
 VOUCHER_TYPE = os.environ.get("TALLY_VOUCHER_TYPE", "Purchase").strip() or "Purchase"
 MONGO_URI = os.environ.get("MONGO_URI", "mongodb://localhost:27017")
 MONGO_DB = os.environ.get("MONGO_DB", "IDP")
@@ -122,7 +125,7 @@ def push_invoice_document(doc: dict[str, Any]) -> dict[str, Any]:
     doc = _inject_purchase_ledger(doc)
 
     result = create_voucher.send_template_to_tally(
-        TALLY_URL=TALLY_URL,
+        TALLY_URL=current_tally_url(),
         path=str(VOUCHER_TEMPLATE),
         company_name=tally_company,
         data=doc,
