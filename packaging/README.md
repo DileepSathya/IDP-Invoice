@@ -14,6 +14,13 @@ Portable build output: `dist/IDP-Invoice/`
 .\packaging\build.ps1
 ```
 
+The API and watcher are collected into one `idp-services` directory so their
+PaddleOCR, OpenCV, NumPy, and Python runtime files are stored once. The bundled
+MongoDB payload contains `mongod.exe` and the Visual C++ redistributable only;
+server debug symbols and the unused `mongos` executable are excluded. The build
+uses a pinned PyInstaller release so rebuilding the same revision does not
+silently switch bundler versions.
+
 Options:
 
 - `-SkipFrontend` — reuse existing `frontend/dist`
@@ -34,8 +41,9 @@ dist/IDP-Invoice/
   Start IDP Invoice.exe    ← launcher (MongoDB + watcher + API + Tally bridge)
   mongodb/bin/mongod.exe
   data/db/                 ← MongoDB (invoices + Tally master cache)
-  idp-api/idp-api.exe
-  idp-watcher/idp-watcher.exe
+  idp-services/idp-api.exe
+  idp-services/idp-watcher.exe
+  idp-services/_internal/  ← shared Python/OCR dependencies
   tally-bridge/tally-bridge.exe
   tally-bridge/xml_scripts/
   frontend/
@@ -104,6 +112,79 @@ Or use `run_production.bat` option 5.
 
 ## Bundle size
 
-The API spec excludes unused vector-embedding stacks. Bundled MongoDB adds ~100–150 MB.
+The service spec excludes unused Torch/vector-embedding stacks. The MongoDB
+runtime adds roughly 85 MB before installer compression; `.pdb`, `mongos.exe`,
+and Compass installation files are not shipped.
+
+## Create the single setup EXE
+
+Install [Inno Setup 6](https://jrsoftware.org/isinfo.php) once on the Windows
+build machine. Then run this from the repository root:
+
+```powershell
+.\packaging\build_installer.ps1 -Version "1.0.0"
+```
+
+That command rebuilds the frontend, PyInstaller programs, MongoDB runtime, and
+then compiles:
+
+```text
+dist\installer\IDP-Invoice-Setup.exe
+```
+
+The installer uses per-user installation and does not require administrator
+access for the application itself. It installs to:
+
+```text
+%LOCALAPPDATA%\Programs\IDP Invoice
+```
+
+It creates all MongoDB, invoice queue, and log directories, plus Start Menu and
+optional desktop shortcuts. Existing `.env`, `tally-bridge\.env`, `license.lic`,
+`invoice_count.enc`, `license_state.json`, MongoDB data, invoices, and logs are
+preserved during upgrades and uninstall. Immutable application directories are
+replaced on upgrade so removed modules and frontend assets cannot remain stale.
+
+### Rebuild after future code changes
+
+For every release, update the version and run the same command:
+
+```powershell
+.\packaging\build_installer.ps1 -Version "1.1.0"
+```
+
+Useful faster variants:
+
+```powershell
+# Reuse an already-built frontend.
+.\packaging\build_installer.ps1 -Version "1.1.0" -SkipFrontend
+
+# Compile only the installer from an already-complete dist\IDP-Invoice payload.
+.\packaging\build_installer.ps1 -Version "1.1.0" -SkipAppBuild
+
+# If Inno Setup is installed in a non-standard directory.
+.\packaging\build_installer.ps1 -Version "1.1.0" `
+  -InnoCompiler "D:\Tools\Inno Setup 6\ISCC.exe"
+```
+
+Do not use `-SkipAppBuild` after changing Python, frontend, dependencies, or
+packaging files. Use it only when the portable payload has already been rebuilt
+and validated.
+
+### Configuration and customer upgrades
+
+- Put a customer `license.lic` in `dist\IDP-Invoice` before compiling if it
+  should be included in that customer's setup file.
+- The setup copies `.env.example` as `.env` only on the first installation.
+- Installing a newer setup over the same location updates program binaries but
+  retains customer configuration and operational data.
+- The Visual C++ runtime installer is run only if its x64 registry marker is
+  missing; Windows may request elevation for that prerequisite.
+
+### Verify the packaging rules
+
+```powershell
+node --test packaging\tests\test_release_packaging.cjs
+```
 
 See `licensing/README.md` for offline licensing.

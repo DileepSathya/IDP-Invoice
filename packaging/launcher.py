@@ -257,8 +257,8 @@ def main() -> None:
     tally_bridge_port = int(
         os.environ.get("TALLY_BRIDGE_PORT", _read_env_value(root, "TALLY_BRIDGE_PORT", "8001"))
     )
-    api_exe = root / "idp-api" / "idp-api.exe"
-    watcher_exe = root / "idp-watcher" / "idp-watcher.exe"
+    api_exe = root / "idp-services" / "idp-api.exe"
+    watcher_exe = root / "idp-services" / "idp-watcher.exe"
     tally_bridge_exe = root / "tally-bridge" / "tally-bridge.exe"
 
     if not api_exe.is_file():

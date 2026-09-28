@@ -52,8 +52,11 @@ dist\IDP-Invoice\
   Start IDP Invoice.exe
   license.lic              ← required
   invoice_count.enc        ← auto-created (encrypted quota counter)
-  idp-api\
-  idp-watcher\
+  license_state.json       ← auto-created (quota period state)
+  idp-services\
+    idp-api.exe
+    idp-watcher.exe
+    _internal\             ← shared Python/OCR runtime
   ...
 ```
 
@@ -78,5 +81,7 @@ IDP_SKIP_LICENSE=1
 ## PyInstaller notes
 
 - Use **onedir** for main app (Paddle/OCR size) — already configured.
-- `license.lic` and `invoice_count.enc` live next to the exe (`sys.executable` parent), not inside `_internal`.
+- `license.lic`, `invoice_count.enc`, and `license_state.json` live at the
+  install root next to `Start IDP Invoice.exe`, not inside `idp-services` or
+  `_internal`.
 - **Single-file** `Start IDP Invoice.exe` still resolves paths correctly for `license.lic`.

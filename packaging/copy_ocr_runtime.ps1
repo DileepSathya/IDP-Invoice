@@ -1,4 +1,4 @@
-# Copy OCR Python packages + .dist-info metadata into frozen idp-api/idp-watcher bundles.
+# Copy OCR Python packages + .dist-info metadata into the shared frozen services bundle.
 param(
     [string]$DistRoot = ""
 )
@@ -69,9 +69,7 @@ function Copy-OcrRuntime([string]$TargetInternal) {
 }
 
 Write-Host "Copying OCR runtime packages into portable bundles ..."
-foreach ($bundle in @("idp-api", "idp-watcher")) {
-    $internal = Join-Path $DistRoot "$bundle\_internal"
-    Write-Host "[$bundle]"
-    Copy-OcrRuntime $internal
-}
+$internal = Join-Path $DistRoot "idp-services\_internal"
+Write-Host "[idp-services]"
+Copy-OcrRuntime $internal
 Write-Host "[OK] OCR runtime copy complete."

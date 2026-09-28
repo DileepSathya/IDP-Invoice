@@ -10,6 +10,7 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 $DistRoot = Join-Path $Root "dist\IDP-Invoice"
 $BuildWork = Join-Path $Root "build\pyinstaller"
+$PyInstallerVersion = "6.22.3"
 
 Set-Location $Root
 Write-Host "==== IDP Invoice - Windows packaging ===="
@@ -90,8 +91,10 @@ if (-not $SkipFrontend) {
     Push-Location (Join-Path $Root "frontend")
     if (-not (Test-Path "node_modules")) {
         npm install
+        if ($LASTEXITCODE -ne 0) { throw "npm install failed with exit code $LASTEXITCODE." }
     }
     npm run build
+    if ($LASTEXITCODE -ne 0) { throw "Frontend build failed with exit code $LASTEXITCODE." }
     if (-not (Test-Path "dist\index.html")) {
         throw "Frontend build failed - dist\index.html missing."
     }
@@ -105,8 +108,9 @@ if (-not $SkipFrontend) {
 }
 
 if (-not $SkipPyInstaller) {
-    Write-Host "`n[2/5] Installing PyInstaller..."
-    & $Py -m pip install --upgrade pyinstaller
+    Write-Host "`n[2/5] Installing PyInstaller $PyInstallerVersion..."
+    & $Py -m pip install --upgrade "pyinstaller==$PyInstallerVersion"
+    if ($LASTEXITCODE -ne 0) { throw "PyInstaller $PyInstallerVersion installation failed." }
 
     $tallyBridgeSrc = Join-Path $Root "TALLY INTEGRATION\api_server.py"
     if (-not (Test-Path $tallyBridgeSrc)) {
@@ -126,12 +130,9 @@ if (-not $SkipPyInstaller) {
         "--noconfirm"
     )
 
-    & $Py -m PyInstaller @commonArgs (Join-Path $Root "packaging\idp_api.spec")
-    if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed for idp_api.spec" }
-    Write-Host "  idp-api.exe built (ERP scheduler + Tally master refresh scheduler bundled)."
-
-    & $Py -m PyInstaller @commonArgs (Join-Path $Root "packaging\idp_watcher.spec")
-    if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed for idp_watcher.spec" }
+    & $Py -m PyInstaller @commonArgs (Join-Path $Root "packaging\idp_services.spec")
+    if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed for idp_services.spec" }
+    Write-Host "  idp-api.exe and idp-watcher.exe built with one shared dependency collection."
 
     & $Py -m PyInstaller @commonArgs (Join-Path $Root "packaging\idp_tally_bridge.spec")
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed for idp_tally_bridge.spec" }
@@ -145,6 +146,16 @@ if (-not $SkipPyInstaller) {
 
 Write-Host "`n[4/5] Assembling portable folder..."
 New-Item -ItemType Directory -Force -Path $DistRoot | Out-Null
+
+# Remove layouts produced by releases before the shared idp-services bundle.
+# Leaving these directories behind would silently put duplicate OCR runtimes in
+# the installer when rebuilding over an existing dist directory.
+foreach ($legacyServiceDir in @("idp-api", "idp-watcher")) {
+    $legacyServicePath = Join-Path $DistRoot $legacyServiceDir
+    if (Test-Path -LiteralPath $legacyServicePath) {
+        Remove-Item -LiteralPath $legacyServicePath -Recurse -Force
+    }
+}
 
 $frontendOut = Join-Path $DistRoot "frontend"
 $frontendSrc = Join-Path $Root "frontend\dist"
@@ -230,6 +241,15 @@ if (-not $SkipMongoDB) {
     Write-Host "`n[5/5] Skipping MongoDB bundle."
 }
 
+# Also prune older payloads when -SkipMongoDB reuses an existing dist folder.
+$mongoBin = Join-Path $DistRoot "mongodb\bin"
+if (Test-Path -LiteralPath $mongoBin) {
+    foreach ($legacyMongoPattern in @("*.pdb", "mongos.exe", "Install-Compass.ps1")) {
+        Get-ChildItem -LiteralPath $mongoBin -Filter $legacyMongoPattern -File -ErrorAction SilentlyContinue |
+            Remove-Item -Force
+    }
+}
+
 Write-Host "`nCopying OCR runtime packages/metadata into frozen bundles ..."
 & (Join-Path $Root "packaging\copy_ocr_runtime.ps1") -DistRoot $DistRoot
 
@@ -259,3 +279,6 @@ Write-Host "  8. Open Health to verify .env, MongoDB, Tally master data, and ser
 Write-Host "Bundled MongoDB starts when MONGO_URI points to localhost."
 Write-Host "Tally bridge starts when TALLY_ENABLED=true."
 Write-Host "Tally master refresh scheduler starts automatically with idp-api (no extra service)."
+
+$payloadBytes = (Get-ChildItem -LiteralPath $DistRoot -Recurse -File | Measure-Object Length -Sum).Sum
+Write-Host ("Portable payload size: {0:N2} GiB" -f ($payloadBytes / 1GB))

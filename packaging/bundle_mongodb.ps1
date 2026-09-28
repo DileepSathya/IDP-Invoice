@@ -45,6 +45,18 @@ if (-not (Test-Path (Join-Path $SourceBin "mongod.exe"))) {
 
 Write-Host "Copying MongoDB binaries to $MongoOut ..."
 Get-ChildItem $MongoOut -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force
-Copy-Item -Recurse (Join-Path $SourceBin "*") $MongoOut
+$RuntimeFiles = @(
+    "mongod.exe",
+    "vc_redist.x64.exe"
+)
+foreach ($fileName in $RuntimeFiles) {
+    $sourceFile = Join-Path $SourceBin $fileName
+    if (Test-Path -LiteralPath $sourceFile) {
+        Copy-Item -LiteralPath $sourceFile -Destination $MongoOut -Force
+        Write-Host "  included: $fileName"
+    } else {
+        throw "Required MongoDB runtime file missing: $sourceFile"
+    }
+}
 
 Write-Host "[OK] MongoDB bundled at $MongoOut"

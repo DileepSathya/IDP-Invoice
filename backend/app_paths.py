@@ -6,8 +6,8 @@ Portable layout (frozen):
     Start IDP Invoice.exe
     .env
     frontend/          ← built UI (copied at packaging time)
-    idp-api/idp-api.exe
-    idp-watcher/idp-watcher.exe
+    idp-services/idp-api.exe
+    idp-services/idp-watcher.exe
     tally-bridge/tally-bridge.exe
     invoices_data/to_be_processed/
     invoices_data/_api_staging/
@@ -24,7 +24,7 @@ import os
 import sys
 from pathlib import Path
 
-_FROZEN_SUBDIRS = frozenset({"idp-api", "idp-watcher", "tally-bridge"})
+_FROZEN_SUBDIRS = frozenset({"idp-api", "idp-watcher", "idp-services", "tally-bridge"})
 
 
 def is_frozen() -> bool:

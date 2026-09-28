@@ -76,16 +76,31 @@ def convert_date_yyyymmdd(raw_date: str) -> str:
 
 
 
+def _tally_counter(xml_text: str, root: ET.Element | None, tag: str) -> int:
+    """Read a numeric Tally import counter (often nested under IMPORTINFO)."""
+    if root is not None:
+        text = root.findtext(f".//{tag}")
+        if text is not None:
+            try:
+                return int(text.strip())
+            except ValueError:
+                pass
+    match = re.search(rf"<{tag}>(\d+)</{tag}>", xml_text, re.IGNORECASE)
+    return int(match.group(1)) if match else 0
+
+
 def parse_tally_response(xml_text: str) -> dict:
     """Parse Tally HTTP response into a structured result dict."""
     result = {
         "success": False,
         "error_reason": None,
         "created": 0,
+        "altered": 0,
         "exceptions": 0,
         "errors": 0,
         "line_errors": [],
     }
+    root: ET.Element | None
     try:
         root = ET.fromstring(xml_text)
     except ET.ParseError as exc:
@@ -93,24 +108,23 @@ def parse_tally_response(xml_text: str) -> dict:
         return result
 
     for elem in root.iter():
-        tag = elem.tag.upper()
+        tag = elem.tag.split("}")[-1].upper()
         if tag in ("LINEERROR", "ERROR", "EXCEPTION") and elem.text:
             msg = elem.text.strip()
             result["line_errors"].append(msg)
             if not result["error_reason"]:
                 result["error_reason"] = msg
 
-    exceptions_text = root.findtext("EXCEPTIONS")
-    created_text = root.findtext("CREATED")
-    errors_text = root.findtext("ERRORS")
+    result["exceptions"] = _tally_counter(xml_text, root, "EXCEPTIONS")
+    result["created"] = _tally_counter(xml_text, root, "CREATED")
+    result["altered"] = _tally_counter(xml_text, root, "ALTERED")
+    result["errors"] = _tally_counter(xml_text, root, "ERRORS")
 
-    result["exceptions"] = int(exceptions_text or 0)
-    result["created"] = int(created_text or 0)
-    result["errors"] = int(errors_text or 0)
+    imported = result["created"] + result["altered"]
 
     if result["line_errors"]:
         result["success"] = False
-    elif result["created"] > 0:
+    elif imported > 0:
         result["success"] = True
     elif result["exceptions"] > 0 and result["created"] == 0:
         result["success"] = False
