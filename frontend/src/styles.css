@@ -101,7 +101,63 @@ body {
 .app-header-right {
   display: flex;
   align-items: center;
-  gap: 1rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.65rem 1rem;
+}
+
+.header-license-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  max-width: min(280px, 42vw);
+  padding: 0.35rem 0.75rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  line-height: 1.2;
+  text-decoration: none;
+  color: #e0e7ff;
+  background: rgba(99, 102, 241, 0.18);
+  border: 1px solid rgba(129, 140, 248, 0.45);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.header-license-chip:hover {
+  background: rgba(99, 102, 241, 0.28);
+  color: #f9fafb;
+}
+
+.header-license-chip--warning {
+  color: #fde68a;
+  background: rgba(245, 158, 11, 0.15);
+  border-color: rgba(251, 191, 36, 0.55);
+}
+
+.header-license-chip-plan {
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.header-license-chip-sep {
+  opacity: 0.55;
+  flex-shrink: 0;
+}
+
+.header-license-chip-status {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.app-license-bar {
+  flex-shrink: 0;
+  padding: 0.65rem 1.25rem 0;
+}
+
+.app-license-bar .plan-banner {
+  margin-bottom: 0;
+  width: 100%;
 }
 
 .account-menu {
@@ -262,8 +318,16 @@ body {
   min-height: 0;
   padding: 1rem 1.25rem;
   display: flex;
+  flex-direction: column;
   justify-content: stretch;
   align-items: stretch;
+  overflow: hidden;
+}
+
+.app-main-routes {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
   overflow-y: auto;
   overflow-x: hidden;
 }
@@ -272,6 +336,12 @@ body {
   overflow: hidden;
   display: flex;
   flex-direction: column;
+}
+
+.app-main--chat .app-main-routes {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .panel {
@@ -2344,6 +2414,15 @@ tbody tr:nth-child(even) {
   border: 1px solid rgba(129, 140, 248, 0.45);
 }
 
+.plan-banner--warning {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.2), rgba(239, 68, 68, 0.12));
+  border-color: rgba(251, 191, 36, 0.55);
+}
+
+.plan-banner--warning .plan-banner-label {
+  color: #fde68a;
+}
+
 .plan-banner-content {
   display: flex;
   flex-wrap: wrap;
@@ -2383,6 +2462,36 @@ tbody tr:nth-child(even) {
 .plan-banner-link:hover {
   background: rgba(99, 102, 241, 0.25);
   color: #f9fafb;
+}
+
+@media (max-width: 900px) {
+  .plan-banner {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.75rem;
+  }
+
+  .plan-banner-link {
+    align-self: flex-start;
+  }
+}
+
+@media (max-width: 640px) {
+  .app-license-bar {
+    padding-inline: 1rem;
+  }
+
+  .header-license-chip-plan {
+    display: none;
+  }
+
+  .header-license-chip-sep {
+    display: none;
+  }
+
+  .header-license-chip {
+    max-width: 140px;
+  }
 }
 
 .settings-section h3 {

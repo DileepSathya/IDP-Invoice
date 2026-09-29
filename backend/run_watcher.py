@@ -11,12 +11,11 @@ load_app_dotenv()
 
 
 def main() -> None:
-    from license_validator import validate_license
-
-    validate_license()
+    from backend.agent_settings import load_agent_settings_into_env
     from backend.agents.watch_raw import main as watcher_main
 
     os.chdir(app_dir())
+    load_agent_settings_into_env()
     watcher_main()
 
 

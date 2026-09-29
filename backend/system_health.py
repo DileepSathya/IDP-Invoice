@@ -105,7 +105,7 @@ def _check_ai_section() -> dict[str, Any]:
                 item_id="gemini_api_key",
                 label="Gemini API key",
                 status="error",
-                message="API key is not set in .env or the AI settings pane.",
+                message="API key is not saved. Configure it under Settings → AI.",
                 fix_route="/settings",
                 fix_hint="Open the account menu → AI and enter your Gemini API key.",
             )
@@ -137,9 +137,9 @@ def _check_ai_section() -> dict[str, Any]:
                 item_id="env_file",
                 label=".env file",
                 status="warning",
-                message="No .env file yet — saving AI settings from the UI will create one.",
+                message="No .env file yet — optional for MongoDB URI and other infrastructure settings.",
                 fix_route="/settings",
-                fix_hint="Configure the AI agent from the account menu.",
+                fix_hint="AI keys are stored in MongoDB under Settings → AI.",
             )
         )
 
@@ -257,27 +257,39 @@ def _check_services_section(pipeline: dict[str, Any]) -> dict[str, Any]:
 def _check_license_section() -> dict[str, Any]:
     items: list[dict[str, Any]] = []
     try:
-        from license_validator import get_license_profile, validate_license
+        from license_validator import get_license_profile
 
-        validate_license()
         profile = get_license_profile()
-        status: HealthLevel = "ok"
-        message = str(profile.get("statusMessage") or "License active.")
-        remaining_days = profile.get("remainingDays")
-        invoices_remaining = profile.get("invoicesRemaining")
-        if remaining_days is not None and int(remaining_days) <= 7:
-            status = "warning"
-        if invoices_remaining is not None and int(invoices_remaining) <= 10:
-            status = "warning"
-        items.append(
-            _item(
-                item_id="license",
-                label="License",
-                status=status,
-                message=message,
-                fix_route="/settings",
+        licensed = bool(profile.get("licensed", False))
+        if not licensed:
+            items.append(
+                _item(
+                    item_id="license",
+                    label="License",
+                    status="error",
+                    message=str(profile.get("statusMessage") or "No active license."),
+                    fix_route="/settings/licensing",
+                    fix_hint="Paste and save a license key under Settings → Licensing.",
+                )
             )
-        )
+        else:
+            status: HealthLevel = "ok"
+            message = str(profile.get("statusMessage") or "License active.")
+            remaining_days = profile.get("remainingDays")
+            invoices_remaining = profile.get("invoicesRemaining")
+            if remaining_days is not None and int(remaining_days) <= 7:
+                status = "warning"
+            if invoices_remaining is not None and int(invoices_remaining) <= 10:
+                status = "warning"
+            items.append(
+                _item(
+                    item_id="license",
+                    label="License",
+                    status=status,
+                    message=message,
+                    fix_route="/settings/licensing",
+                )
+            )
     except Exception as exc:
         items.append(
             _item(
@@ -285,8 +297,8 @@ def _check_license_section() -> dict[str, Any]:
                 label="License",
                 status="error",
                 message=str(exc),
-                fix_route="/settings",
-                fix_hint="Place a valid license.lic next to the application executable.",
+                fix_route="/settings/licensing",
+                fix_hint="Paste and save a license key under Settings → Licensing.",
             )
         )
     return _section(section_id="license", title="License", items=items)
@@ -498,7 +510,7 @@ def _check_pipeline_section(pipeline: dict[str, Any]) -> dict[str, Any]:
                     f"{gemini_quarantine} file(s) in gemini_api_error waiting for API key/quota recovery."
                 ),
                 fix_route="/health",
-                fix_hint="Fix GEMINI_API_KEY or quota, then the watcher will retry automatically.",
+                fix_hint="Fix the Gemini API key under Settings → AI or quota, then the watcher will retry automatically.",
             )
         )
 

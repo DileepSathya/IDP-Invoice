@@ -18,6 +18,7 @@ test("settings navigation groups the three ERP child settings", () => {
 
 test("settings paths resolve to the correct active section", () => {
   assert.equal(settingsSectionForPath("/settings"), "ai");
+  assert.equal(settingsSectionForPath("/settings/licensing"), "licensing");
   assert.equal(settingsSectionForPath("/settings/notifications"), "notifications");
   assert.equal(settingsSectionForPath("/settings/company"), "company");
   assert.equal(settingsSectionForPath("/settings/ledger"), "ledger");

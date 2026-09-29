@@ -43,32 +43,29 @@ venv\Scripts\python.exe keygen\license_generator.py `
   --expires 2027-12-31
 ```
 
-3. Send the generated `ACME.lic` file. Customer renames/copies it to **`license.lic`**.
+3. Send the generated license key (the base64 string in the `.lic` file). The customer pastes it under **Settings → Licensing** in the web UI.
 
-## Customer install layout
+## Customer activation
 
-```
-dist\IDP-Invoice\
-  Start IDP Invoice.exe
-  license.lic              ← required
-  invoice_count.enc        ← auto-created (encrypted quota counter)
-  license_state.json       ← auto-created (quota period state)
-  idp-services\
-    idp-api.exe
-    idp-watcher.exe
-    _internal\             ← shared Python/OCR runtime
-  ...
-```
+1. Start the application (MongoDB and API start even without a license).
+2. Log in to the dashboard.
+3. Open **Settings → Licensing**.
+4. Paste the full license key and click **Save license key**.
+
+The key is stored in MongoDB (`license_settings` collection) and re-validated on each API/watcher start and after save.
+
+Legacy installs: if `license.lic` exists at the install root but MongoDB has no key yet, the first successful read **migrates** the file contents into MongoDB automatically.
+
+## Quota and usage
+
+- Quota plans reconcile invoice counts from MongoDB (`created_at` since license `issuedAt`).
+- `invoice_count.enc` at the install root remains an optional encrypted fallback when MongoDB is temporarily unavailable.
 
 ## Validation (automatic)
 
-On startup, these entry points call `validate_license()`:
-
-- `Start IDP Invoice.exe` (launcher)
-- `idp-api.exe`
-- `idp-watcher.exe`
-
-After each successful invoice stored to MongoDB, `increment_invoice_count()` runs.
+- API lifespan refreshes license state from MongoDB on startup.
+- Invoice processing (uploads, watcher, API jobs) requires a **valid active license**.
+- Without a license, the UI and settings remain available; only licensed processing is restricted.
 
 ## Development bypass
 
@@ -81,7 +78,4 @@ IDP_SKIP_LICENSE=1
 ## PyInstaller notes
 
 - Use **onedir** for main app (Paddle/OCR size) — already configured.
-- `license.lic`, `invoice_count.enc`, and `license_state.json` live at the
-  install root next to `Start IDP Invoice.exe`, not inside `idp-services` or
-  `_internal`.
-- **Single-file** `Start IDP Invoice.exe` still resolves paths correctly for `license.lic`.
+- Portable launcher starts MongoDB before API services so license keys can be read from MongoDB.

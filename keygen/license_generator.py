@@ -180,7 +180,7 @@ def _print_success(payload: dict, out_path: Path, plan: str) -> None:
     else:
         print("     Expires:  none (perpetual)")
     print(f"     Record saved to: {CUSTOMER_DATA_CSV.resolve()}")
-    print("\nCustomer must rename/copy this file to license.lic next to the application exe.")
+    print("\nSend the license key to the customer to paste under Settings → Licensing.")
 
 
 def _prompt_required(label: str) -> str:

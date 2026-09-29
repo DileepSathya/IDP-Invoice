@@ -80,7 +80,7 @@ def ensure_layout(root: Path) -> None:
         added = _sync_env_from_example(env_path, example_path)
         if added == ["<created>"]:
             print(
-                f"Created {env_path} from .env.example — set GEMINI_API_KEY before processing invoices."
+                f"Created {env_path} from .env.example — set the Gemini API key under Settings → AI after login."
             )
         elif added:
             print(f"Added missing .env keys: {', '.join(added)}")
@@ -243,14 +243,8 @@ def start_bundled_mongo(root: Path, port: int) -> subprocess.Popen | None:
 
 
 def main() -> None:
-    from license_validator import get_license_welcome_message, validate_license
-
     root = portable_root()
     os.chdir(root)
-    validate_license()
-    print()
-    print(get_license_welcome_message())
-    print()
     ensure_layout(root)
 
     api_port = int(os.environ.get("IDP_API_PORT", _read_env_value(root, "IDP_API_PORT", "8000")))
@@ -302,6 +296,14 @@ def main() -> None:
 
         print(f"Waiting for API on port {api_port}...")
         if wait_for_api(api_port):
+            try:
+                from license_validator import get_license_welcome_message
+
+                print()
+                print(get_license_welcome_message())
+                print()
+            except Exception:
+                pass
             url = f"http://127.0.0.1:{api_port}/login"
             print(f"Opening {url}")
             webbrowser.open(url)

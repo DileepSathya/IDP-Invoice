@@ -30,7 +30,8 @@ def main() -> None:
     print(f"  MAC hash seed : {parts['mac']}")
     print(f"  CPU           : {parts['cpu'][:80]}")
     print(f"  Disk serial   : {parts['disk'][:80]}")
-    print("\nCopy the fingerprint line above and email it to receive license.lic")
+    print("\nCopy the fingerprint line above and email it to receive a license key.")
+    print("Paste the key under Settings → Licensing after you log in to the dashboard.")
     _wait_for_exit()
 
 

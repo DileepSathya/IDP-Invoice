@@ -1,12 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import {
-  fetchLicenseProfile,
-  fetchPipelineStatus,
-  type LicenseProfile,
-  type PipelineStatus,
-} from "../api";
-import { PlanBanner } from "../components/PlanBanner";
+import { fetchPipelineStatus, type PipelineStatus } from "../api";
 
 type StatusCardProps = {
   label: string;
@@ -30,7 +24,6 @@ const StatusCard: React.FC<StatusCardProps> = ({
 
 export const AnalyticsDashboard: React.FC = () => {
   const [status, setStatus] = useState<PipelineStatus | null>(null);
-  const [licenseProfile, setLicenseProfile] = useState<LicenseProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -39,13 +32,9 @@ export const AnalyticsDashboard: React.FC = () => {
 
     const load = async () => {
       try {
-        const [pipeline, profile] = await Promise.all([
-          fetchPipelineStatus(),
-          fetchLicenseProfile(),
-        ]);
+        const pipeline = await fetchPipelineStatus();
         if (cancelled) return;
         setStatus(pipeline);
-        setLicenseProfile(profile);
         setError(null);
       } catch (e) {
         if (!cancelled) {
@@ -86,8 +75,6 @@ export const AnalyticsDashboard: React.FC = () => {
 
   return (
     <div className="panel analytics-dashboard">
-      {licenseProfile && <PlanBanner profile={licenseProfile} />}
-
       <div className="panel-header">
         <div>
           <h2>Dashboard</h2>

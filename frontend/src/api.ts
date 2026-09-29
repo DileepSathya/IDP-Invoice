@@ -110,7 +110,7 @@ export type ChatResponse = {
 };
 
 export type LicenseProfile = {
-  plan: "monthly" | "yearly" | "quota" | "onetime" | "dev" | string;
+  plan: "monthly" | "yearly" | "quota" | "onetime" | "dev" | "none" | string;
   planLabel: string;
   customerId: string;
   issuedAt: string | null;
@@ -120,6 +120,9 @@ export type LicenseProfile = {
   invoicesUsed: number | null;
   invoicesRemaining: number | null;
   isUnlimited: boolean;
+  licensed?: boolean;
+  validationError?: string | null;
+  machineFingerprint?: string;
   statusMessage: string;
 };
 
@@ -376,6 +379,26 @@ export async function fetchLicenseProfile(): Promise<LicenseProfile> {
   const res = await apiFetch("/api/license");
   if (!res.ok) {
     throw new Error(`Failed to load license profile (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function saveLicenseKey(licenseKey: string): Promise<LicenseProfile> {
+  const res = await apiFetch("/api/license", {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ licenseKey }),
+  });
+  if (!res.ok) {
+    let detail = `Failed to save license (${res.status})`;
+    try {
+      const data = (await res.json()) as { detail?: string };
+      if (data.detail) detail = data.detail;
+    } catch {
+      const text = await res.text();
+      if (text) detail = text;
+    }
+    throw new Error(detail);
   }
   return res.json();
 }

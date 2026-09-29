@@ -255,9 +255,11 @@ def _build_chat_prompt(question: str, chunks: list[RetrievedChunk]) -> str:
 
 def _get_gemini_answer(prompt: str) -> str:
     load_app_dotenv()
-    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    from backend.agent_settings import read_gemini_api_key
+
+    api_key = read_gemini_api_key()
     if not api_key:
-        raise RuntimeError("Missing GEMINI_API_KEY (or GOOGLE_API_KEY).")
+        raise RuntimeError("Gemini API key is not set. Configure it under Settings → AI.")
 
     model_name = os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"
     logger.info(

@@ -10,7 +10,12 @@ import { Settings } from "./pages/Settings";
 import { LedgerSettings } from "./pages/LedgerSettings";
 import { TallyMasterSettings } from "./pages/TallyMasterSettings";
 import { CompanySettings } from "./pages/CompanySettings";
+import { LicensingSettings } from "./pages/LicensingSettings";
 import { Health } from "./pages/Health";
+import { PlanBanner } from "./components/PlanBanner";
+import { HeaderLicenseStatus } from "./components/HeaderLicenseStatus";
+import { fullPlanBannerRoute, shouldShowFullPlanBanner } from "./components/licenseDisplay";
+import { LicenseProfileProvider, useLicenseProfile } from "./context/LicenseProfileContext";
 import { Login } from "./pages/Login";
 import { AccountMenu } from "./components/AccountMenu";
 import { SettingsLayout } from "./components/SettingsLayout";
@@ -22,6 +27,11 @@ import "./styles.css";
 const AppLayout: React.FC = () => {
   const location = useLocation();
   const isChatRoute = location.pathname === "/chat" || location.pathname.startsWith("/chat/");
+  const { profile: licenseProfile } = useLicenseProfile();
+  const showFullBanner =
+    licenseProfile != null &&
+    fullPlanBannerRoute(location.pathname) &&
+    shouldShowFullPlanBanner(licenseProfile);
 
   return (
     <div className="app-shell">
@@ -40,11 +50,18 @@ const AppLayout: React.FC = () => {
             <NavLink to="/erp">ERP</NavLink>
             <NavLink to="/chat">Chatbot</NavLink>
           </nav>
+          <HeaderLicenseStatus />
           <AccountMenu />
         </div>
       </header>
+      {showFullBanner && licenseProfile && (
+        <div className="app-license-bar">
+          <PlanBanner profile={licenseProfile} />
+        </div>
+      )}
       <main className={`app-main${isChatRoute ? " app-main--chat" : ""}`}>
-        <Routes>
+        <div className="app-main-routes">
+          <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/dashboard" element={<AnalyticsDashboard />} />
           <Route path="/health" element={<Health />} />
@@ -53,11 +70,13 @@ const AppLayout: React.FC = () => {
           <Route path="/settings" element={<SettingsLayout />}>
             <Route index element={<Settings />} />
             <Route path="notifications" element={<NotificationSettings />} />
+            <Route path="licensing" element={<LicensingSettings />} />
             <Route path="company" element={<CompanySettings />} />
             <Route path="ledger" element={<LedgerSettings />} />
             <Route path="tally-masters" element={<TallyMasterSettings />} />
           </Route>
-        </Routes>
+          </Routes>
+        </div>
       </main>
     </div>
   );

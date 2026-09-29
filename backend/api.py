@@ -628,7 +628,11 @@ def _process_job(
     )
     staging_path = Path(file_path)
     try:
-        from license_validator import InvoiceQuotaExceeded, ensure_invoice_quota_available
+        from license_validator import (
+            InvoiceQuotaExceeded,
+            LicenseInactiveError,
+            ensure_invoice_quota_available,
+        )
 
         ensure_invoice_quota_available()
         ocr_result = process_file(file_path, run_id=job_id)
@@ -740,7 +744,7 @@ def _process_job(
             error_message=None,
         )
     except Exception as e:
-        from license_validator import InvoiceQuotaExceeded
+        from license_validator import InvoiceQuotaExceeded, LicenseInactiveError
 
         gemini_api_failure = is_gemini_api_error(e)
         if staging_path.is_file():
@@ -756,7 +760,7 @@ def _process_job(
                     )
             except Exception:
                 pass
-        if isinstance(e, InvoiceQuotaExceeded):
+        if isinstance(e, (InvoiceQuotaExceeded, LicenseInactiveError)):
             error_stage = "license"
         elif gemini_api_failure:
             error_stage = "gemini_quota"
@@ -784,7 +788,7 @@ def _process_job(
             {"job_id": job_id, "tenant_id": tenant_id},
             {"$set": {"status": "failed", "error": str(e), "completed_at": datetime.utcnow()}},
         )
-        if isinstance(e, InvoiceQuotaExceeded):
+        if isinstance(e, (InvoiceQuotaExceeded, LicenseInactiveError)):
             logger.warning(
                 "job_failed request_id=%s tenant_id=%s job_id=%s error=%s",
                 request_id,
@@ -915,7 +919,16 @@ class LicenseProfileResponse(BaseModel):
     invoicesUsed: Optional[int] = None
     invoicesRemaining: Optional[int] = None
     isUnlimited: bool
+    licensed: bool = False
+    validationError: Optional[str] = None
+    machineFingerprint: str = ""
     statusMessage: str
+
+
+class LicenseKeyUpdate(BaseModel):
+    license_key: str = Field(alias="licenseKey")
+
+    model_config = {"populate_by_name": True}
 
 
 class AgentSettingsResponse(BaseModel):
@@ -1467,6 +1480,13 @@ async def _app_lifespan(app: FastAPI):
 
     load_agent_settings_into_env()
 
+    try:
+        from license_validator import refresh_license_cache
+
+        refresh_license_cache(force=True)
+    except Exception:
+        pass
+
     from backend.erp_scheduler import start_erp_scheduler
     from backend.hitl_notification_scheduler import start_hitl_notification_scheduler
     from backend.tally_master_scheduler import start_tally_master_scheduler
@@ -1697,10 +1717,25 @@ def auth_me(request: Request) -> AuthStatusResponse:
 
 
 @app.get("/license", response_model=LicenseProfileResponse)
-def get_license_profile() -> LicenseProfileResponse:
+def get_license_profile_route() -> LicenseProfileResponse:
     from license_validator import get_license_profile as _get_license_profile
 
     return LicenseProfileResponse(**_get_license_profile())
+
+
+@app.put("/license", response_model=LicenseProfileResponse)
+def put_license_profile_route(payload: LicenseKeyUpdate) -> LicenseProfileResponse:
+    from license_validator import LicenseValidationError, save_license_key
+
+    try:
+        profile = save_license_key(payload.license_key)
+    except LicenseValidationError as exc:
+        raise HTTPException(status_code=400, detail=exc.message) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    logger.info("[HTTP API → PUT /license] License key updated.")
+    return LicenseProfileResponse(**profile)
 
 
 @app.get("/agent-settings", response_model=AgentSettingsResponse)
@@ -2368,10 +2403,14 @@ async def v1_upload_file(
     client: ApiClientContext = Depends(_authenticate_api_key),
 ) -> ApiUploadResponse:
     try:
-        from license_validator import InvoiceQuotaExceeded, ensure_invoice_quota_available
+        from license_validator import (
+            InvoiceQuotaExceeded,
+            LicenseInactiveError,
+            ensure_invoice_quota_available,
+        )
 
         ensure_invoice_quota_available()
-    except InvoiceQuotaExceeded as exc:
+    except (InvoiceQuotaExceeded, LicenseInactiveError) as exc:
         raise HTTPException(status_code=403, detail=exc.message) from exc
 
     ext = Path(file.filename or "").suffix.lower()
@@ -3078,10 +3117,14 @@ async def upload_invoice(file: UploadFile = File(...)) -> InvoiceSummary:
         raise HTTPException(status_code=400, detail=detail)
 
     try:
-        from license_validator import InvoiceQuotaExceeded, ensure_invoice_quota_available
+        from license_validator import (
+            InvoiceQuotaExceeded,
+            LicenseInactiveError,
+            ensure_invoice_quota_available,
+        )
 
         ensure_invoice_quota_available()
-    except InvoiceQuotaExceeded as exc:
+    except (InvoiceQuotaExceeded, LicenseInactiveError) as exc:
         logger.warning("[HTTP API → POST /upload] %s", exc.message)
         raise HTTPException(status_code=403, detail=exc.message) from exc
 

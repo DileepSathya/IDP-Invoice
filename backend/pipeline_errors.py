@@ -1,12 +1,9 @@
-"""Classify pipeline failures and read Gemini API key from .env for recovery."""
+"""Classify pipeline failures and read Gemini API key for watcher recovery."""
 
 from __future__ import annotations
 
-import re
 import socket
 from pathlib import Path
-
-from backend.app_paths import app_dir
 
 NETWORK_RETRY_SLEEP_SECONDS = 60
 NETWORK_MAX_RETRIES = 3
@@ -161,24 +158,10 @@ def wrap_pipeline_error(exc: BaseException) -> BaseException:
 
 
 def read_gemini_api_key_from_env_file() -> str:
-    """Read GEMINI_API_KEY / GOOGLE_API_KEY directly from .env (not os.environ)."""
-    env_path = app_dir() / ".env"
-    if not env_path.is_file():
+    """Read Gemini API key from MongoDB (legacy name kept for watcher recovery loop)."""
+    try:
+        from backend.agent_settings import read_gemini_api_key
+
+        return read_gemini_api_key()
+    except Exception:
         return ""
-
-    keys = ("GEMINI_API_KEY", "GOOGLE_API_KEY")
-    pattern = re.compile(r"^\s*({})\s*=\s*(.*)\s*$".format("|".join(keys)))
-    found: dict[str, str] = {}
-
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        match = pattern.match(line)
-        if not match:
-            continue
-        key_name = match.group(1)
-        value = match.group(2).strip().strip('"').strip("'")
-        found[key_name] = value
-
-    return (found.get("GEMINI_API_KEY") or found.get("GOOGLE_API_KEY") or "").strip()

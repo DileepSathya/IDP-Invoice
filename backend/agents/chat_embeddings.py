@@ -50,10 +50,11 @@ class _GeminiEmbedProvider:
     def __init__(self, model_name: str) -> None:
         from backend.agents.gemini_client import get_client
 
-        load_app_dotenv()
-        api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        from backend.agent_settings import read_gemini_api_key
+
+        api_key = read_gemini_api_key()
         if not api_key:
-            raise RuntimeError("GEMINI_API_KEY is required for Gemini embeddings.")
+            raise RuntimeError("Gemini API key is required for Gemini embeddings (Settings → AI).")
         self._model_name = model_name
         self._client = get_client(api_key=api_key)
         probe = self._embed_one("dimension probe")
@@ -134,7 +135,9 @@ def _resolve_provider_name() -> str:
             "[Chat embeddings] Unknown CHAT_EMBEDDING_PROVIDER=%r; using auto.",
             configured,
         )
-    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    from backend.agent_settings import read_gemini_api_key
+
+    api_key = read_gemini_api_key()
     prefer_gemini = (os.environ.get("CHAT_EMBEDDING_PREFER_GEMINI") or "").strip().lower() in {
         "1",
         "true",

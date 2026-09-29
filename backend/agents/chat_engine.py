@@ -174,7 +174,9 @@ def _try_structured_intent(question: str, session: dict[str, Any]) -> str | None
 
 
 def _gemini_available() -> bool:
-    load_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    from backend.agent_settings import read_gemini_api_key
+
+    load_key = read_gemini_api_key()
     offline_only = str(os.environ.get("CHAT_OFFLINE_ONLY", "")).strip().lower() in {"1", "true", "yes"}
     return bool(load_key) and not offline_only
 
@@ -224,14 +226,13 @@ def chat(
             answer = (
                 "⚠️ The AI assistant is temporarily unavailable.\n\n"
                 "This is likely due to a Gemini API error (quota exceeded, invalid key, or network issue).\n"
-                "Please check your GEMINI_API_KEY and quota at https://aistudio.google.com, then try again."
+                "Please check your Gemini API key (Settings → AI) and quota at https://aistudio.google.com, then try again."
             )
             mode = "gemini_error"
     else:
         answer = (
             "⚠️ The AI assistant is not configured.\n\n"
-            "GEMINI_API_KEY is missing from your .env file. "
-            "Please add it and restart the server."
+            "Save your Gemini API key under Settings → AI (stored in MongoDB)."
         )
         mode = "no_gemini_key"
 

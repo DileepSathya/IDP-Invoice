@@ -108,16 +108,14 @@ def _is_processing_active() -> bool:
 
 def _reload_env_and_track_gemini_key() -> str:
     global _known_gemini_api_key
-    from dotenv import load_dotenv
 
-    file_key = read_gemini_api_key_from_env_file()
-    if file_key != _known_gemini_api_key:
-        load_dotenv(app_dir() / ".env", override=True)
+    current_key = read_gemini_api_key_from_env_file()
+    if current_key != _known_gemini_api_key:
         logger.info(
-            "[Folder watcher] GEMINI_API_KEY changed in .env — Gemini recovery can retry quarantined files.",
+            "[Folder watcher] Gemini API key changed in Settings — Gemini recovery can retry quarantined files.",
         )
-        _known_gemini_api_key = file_key
-    return file_key
+        _known_gemini_api_key = current_key
+    return current_key
 
 
 def _process_file_with_network_retries(path: Path, *, run_id: str | None = None):
@@ -328,10 +326,14 @@ def _process_invoice_path(path: Path) -> None:
         return
 
     try:
-        from license_validator import InvoiceQuotaExceeded, ensure_invoice_quota_available
+        from license_validator import (
+            InvoiceQuotaExceeded,
+            LicenseInactiveError,
+            ensure_invoice_quota_available,
+        )
 
         ensure_invoice_quota_available()
-    except InvoiceQuotaExceeded as exc:
+    except (InvoiceQuotaExceeded, LicenseInactiveError) as exc:
         logger.error(
             "[Folder watcher → worker] %s Skipping file: %s",
             exc.message,
@@ -537,7 +539,7 @@ def _gemini_recovery_worker(q: "queue.Queue[Path]") -> None:
 
             logger.info(
                 "[Folder watcher → Gemini recovery] Cycle %s/%s — sleeping %ss, "
-                "then checking .env for GEMINI_API_KEY changes.",
+                "then checking Settings → AI for API key changes.",
                 cycle,
                 GEMINI_RECOVERY_MAX_CYCLES,
                 GEMINI_RECOVERY_SLEEP_SECONDS,
@@ -550,7 +552,7 @@ def _gemini_recovery_worker(q: "queue.Queue[Path]") -> None:
             if key_changed:
                 previous_key = current_key
                 logger.info(
-                    "[Folder watcher → Gemini recovery] GEMINI_API_KEY changed — "
+                    "[Folder watcher → Gemini recovery] Gemini API key changed — "
                     "re-queuing quarantined files.",
                 )
             else:
@@ -650,6 +652,19 @@ def _worker(q: "queue.Queue[Path]") -> None:
 def main() -> None:
     configure_logging()
     ensure_invoice_data_layout()
+
+    try:
+        from license_validator import refresh_license_cache
+
+        refresh_license_cache(force=True)
+    except Exception as exc:
+        logger.debug("[Folder watcher] Initial license refresh skipped: %s", exc)
+
+    global _known_gemini_api_key
+    try:
+        _known_gemini_api_key = read_gemini_api_key_from_env_file()
+    except Exception as exc:
+        logger.debug("[Folder watcher] Initial AI settings load skipped: %s", exc)
 
     q: "queue.Queue[Path]" = queue.Queue()
     threading.Thread(target=_worker, args=(q,), daemon=True).start()

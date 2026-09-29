@@ -61,10 +61,10 @@ The Tally master refresh **scheduler runs inside `idp-api.exe`** (same process a
 
 ## First run (end user)
 
-1. Set `GEMINI_API_KEY` in `.env`
-2. Configure `tally-bridge\.env` (`TALLY_URL`, `TALLY_COMPANY`)
-3. Run **Start IDP Invoice.exe**
-4. Sign in at `http://127.0.0.1:8000/login` (`IDP_admin` / `idpadmin@123`)
+1. Run **Start IDP Invoice.exe** and sign in at `http://127.0.0.1:8000/login` (`IDP_admin` / `idpadmin@123`)
+2. **Settings → AI** — save Gemini API key (MongoDB)
+3. **Settings → Licensing** — paste license key (MongoDB)
+4. Configure `tally-bridge\.env` (`TALLY_URL`, `TALLY_COMPANY`)
 5. **Settings → Tally Master Data** — manual Refresh or **Scheduled** refresh (minutes); configure purchase ledger under Ledger Settings
 6. **ERP → Force Re-match** after a master refresh if scheduled rematch is off
 7. Open **Health** to verify services
@@ -140,10 +140,11 @@ access for the application itself. It installs to:
 ```
 
 It creates all MongoDB, invoice queue, and log directories, plus Start Menu and
-optional desktop shortcuts. Existing `.env`, `tally-bridge\.env`, `license.lic`,
-`invoice_count.enc`, `license_state.json`, MongoDB data, invoices, and logs are
-preserved during upgrades and uninstall. Immutable application directories are
-replaced on upgrade so removed modules and frontend assets cannot remain stale.
+optional desktop shortcuts. Existing `.env`, `tally-bridge\.env`, MongoDB
+license/AI settings, `invoice_count.enc`, `license_state.json`, MongoDB data,
+invoices, and logs are preserved during upgrades and uninstall. Immutable
+application directories are replaced on upgrade so removed modules and frontend
+assets cannot remain stale.
 
 ### Rebuild after future code changes
 
@@ -173,8 +174,8 @@ and validated.
 
 ### Configuration and customer upgrades
 
-- Put a customer `license.lic` in `dist\IDP-Invoice` before compiling if it
-  should be included in that customer's setup file.
+- License and Gemini API keys are configured after install via **Settings → Licensing**
+  and **Settings → AI** (stored in MongoDB, not shipped in the installer).
 - The setup copies `.env.example` as `.env` only on the first installation.
 - Installing a newer setup over the same location updates program binaries but
   retains customer configuration and operational data.

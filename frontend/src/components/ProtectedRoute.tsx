@@ -3,6 +3,7 @@ import { Navigate, useLocation } from "react-router-dom";
 import { ServerStartingCard } from "./ServerStartingCard";
 import { useServerReady } from "../hooks/useServerReady";
 import { fetchAuthStatus } from "../api";
+import { LicenseProfileProvider } from "../context/LicenseProfileContext";
 
 type Props = {
   children: React.ReactNode;
@@ -59,5 +60,5 @@ export const ProtectedRoute: React.FC<Props> = ({ children }) => {
     return <Navigate to="/login" replace state={{ from: location.pathname }} />;
   }
 
-  return <>{children}</>;
+  return <LicenseProfileProvider>{children}</LicenseProfileProvider>;
 };

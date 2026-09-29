@@ -1,8 +1,9 @@
 """
-Offline license validation for IDP Invoice (Windows / PyInstaller).
+License validation for IDP Invoice.
 
-Place license.lic next to the application exe (install root).
-invoice_count.enc is created automatically in the same folder.
+Signed license keys are stored in MongoDB (Settings → Licensing).
+Quota usage is reconciled against MongoDB invoice counts.
+Legacy license.lic files are migrated into MongoDB on first read.
 """
 
 from __future__ import annotations
@@ -40,6 +41,8 @@ UNLIMITED_PLANS = frozenset({"onetime"})
 VALID_PLANS = TIME_BASED_PLANS | COUNT_BASED_PLANS | UNLIMITED_PLANS
 
 _cached_payload: dict | None = None
+_cache_initialized = False
+_validation_error: str | None = None
 
 
 class InvoiceQuotaExceeded(Exception):
@@ -50,12 +53,31 @@ class InvoiceQuotaExceeded(Exception):
         self.message = message
 
 
+class LicenseValidationError(Exception):
+    """License key failed cryptographic or policy checks."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
+class LicenseInactiveError(Exception):
+    """No valid active license — invoice processing is restricted."""
+
+    def __init__(
+        self,
+        message: str = "No valid license. Add a license key under Settings → Licensing.",
+    ) -> None:
+        super().__init__(message)
+        self.message = message
+
+
 def _license_disabled() -> bool:
     return os.environ.get("IDP_SKIP_LICENSE", "").strip().lower() in {"1", "true", "yes"}
 
 
 def app_dir() -> Path:
-    """Portable install root (license.lic / invoice_count.enc) or project root (dev)."""
+    """Portable install root or project root (dev)."""
     if getattr(sys, "frozen", False):
         current = Path(sys.executable).resolve().parent
         for directory in [current, *current.parents]:
@@ -67,28 +89,16 @@ def app_dir() -> Path:
     return Path(__file__).resolve().parent
 
 
-def _fail(message: str) -> None:
-    print(message)
-    try:
-        input("\nPress Enter to close...")
-    except EOFError:
-        pass
-    sys.exit(1)
-
-
 def _load_public_key():
     from licensing import public_key_embed
 
     pem = (public_key_embed.PUBLIC_KEY_PEM or "").strip()
     if not pem:
-        _fail(
-            "License system is not configured (missing public key). "
-            "Contact support."
-        )
+        return None
     try:
         return serialization.load_pem_public_key(pem.encode("utf-8"))
     except Exception:
-        _fail("License configuration error. Contact support.")
+        return None
 
 
 def _license_path() -> Path:
@@ -97,10 +107,6 @@ def _license_path() -> Path:
 
 def _counter_path() -> Path:
     return app_dir() / _COUNTER_FILENAME
-
-
-def _license_state_path() -> Path:
-    return app_dir() / _LICENSE_STATE_FILENAME
 
 
 def _derive_aes_key(machine_id: str) -> bytes:
@@ -114,7 +120,6 @@ def _derive_aes_key(machine_id: str) -> bytes:
 
 
 def _try_read_counter(machine_id: str) -> int | None:
-    """Return decrypted count, or None if the file is missing or unreadable."""
     path = _counter_path()
     if not path.is_file():
         return None
@@ -148,7 +153,20 @@ def _write_counter(machine_id: str, count: int) -> None:
 
 
 def _load_license_state() -> dict:
-    path = _license_state_path()
+    try:
+        from backend.license_settings import get_period_state
+
+        state = get_period_state()
+        if state.get("periodKey"):
+            return {
+                "periodKey": state.get("periodKey"),
+                "issuedAt": state.get("issuedAt"),
+                "customerId": state.get("customerId"),
+            }
+    except Exception as exc:
+        logger.debug("MongoDB license period state unavailable: %s", exc)
+
+    path = app_dir() / _LICENSE_STATE_FILENAME
     if not path.is_file():
         return {}
     try:
@@ -159,20 +177,214 @@ def _load_license_state() -> dict:
 
 
 def _save_license_state(state: dict) -> None:
-    _license_state_path().write_text(
-        json.dumps(state, separators=(",", ":"), sort_keys=True),
-        encoding="utf-8",
-    )
+    try:
+        from backend.license_settings import save_period_state
+
+        save_period_state(
+            period_key=str(state.get("periodKey", "")),
+            issued_at=str(state.get("issuedAt", "")),
+            customer_id=str(state.get("customerId", "")),
+        )
+    except Exception as exc:
+        logger.debug("Could not persist license period state to MongoDB: %s", exc)
+
+    legacy_path = app_dir() / _LICENSE_STATE_FILENAME
+    try:
+        legacy_path.write_text(
+            json.dumps(state, separators=(",", ":"), sort_keys=True),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
 
 
 def _plan_name(payload: dict) -> str:
     return str(payload.get("plan", "")).strip().lower()
 
 
+def clear_license_cache() -> None:
+    global _cached_payload, _cache_initialized, _validation_error
+    _cached_payload = None
+    _cache_initialized = False
+    _validation_error = None
+
+
+def _parse_license_blob(raw: str) -> tuple[dict, bytes, bytes]:
+    normalized = "".join(str(raw or "").split())
+    if not normalized:
+        raise LicenseValidationError("License key is empty.")
+    try:
+        wrapper = json.loads(base64.b64decode(normalized).decode("utf-8"))
+        payload_bytes = base64.b64decode(wrapper["payload_b64"])
+        signature = base64.b64decode(wrapper["signature_b64"])
+        payload = json.loads(payload_bytes.decode("utf-8"))
+        return payload, payload_bytes, signature  # type: ignore[return-value]
+    except LicenseValidationError:
+        raise
+    except Exception as exc:
+        raise LicenseValidationError("License key is invalid or corrupted.") from exc
+
+
+def _validate_payload(payload: dict, payload_bytes: bytes, signature: bytes) -> dict:
+    public_key = _load_public_key()
+    if public_key is None:
+        raise LicenseValidationError(
+            "License system is not configured (missing public key). Contact support."
+        )
+    try:
+        public_key.verify(signature, payload_bytes, padding.PKCS1v15(), hashes.SHA256())
+    except InvalidSignature as exc:
+        raise LicenseValidationError("License invalid.") from exc
+    except Exception as exc:
+        raise LicenseValidationError("License invalid.") from exc
+
+    current_fp = machine_fingerprint()
+    licensed_fp = str(payload.get("machineId", "")).strip().lower()
+    if not licensed_fp or licensed_fp != current_fp.lower():
+        raise LicenseValidationError("License not valid for this machine.")
+
+    plan = _plan_name(payload)
+    if plan not in VALID_PLANS:
+        raise LicenseValidationError("License invalid.")
+
+    expires_raw = str(payload.get("expiresAt", "")).strip()
+    expires: date | None = None
+    if expires_raw:
+        try:
+            expires = date.fromisoformat(expires_raw)
+        except ValueError as exc:
+            raise LicenseValidationError("License invalid.") from exc
+
+    if plan in TIME_BASED_PLANS:
+        if expires is None:
+            raise LicenseValidationError("License invalid.")
+        if date.today() > expires:
+            raise LicenseValidationError("License expired. Please renew.")
+    elif plan == "quota":
+        try:
+            limit = int(payload.get("invoiceLimit", 0))
+        except (TypeError, ValueError) as exc:
+            raise LicenseValidationError("License invalid.") from exc
+        if limit <= 0:
+            raise LicenseValidationError("License invalid.")
+        issued_raw = str(payload.get("issuedAt", "")).strip()
+        try:
+            parse_license_timestamp(issued_raw)
+        except ValueError as exc:
+            raise LicenseValidationError("License invalid.") from exc
+        if expires is not None and date.today() > expires:
+            raise LicenseValidationError("License expired. Please renew.")
+    elif plan == "onetime":
+        pass
+
+    return payload
+
+
+def _maybe_migrate_license_file_to_mongodb() -> str | None:
+    try:
+        from backend.license_settings import get_stored_license_key, save_license_key
+
+        if get_stored_license_key():
+            return None
+        lic_path = _license_path()
+        if not lic_path.is_file():
+            return None
+        raw = lic_path.read_text(encoding="utf-8").strip()
+        if not raw:
+            return None
+        save_license_key(raw)
+        logger.info("Migrated legacy license.lic into MongoDB.")
+        return "".join(raw.split())
+    except Exception as exc:
+        logger.debug("Legacy license.lic migration skipped: %s", exc)
+        return None
+
+
+def _load_license_key_from_mongodb() -> tuple[str | None, bool]:
+    """Return (license_key, mongodb_reachable)."""
+    try:
+        from backend.license_settings import get_stored_license_key_with_status
+
+        key, db_ok = get_stored_license_key_with_status()
+        if not db_ok:
+            return None, False
+        if key:
+            return key, True
+        migrated = _maybe_migrate_license_file_to_mongodb()
+        return migrated, True
+    except Exception as exc:
+        logger.debug("Could not read license key from MongoDB: %s", exc)
+        return None, False
+
+
+def refresh_license_cache(*, force: bool = False) -> None:
+    """Load license key from MongoDB, validate, and update the in-memory cache."""
+    global _cached_payload, _cache_initialized, _validation_error
+
+    if _cache_initialized and not force:
+        return
+
+    if _license_disabled():
+        _cache_initialized = True
+        _cached_payload = {
+            "customerId": "DEV",
+            "machineId": machine_fingerprint(),
+            "plan": "dev",
+            "issuedAt": utc_now_iso(),
+            "expiresAt": "2099-12-31",
+            "invoiceLimit": 999_999_999,
+        }
+        _validation_error = None
+        return
+
+    raw_key, db_ok = _load_license_key_from_mongodb()
+    if not db_ok:
+        _cache_initialized = False
+        _cached_payload = None
+        _validation_error = "Could not load license from MongoDB. Will retry on next check."
+        return
+
+    if not raw_key:
+        # Do not cache "missing key" — key may be saved via Settings while this process runs.
+        _cache_initialized = False
+        _cached_payload = None
+        _validation_error = "No license key saved. Add one under Settings → Licensing."
+        return
+
+    try:
+        payload, payload_bytes, signature = _parse_license_blob(raw_key)
+        payload = _validate_payload(payload, payload_bytes, signature)
+    except LicenseValidationError as exc:
+        _cached_payload = None
+        _validation_error = exc.message
+        _cache_initialized = True
+        return
+
+    _cache_initialized = True
+
+    _cached_payload = payload
+    _validation_error = None
+    if _plan_name(payload) in COUNT_BASED_PLANS:
+        try:
+            _reconcile_quota_counter(payload)
+        except Exception as exc:
+            logger.warning("Quota reconcile after license refresh failed: %s", exc)
+
+
+def is_licensed() -> bool:
+    if _license_disabled():
+        return True
+    refresh_license_cache()
+    return _cached_payload is not None
+
+
 def _is_count_limited(payload: dict | None = None) -> bool:
     if _license_disabled():
         return False
-    data = payload or _load_validated_payload()
+    refresh_license_cache()
+    data = payload or _cached_payload
+    if data is None:
+        return False
     return _plan_name(data) in COUNT_BASED_PLANS
 
 
@@ -207,13 +419,6 @@ def _mongodb_invoice_count_since(period_start: datetime) -> int | None:
 
 
 def _reconcile_quota_counter(payload: dict) -> int:
-    """
-    Derive the effective invoice count for the current license period.
-
-    - New license period: count MongoDB since issuedAt (ignore stale .enc from old period).
-    - Same period: max(local .enc, MongoDB since issuedAt).
-    - Rewrites invoice_count.enc when out of sync.
-    """
     machine_id = str(payload.get("machineId", "")).strip().lower()
     period_start = _quota_period_start(payload)
     period_key = _quota_period_key(payload)
@@ -262,113 +467,47 @@ def _reconcile_quota_counter(payload: dict) -> int:
     return effective
 
 
-def _get_effective_invoice_count(payload: dict | None = None) -> int:
-    data = payload or _load_validated_payload()
-    if not _is_count_limited(data):
+def _get_effective_invoice_count(payload: dict) -> int:
+    if not _is_count_limited(payload):
         return 0
-    return _reconcile_quota_counter(data)
-
-
-def _parse_license_file(path: Path) -> tuple[dict, bytes, bytes]:
-    try:
-        raw = path.read_text(encoding="utf-8").strip()
-        wrapper = json.loads(base64.b64decode(raw).decode("utf-8"))
-        payload_bytes = base64.b64decode(wrapper["payload_b64"])
-        signature = base64.b64decode(wrapper["signature_b64"])
-        payload = json.loads(payload_bytes.decode("utf-8"))
-        return payload, payload_bytes, signature  # type: ignore[return-value]
-    except Exception:
-        _fail("License file is invalid or corrupted. Contact support.")
+    return _reconcile_quota_counter(payload)
 
 
 def _load_validated_payload() -> dict:
-    global _cached_payload
-    if _cached_payload is not None:
-        return _cached_payload
-
+    refresh_license_cache()
     if _license_disabled():
-        _cached_payload = {
-            "customerId": "DEV",
-            "machineId": machine_fingerprint(),
-            "plan": "dev",
-            "issuedAt": utc_now_iso(),
-            "expiresAt": "2099-12-31",
-            "invoiceLimit": 999_999_999,
-        }
-        return _cached_payload
-
-    lic_path = _license_path()
-    if not lic_path.is_file():
-        _fail("License file not found. Contact support.")
-
-    payload, payload_bytes, signature = _parse_license_file(lic_path)
-    public_key = _load_public_key()
-    try:
-        public_key.verify(signature, payload_bytes, padding.PKCS1v15(), hashes.SHA256())
-    except InvalidSignature:
-        _fail("License invalid.")
-    except Exception:
-        _fail("License invalid.")
-
-    current_fp = machine_fingerprint()
-    licensed_fp = str(payload.get("machineId", "")).strip().lower()
-    if not licensed_fp or licensed_fp != current_fp.lower():
-        _fail("License not valid for this machine.")
-
-    plan = _plan_name(payload)
-    if plan not in VALID_PLANS:
-        _fail("License invalid.")
-
-    expires_raw = str(payload.get("expiresAt", "")).strip()
-    expires: date | None = None
-    if expires_raw:
-        try:
-            expires = date.fromisoformat(expires_raw)
-        except ValueError:
-            _fail("License invalid.")
-
-    if plan in TIME_BASED_PLANS:
-        if expires is None:
-            _fail("License invalid.")
-        if date.today() > expires:
-            _fail("License expired. Please renew.")
-    elif plan == "quota":
-        try:
-            limit = int(payload.get("invoiceLimit", 0))
-        except (TypeError, ValueError):
-            _fail("License invalid.")
-        if limit <= 0:
-            _fail("License invalid.")
-        issued_raw = str(payload.get("issuedAt", "")).strip()
-        try:
-            parse_license_timestamp(issued_raw)
-        except ValueError:
-            _fail("License invalid.")
-        if expires is not None and date.today() > expires:
-            _fail("License expired. Please renew.")
-    elif plan == "onetime":
-        pass
-
-    _cached_payload = payload
-    if _is_count_limited(payload):
-        _reconcile_quota_counter(payload)
-    return payload
+        return _cached_payload  # type: ignore[return-value]
+    if _cached_payload is None:
+        raise LicenseInactiveError(_validation_error or "No valid license.")
+    return _cached_payload
 
 
 def validate_license() -> bool:
-    """Run all license checks. Exits the process on failure."""
+    """Refresh license state from MongoDB. Never exits the process."""
     try:
         from dotenv import load_dotenv
 
         load_dotenv(app_dir() / ".env", override=False)
     except Exception:
         pass
-    _load_validated_payload()
-    return True
+    refresh_license_cache(force=True)
+    return is_licensed()
+
+
+def save_license_key(license_key: str) -> dict:
+    """Validate, persist to MongoDB, refresh cache, and return the license profile."""
+    payload, payload_bytes, signature = _parse_license_blob(license_key)
+    _validate_payload(payload, payload_bytes, signature)
+
+    from backend.license_settings import save_license_key as persist_key
+
+    persist_key(license_key)
+    clear_license_cache()
+    refresh_license_cache(force=True)
+    return get_license_profile()
 
 
 def get_remaining_days() -> int | None:
-    """Days until expiry for time-based plans; None for other plan types."""
     payload = _load_validated_payload()
     plan = _plan_name(payload)
     if plan not in TIME_BASED_PLANS:
@@ -381,20 +520,26 @@ def get_remaining_days() -> int | None:
 
 
 def get_remaining_invoices() -> int:
-    payload = _load_validated_payload()
-    if _license_disabled() or not _is_count_limited(payload):
+    if _license_disabled():
         return 999_999_999
+    refresh_license_cache()
+    payload = _cached_payload
+    if payload is None or not _is_count_limited(payload):
+        return 999_999_999 if payload is not None else 0
     limit = int(payload.get("invoiceLimit", 0))
     count = _get_effective_invoice_count(payload)
     return max(0, limit - count)
 
 
 def get_license_welcome_message() -> str:
-    """Human-readable subscription status for launcher startup."""
     if _license_disabled():
         return "Development mode — license checks disabled."
 
-    payload = _load_validated_payload()
+    refresh_license_cache()
+    if _cached_payload is None:
+        return _validation_error or "No active license — add a key under Settings → Licensing."
+
+    payload = _cached_payload
     plan = _plan_name(payload)
     customer = str(payload.get("customerId", "")).strip()
     prefix = f"Licensed to {customer}. " if customer else ""
@@ -433,8 +578,29 @@ PLAN_LABELS = {
 }
 
 
+def _inactive_profile(message: str) -> dict:
+    return {
+        "plan": "none",
+        "planLabel": "No active license",
+        "customerId": "",
+        "issuedAt": None,
+        "expiresAt": None,
+        "remainingDays": None,
+        "invoiceLimit": None,
+        "invoicesUsed": None,
+        "invoicesRemaining": None,
+        "isUnlimited": False,
+        "licensed": False,
+        "validationError": message,
+        "machineFingerprint": machine_fingerprint(),
+        "statusMessage": message,
+    }
+
+
 def get_license_profile() -> dict:
     """Structured license details for the web UI (settings + dashboard banner)."""
+    refresh_license_cache(force=True)
+
     if _license_disabled():
         return {
             "plan": "dev",
@@ -447,10 +613,18 @@ def get_license_profile() -> dict:
             "invoicesUsed": None,
             "invoicesRemaining": None,
             "isUnlimited": True,
+            "licensed": True,
+            "validationError": None,
+            "machineFingerprint": machine_fingerprint(),
             "statusMessage": "Development mode — license checks disabled.",
         }
 
-    payload = _load_validated_payload()
+    if _cached_payload is None:
+        return _inactive_profile(
+            _validation_error or "No valid license. Add a key under Settings → Licensing."
+        )
+
+    payload = _cached_payload
     plan = _plan_name(payload)
     customer = str(payload.get("customerId", "")).strip()
     issued = str(payload.get("issuedAt", "")).strip() or None
@@ -468,6 +642,9 @@ def get_license_profile() -> dict:
         "invoicesUsed": None,
         "invoicesRemaining": None,
         "isUnlimited": plan in UNLIMITED_PLANS or plan in TIME_BASED_PLANS,
+        "licensed": True,
+        "validationError": None,
+        "machineFingerprint": machine_fingerprint(),
         "statusMessage": "License active.",
     }
 
@@ -492,10 +669,15 @@ def get_license_profile() -> dict:
 
 
 def ensure_invoice_quota_available() -> None:
-    """Raise InvoiceQuotaExceeded when no invoice slots remain (quota plan only)."""
-    if not _is_count_limited():
+    """Raise when invoice processing is not allowed (inactive license or quota exhausted)."""
+    if _license_disabled():
         return
-    if get_remaining_invoices() <= 0:
+    refresh_license_cache(force=True)
+    if _cached_payload is None:
+        raise LicenseInactiveError(
+            _validation_error or "No valid license. Add a license key under Settings → Licensing."
+        )
+    if _is_count_limited() and get_remaining_invoices() <= 0:
         raise InvoiceQuotaExceeded()
 
 
@@ -508,7 +690,7 @@ def increment_invoice_count() -> None:
 
     mongodb_count = _mongodb_invoice_count_since(_quota_period_start(payload))
     if mongodb_count is not None:
-        count = _reconcile_quota_counter(payload)  # sync enc from MongoDB
+        count = _reconcile_quota_counter(payload)
     else:
         count = (_try_read_counter(machine_id) or 0) + 1
         _write_counter(machine_id, count)

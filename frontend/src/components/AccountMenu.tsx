@@ -44,6 +44,11 @@ export const AccountMenu: React.FC = () => {
     };
   }, [open]);
 
+  const goToLicensing = () => {
+    setOpen(false);
+    navigate("/settings/licensing");
+  };
+
   const goToSettings = () => {
     setOpen(false);
     navigate("/settings");
@@ -80,6 +85,11 @@ export const AccountMenu: React.FC = () => {
             )}
           </div>
           <div className="account-menu-tabs account-menu-tabs-stacked account-menu-actions">
+            {profile && profile.licensed === false && (
+              <button type="button" className="account-menu-tab account-menu-tab-link" onClick={goToLicensing}>
+                Licensing <span className="account-menu-tab-arrow" aria-hidden="true">→</span>
+              </button>
+            )}
             <button type="button" className="account-menu-tab account-menu-tab-link" onClick={goToSettings}>
               Settings <span className="account-menu-tab-arrow" aria-hidden="true">→</span>
             </button>

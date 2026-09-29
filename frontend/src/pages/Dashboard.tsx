@@ -4,10 +4,8 @@ import {
   InvoiceSummary,
   InvoiceListResponse,
   SearchField,
-  LicenseProfile,
   fetchSystemHealth,
   SystemHealth,
-  fetchLicenseProfile,
   fetchPipelineStatus,
   fetchSearchSuggestions,
   fetchSearchValues,
@@ -22,8 +20,8 @@ import {
   deleteInvoiceLineItem,
   deleteInvoices,
 } from "../api";
-import { PlanBanner } from "../components/PlanBanner";
 import { MasterNameInput } from "../components/MasterNameInput";
+import { useLicenseProfile } from "../context/LicenseProfileContext";
 import {
   EMPTY_INVOICE_TAX_DETAILS,
   invoiceTaxDetailsToRows,
@@ -97,6 +95,7 @@ type EditableInvoiceField =
   | "round_off";
 
 export const Dashboard: React.FC = () => {
+  const { refreshLicense } = useLicenseProfile();
   const [searchParams, setSearchParams] = useSearchParams();
   const [allInvoices, setAllInvoices] = useState<InvoiceSummary[]>([]);
   const [invoices, setInvoices] = useState<InvoiceSummary[]>([]);
@@ -161,7 +160,6 @@ export const Dashboard: React.FC = () => {
   const [jsonEditorSaving, setJsonEditorSaving] = useState(false);
   const [saveConfirmOpen, setSaveConfirmOpen] = useState(false);
   const [saveComment, setSaveComment] = useState("");
-  const [licenseProfile, setLicenseProfile] = useState<LicenseProfile | null>(null);
   const [systemHealth, setSystemHealth] = useState<SystemHealth | null>(null);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
   const pipelineSnapshotRef = useRef<string | null>(null);
@@ -358,15 +356,6 @@ export const Dashboard: React.FC = () => {
     }
   }, [startDate, endDate, fileStatusFilter, searchField, searchValue, showHitlOnly]);
 
-  const loadLicenseProfile = async () => {
-    try {
-      const data = await fetchLicenseProfile();
-      setLicenseProfile(data);
-    } catch {
-      // Non-blocking: dashboard still works if license endpoint fails.
-    }
-  };
-
   const loadSystemHealth = async () => {
     try {
       const data = await fetchSystemHealth();
@@ -509,7 +498,7 @@ export const Dashboard: React.FC = () => {
     window.scrollTo({ top: 0, left: 0, behavior: "auto" });
     pipelineSnapshotRef.current = null;
     void loadInvoices();
-    void loadLicenseProfile();
+    void refreshLicense();
     void loadSystemHealth();
   }, []);
 
@@ -554,7 +543,7 @@ export const Dashboard: React.FC = () => {
         pipelineSnapshotRef.current = snapshot;
         await loadInvoices({ silent: true });
         if (!cancelled) {
-          void loadLicenseProfile();
+          void refreshLicense();
         }
       } catch {
         // Background poll — keep the current table if a refresh fails.
@@ -585,7 +574,7 @@ export const Dashboard: React.FC = () => {
       setStatus(
         "2) Invoice processed and saved to MongoDB.\n3) Table below is refreshed with the new record.",
       );
-      void loadLicenseProfile();
+      void refreshLicense();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Upload failed");
       setStatus(null);
@@ -969,8 +958,6 @@ export const Dashboard: React.FC = () => {
 
   return (
     <div className="panel">
-      {licenseProfile && <PlanBanner profile={licenseProfile} />}
-
       {systemHealth && systemHealth.overall !== "ok" && (
         <div className="alert alert-error health-home-alert">
           <div>

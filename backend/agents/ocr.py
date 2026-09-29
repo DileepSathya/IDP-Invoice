@@ -269,10 +269,9 @@ def _gemini_extract_invoice_json(
 
     logger.info("[Gemini] Start extraction")
 
-    # The Settings → AI agent pane writes straight into .env (see
-    # backend/agent_settings.py), so this already picks up a key saved from
-    # the UI — no separate lookup needed.
-    api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+    from backend.agent_settings import read_gemini_api_key
+
+    api_key = read_gemini_api_key()
     if not api_key:
         logger.warning("[Gemini] API key missing → skipping extraction")
         return "", None, None, None, None, None, None, None

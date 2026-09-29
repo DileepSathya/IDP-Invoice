@@ -27,18 +27,21 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────────────────────
 
 _gemini_model = None
+_gemini_bound_api_key: str | None = None
 
 
 def _get_gemini():
-    global _gemini_model
-    if _gemini_model is None:
-        from backend.agents.gemini_client import get_model
+    global _gemini_model, _gemini_bound_api_key
+    from backend.agent_settings import read_gemini_api_key
+    from backend.agents.gemini_client import get_model
 
-        api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY") or ""
-        if not api_key:
-            raise RuntimeError("GEMINI_API_KEY is not set.")
+    api_key = read_gemini_api_key()
+    if not api_key:
+        raise RuntimeError("Gemini API key is not set. Configure it under Settings → AI.")
+    if _gemini_model is None or _gemini_bound_api_key != api_key:
         model_name = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
         _gemini_model = get_model(api_key=api_key, model_name=model_name)
+        _gemini_bound_api_key = api_key
     return _gemini_model
 
 

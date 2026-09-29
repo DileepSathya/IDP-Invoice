@@ -48,7 +48,10 @@ export const Settings: React.FC = () => {
     <section className="settings-page-content" aria-labelledby="ai-settings-title">
       <div className="settings-content-header">
         <h3 id="ai-settings-title">AI</h3>
-        <p>Select the model used for invoice extraction and provide its API key.</p>
+        <p>
+          Select the model used for invoice extraction and provide its API key. Settings are stored
+          in MongoDB and apply immediately to uploads and the folder watcher.
+        </p>
       </div>
       {loading && <p className="settings-loading">Loading AI settings…</p>}
       {error && <div className="alert alert-error">{error}</div>}

@@ -1,5 +1,6 @@
 export const settingsNavigation = [
   { id: "ai", label: "AI", to: "/settings" },
+  { id: "licensing", label: "Licensing", to: "/settings/licensing" },
   { id: "notifications", label: "Notification Service", to: "/settings/notifications" },
   {
     id: "erp",
