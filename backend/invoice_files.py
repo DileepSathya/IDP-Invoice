@@ -36,7 +36,7 @@ GEMINI_API_ERROR_DIR = _invoice_dir(
 COMPLETED_DIR = _invoice_dir("COMPLETED_DIR", "./invoices_data/Completed", "UPLOADS_DIR")
 # Merged duplicate pages are moved here so HITL_pending folder counts stay accurate.
 MERGED_SOURCES_DIR = _invoice_dir("MERGED_SOURCES_DIR", "./invoices_data/merged_sources")
-# UI / API uploads only — not watched by the folder watcher (avoids duplicate OCR).
+# Legacy folder (unused for new uploads; watcher-only queue uses to_be_processed).
 API_STAGING_DIR = _invoice_dir("API_STAGING_DIR", "./invoices_data/_api_staging")
 
 # Legacy folders (static file lookup only)
@@ -69,13 +69,27 @@ def timestamped_filename(stem: str, ext: str) -> str:
     return f"{stem}_{ts}{suffix}"
 
 
-def staging_path_for_upload(filename: str) -> Path:
-    """Private staging path for UI/API uploads (not watched by the folder watcher)."""
+def queue_path_for_upload(filename: str) -> Path:
+    """Path under to_be_processed for UI/API uploads (picked up by the folder watcher)."""
     ensure_invoice_data_layout()
     path = Path(filename)
     stem = path.stem or "file"
     ext = path.suffix or ""
-    return (API_STAGING_DIR / timestamped_filename(stem, ext)).resolve()
+    return (TO_BE_PROCESSED_DIR / timestamped_filename(stem, ext)).resolve()
+
+
+def staging_path_for_upload(filename: str) -> Path:
+    """Deprecated alias — use queue_path_for_upload."""
+    return queue_path_for_upload(filename)
+
+
+def write_bytes_to_processing_queue(filename: str, content: bytes) -> Path:
+    """Atomically place a file in to_be_processed for the watcher."""
+    dest = queue_path_for_upload(filename)
+    part = dest.with_name(dest.name + ".part")
+    part.write_bytes(content)
+    part.replace(dest)
+    return dest
 
 
 def destination_dir(*, file_status: str, status: int, pipeline_failed: bool) -> Path:

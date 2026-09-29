@@ -245,7 +245,27 @@ export async function fetchInvoices(
   return res.json();
 }
 
-export async function uploadInvoice(file: File): Promise<InvoiceSummary> {
+export type UploadQueuedResponse = {
+  status: string;
+  queue_file_name: string;
+  queue_path: string;
+  message?: string;
+};
+
+function invoiceMatchesQueueFileName(
+  inv: InvoiceSummary,
+  queueFileName: string,
+): boolean {
+  const needle = queueFileName.toLowerCase();
+  const paths = [
+    inv.uploaded_file_path,
+    inv.file_path,
+    ...(inv.source_files ?? []),
+  ].filter(Boolean) as string[];
+  return paths.some((p) => p.toLowerCase().includes(needle));
+}
+
+export async function uploadInvoice(file: File): Promise<UploadQueuedResponse> {
   const form = new FormData();
   form.append("file", file);
 
@@ -258,6 +278,31 @@ export async function uploadInvoice(file: File): Promise<InvoiceSummary> {
     throw new Error(msg || `Upload failed (${res.status})`);
   }
   return res.json();
+}
+
+export async function waitForQueuedInvoice(
+  queueFileName: string,
+  options?: { timeoutMs?: number; pollMs?: number },
+): Promise<InvoiceSummary> {
+  const timeoutMs = options?.timeoutMs ?? 600_000;
+  const pollMs = options?.pollMs ?? 2_000;
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    const { items } = await fetchInvoices({});
+    const match = items.find((inv) =>
+      invoiceMatchesQueueFileName(inv, queueFileName),
+    );
+    if (match) {
+      return match;
+    }
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+  }
+
+  throw new Error(
+    "Timed out waiting for the folder watcher to finish processing this upload. " +
+      "Check Health or the ERROR / gemini_api_error folders.",
+  );
 }
 
 export type InvoiceUpdatePayload = Partial<{

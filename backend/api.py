@@ -16,7 +16,7 @@ from urllib import request as urllib_request
 from urllib import error as urllib_error
 
 from bson import ObjectId
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -49,11 +49,9 @@ from backend.hitl_status import (
 )
 from backend.invoice_files import (
     ensure_invoice_data_layout,
-    finalize_invoice_file,
-    move_to_gemini_api_error,
     relocate_after_hitl_processed,
     resolve_invoice_file,
-    staging_path_for_upload,
+    write_bytes_to_processing_queue,
 )
 from backend.agents.chat_engine import chat as run_chat, get_suggestions
 from backend.agents.chat_sessions import get_or_create_session, load_session
@@ -63,13 +61,9 @@ from backend.agents.database import (
     get_jobs_collection,
     get_pipeline_error_counts,
     get_webhook_attempts_collection,
-    link_gemini_metrics_run,
-    record_pipeline_telemetry,
-    store_invoice_result,
 )
-from backend.agents.ocr import ALLOWED_EXTS, process_file
+from backend.agents.ocr import ALLOWED_EXTS
 from backend.app_logging import configure_logging
-from backend.pipeline_errors import is_gemini_api_error, is_network_error
 
 from datetime import datetime, date
 
@@ -257,6 +251,13 @@ class ApiUploadResponse(BaseModel):
     webhook_enabled: bool = False
     callback_url: Optional[str] = None
     callback_events: List[str] = Field(default_factory=list)
+
+
+class UploadQueuedResponse(BaseModel):
+    status: str = "queued"
+    queue_file_name: str
+    queue_path: str
+    message: str = "File queued in to_be_processed for the folder watcher."
 
 
 class ApiJobStatusResponse(BaseModel):
@@ -597,222 +598,6 @@ def _send_job_webhook_if_enabled(
         tenant_id=tenant_id,
         request_id=request_id,
     )
-
-
-def _process_job(
-    job_id: str,
-    tenant_id: str,
-    file_path: str,
-    request_id: Optional[str],
-) -> None:
-    jobs = get_jobs_collection()
-    invoices = get_invoices_collection()
-    file_received_time = datetime.utcnow()
-    file_ext = Path(file_path).suffix.lower().lstrip(".")
-    file_size = 0
-    try:
-        file_size = Path(file_path).stat().st_size
-    except Exception:
-        file_size = 0
-    started_at = datetime.utcnow()
-    jobs.update_one(
-        {"job_id": job_id, "tenant_id": tenant_id},
-        {"$set": {"status": "processing", "started_at": started_at}},
-    )
-    logger.info(
-        "job_started request_id=%s tenant_id=%s job_id=%s file_path=%s",
-        request_id,
-        tenant_id,
-        job_id,
-        file_path,
-    )
-    staging_path = Path(file_path)
-    try:
-        from license_validator import (
-            InvoiceQuotaExceeded,
-            LicenseInactiveError,
-            ensure_invoice_quota_available,
-        )
-
-        ensure_invoice_quota_available()
-        ocr_result = process_file(file_path, run_id=job_id)
-        gemini_json_norm: dict[str, Any] = dict(ocr_result.gemini_json or {})
-        invoice_number = gemini_json_norm.get("invoice_number") or gemini_json_norm.get("invoice")
-        invoice_number_norm = str(invoice_number).strip() if invoice_number is not None else ""
-        file_status = "error" if not invoice_number_norm else "healthy file"
-        _, status_value = pipeline_lifecycle_status(gemini_json_norm, file_status=file_status)
-        final_path = finalize_invoice_file(
-            staging_path,
-            file_status=file_status,
-            status=status_value,
-            pipeline_failed=False,
-        )
-        inserted_id = store_invoice_result(
-            file_path=str(final_path),
-            uploaded_file_path=str(final_path),
-            ocr_text=ocr_result.ocr_text,
-            gemini_model=ocr_result.gemini_model or (os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"),
-            gemini_json=gemini_json_norm,
-            gemini_raw_text=ocr_result.gemini_raw_text,
-            file_status=file_status,
-        )
-        link_gemini_metrics_run(run_id=job_id, file_id=inserted_id, tenant_id=tenant_id)
-        invoices.update_one(
-            {"_id": ObjectId(inserted_id)},
-            {"$set": {"tenant_id": tenant_id, "job_id": job_id}},
-        )
-        try:
-            hitl_value, _ = _sync_hitl_and_status(
-                invoices,
-                ObjectId(inserted_id),
-                gemini_json_norm,
-                uploaded_file_path=str(final_path),
-            )
-            invoices.update_one(
-                {"_id": ObjectId(inserted_id)},
-                {
-                    "$set": {
-                        "gemini.json.additional_fields.HITL": hitl_value,
-                        "gemini.json.additional_fields.human_processed": False,
-                        "gemini.json.additional_fields.status": status_value,
-                    }
-                },
-            )
-        except Exception:
-            pass
-        from license_validator import increment_invoice_count
-
-        increment_invoice_count()
-        completed_at = datetime.utcnow()
-        record_pipeline_telemetry(
-            {
-                "run_id": job_id,
-                "source": "api_v1",
-                "file_id": inserted_id,
-                "tenant_id": tenant_id,
-                "file_name": final_path.name,
-                "file_size": file_size,
-                "file_type": file_ext,
-                "file_received_time": file_received_time,
-                "preprocessing_start_time": ocr_result.preprocessing_start_time,
-                "preprocessing_end_time": ocr_result.preprocessing_end_time,
-                "ocr_start_time": ocr_result.ocr_start_time,
-                "ocr_end_time": ocr_result.ocr_end_time,
-                "gemini_start_time": ocr_result.gemini_start_time,
-                "gemini_end_time": ocr_result.gemini_end_time,
-                "db_insert_time": completed_at,
-                "preprocessing_latency": ocr_result.preprocessing_latency,
-                "ocr_latency": ocr_result.ocr_latency,
-                "gemini_latency": ocr_result.gemini_latency,
-                "gemini_prompt_tokens": ocr_result.gemini_prompt_tokens,
-                "gemini_output_tokens": ocr_result.gemini_output_tokens,
-                "gemini_total_tokens": ocr_result.gemini_total_tokens,
-                "gemini_thoughts_tokens": ocr_result.gemini_thoughts_tokens,
-                "gemini_cached_content_tokens": ocr_result.gemini_cached_content_tokens,
-                "gemini_model": ocr_result.gemini_model,
-                "total_pipeline_latency": (completed_at - file_received_time).total_seconds(),
-                "status": "success",
-                "error_stage": None,
-                "error_message": None,
-            }
-        )
-        jobs.update_one(
-            {"job_id": job_id, "tenant_id": tenant_id},
-            {
-                "$set": {
-                    "status": "completed",
-                    "invoice_id": inserted_id,
-                    "file_status": file_status,
-                    "completed_at": completed_at,
-                }
-            },
-        )
-        logger.info(
-            "job_completed request_id=%s tenant_id=%s job_id=%s invoice_id=%s",
-            request_id,
-            tenant_id,
-            job_id,
-            inserted_id,
-        )
-        _send_job_webhook_if_enabled(
-            job_id=job_id,
-            tenant_id=tenant_id,
-            event="job.completed",
-            request_id=request_id,
-            invoice_id=inserted_id,
-            file_status=file_status,
-            error_message=None,
-        )
-    except Exception as e:
-        from license_validator import InvoiceQuotaExceeded, LicenseInactiveError
-
-        gemini_api_failure = is_gemini_api_error(e)
-        if staging_path.is_file():
-            try:
-                if gemini_api_failure:
-                    move_to_gemini_api_error(staging_path)
-                else:
-                    finalize_invoice_file(
-                        staging_path,
-                        file_status="error",
-                        status=0,
-                        pipeline_failed=True,
-                    )
-            except Exception:
-                pass
-        if isinstance(e, (InvoiceQuotaExceeded, LicenseInactiveError)):
-            error_stage = "license"
-        elif gemini_api_failure:
-            error_stage = "gemini_quota"
-        elif is_network_error(e):
-            error_stage = "network"
-        else:
-            error_stage = "pipeline"
-        record_pipeline_telemetry(
-            {
-                "run_id": job_id,
-                "source": "api_v1",
-                "file_id": None,
-                "tenant_id": tenant_id,
-                "file_name": staging_path.name,
-                "file_size": file_size,
-                "file_type": file_ext,
-                "file_received_time": file_received_time,
-                "status": "error",
-                "error_stage": error_stage,
-                "error_message": str(e),
-                "total_pipeline_latency": (datetime.utcnow() - file_received_time).total_seconds(),
-            }
-        )
-        jobs.update_one(
-            {"job_id": job_id, "tenant_id": tenant_id},
-            {"$set": {"status": "failed", "error": str(e), "completed_at": datetime.utcnow()}},
-        )
-        if isinstance(e, (InvoiceQuotaExceeded, LicenseInactiveError)):
-            logger.warning(
-                "job_failed request_id=%s tenant_id=%s job_id=%s error=%s",
-                request_id,
-                tenant_id,
-                job_id,
-                e,
-            )
-        else:
-            logger.exception(
-                "job_failed request_id=%s tenant_id=%s job_id=%s error=%s",
-                request_id,
-                tenant_id,
-                job_id,
-                e,
-            )
-        _send_job_webhook_if_enabled(
-            job_id=job_id,
-            tenant_id=tenant_id,
-            event="job.failed",
-            request_id=request_id,
-            invoice_id=None,
-            file_status=None,
-            error_message=str(e),
-        )
 
 
 class InvoiceSummary(BaseModel):
@@ -2394,7 +2179,6 @@ def force_tally_sync_route() -> TallySyncStartResponse:
 @app.post("/v1/files", response_model=ApiUploadResponse, status_code=202)
 async def v1_upload_file(
     request: Request,
-    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     external_ref: Optional[str] = Form(default=None),
     callback_url: Optional[str] = Form(default=None),
@@ -2427,8 +2211,8 @@ async def v1_upload_file(
             detail=f"File too large. Max allowed bytes: {MAX_UPLOAD_BYTES}",
         )
 
-    target_path = staging_path_for_upload(file.filename or f"file{ext}")
-    target_path.write_bytes(content)
+    target_path = write_bytes_to_processing_queue(file.filename or f"file{ext}", content)
+    queue_path = str(target_path.resolve())
 
     job_id = str(uuid4())
     jobs = get_jobs_collection()
@@ -2450,7 +2234,9 @@ async def v1_upload_file(
             "status": "queued",
             "original_filename": file.filename,
             "external_ref": str(external_ref).strip() if external_ref else None,
-            "uploaded_file_path": str(target_path),
+            "uploaded_file_path": queue_path,
+            "queue_path": queue_path,
+            "queue_file_name": target_path.name,
             "request_id": getattr(request.state, "request_id", None),
             "callback_url": callback_url_value,
             "callback_events": callback_events_value,
@@ -2461,12 +2247,12 @@ async def v1_upload_file(
         }
     )
 
-    background_tasks.add_task(
-        _process_job,
-        job_id,
-        client.tenant_id,
-        str(target_path),
+    logger.info(
+        "job_queued request_id=%s tenant_id=%s job_id=%s queue_path=%s",
         getattr(request.state, "request_id", None),
+        client.tenant_id,
+        job_id,
+        queue_path,
     )
     return ApiUploadResponse(
         job_id=job_id,
@@ -3099,12 +2885,11 @@ def update_invoice_json_editor(invoice_id: str, payload: InvoiceJsonEditorUpdate
     return _invoice_summary_row_from_doc(doc, line_item_index=None)
 
 
-@app.post("/upload", response_model=InvoiceSummary)
-async def upload_invoice(file: UploadFile = File(...)) -> InvoiceSummary:
+@app.post("/upload", response_model=UploadQueuedResponse, status_code=202)
+async def upload_invoice(file: UploadFile = File(...)) -> UploadQueuedResponse:
     configure_logging()
     logger.info(
-        "[HTTP API → POST /upload] Upload received (FastAPI). Running the same OCR + Gemini "
-        "pipeline as the to_be_processed folder watcher.",
+        "[HTTP API → POST /upload] Upload received — queuing in to_be_processed for folder watcher.",
     )
     if not is_agent_configured():
         missing = missing_agent_settings()
@@ -3135,268 +2920,22 @@ async def upload_invoice(file: UploadFile = File(...)) -> InvoiceSummary:
             detail=f"Unsupported file type: {ext}. Allowed: {sorted(ALLOWED_EXTS)}",
         )
 
-    staging_path = staging_path_for_upload(file.filename or f"file{ext}")
-    run_id = str(uuid4())
-    file_received_time = datetime.utcnow()
-    file_size = 0
-    file_type = ext.lstrip(".")
-
     content = await file.read()
-    file_size = len(content)
-    staging_path.write_bytes(content)
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large. Max allowed bytes: {MAX_UPLOAD_BYTES}",
+        )
+
+    target_path = write_bytes_to_processing_queue(file.filename or f"file{ext}", content)
     logger.info(
-        "[HTTP API → POST /upload] Staged in API staging (not watched) for pipeline: %s (%s bytes).",
-        staging_path,
+        "[HTTP API → POST /upload] Queued for watcher: %s (%s bytes).",
+        target_path,
         len(content),
     )
-    try:
-        ocr_result = process_file(str(staging_path), run_id=run_id)
-    except Exception as e:
-        # Gemini API failures (invalid/expired key, quota, rate limit, etc.) go
-        # to gemini_api_error/ instead of ERROR/ so the folder watcher's
-        # recovery loop can automatically retry them once the key/quota issue
-        # is fixed — matches how the background watcher already handles this
-        # (see _handle_gemini_api_failure in backend/agents/watch_raw.py).
-        # Everything else (bad file, OCR failure, etc.) is not retryable the
-        # same way, so it still goes to ERROR/ as before.
-        gemini_api_failure = is_gemini_api_error(e)
-        network_failure = not gemini_api_failure and is_network_error(e)
-
-        if staging_path.is_file():
-            try:
-                if gemini_api_failure:
-                    move_to_gemini_api_error(staging_path)
-                else:
-                    finalize_invoice_file(
-                        staging_path,
-                        file_status="error",
-                        status=0,
-                        pipeline_failed=True,
-                    )
-            except Exception:
-                pass
-        if gemini_api_failure:
-            upload_error_stage = "gemini_quota"
-        elif network_failure:
-            upload_error_stage = "network"
-        else:
-            upload_error_stage = "ocr"
-        record_pipeline_telemetry(
-            {
-                "run_id": run_id,
-                "source": "api",
-                "file_id": None,
-                "file_name": staging_path.name,
-                "file_size": file_size,
-                "file_type": file_type,
-                "file_received_time": file_received_time,
-                "preprocessing_start_time": None,
-                "preprocessing_end_time": None,
-                "ocr_start_time": None,
-                "ocr_end_time": None,
-                "gemini_start_time": None,
-                "gemini_end_time": None,
-                "db_insert_time": None,
-                "preprocessing_latency": None,
-                "ocr_latency": None,
-                "gemini_latency": None,
-                "gemini_prompt_tokens": None,
-                "gemini_output_tokens": None,
-                "gemini_total_tokens": None,
-                "gemini_thoughts_tokens": None,
-                "gemini_cached_content_tokens": None,
-                "gemini_model": os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash",
-                "total_pipeline_latency": (datetime.utcnow() - file_received_time).total_seconds(),
-                "status": "error",
-                "error_stage": upload_error_stage,
-                "error_message": str(e),
-            }
-        )
-        if gemini_api_failure:
-            raise HTTPException(
-                status_code=502,
-                detail=(
-                    f"Gemini API error: {e}. The file has been moved to the Gemini "
-                    "retry queue and will be reprocessed automatically once the API "
-                    "key/quota issue is fixed."
-                ),
-            ) from e
-        raise HTTPException(status_code=500, detail=f"OCR/Gemini failed: {e}") from e
-
-    gemini_json_norm: dict[str, Any] = dict(ocr_result.gemini_json or {})
-
-    gemini_json = gemini_json_norm
-    invoice_number = gemini_json.get("invoice_number") or gemini_json.get("invoice")
-    invoice_number_norm = str(invoice_number).strip() if invoice_number is not None else ""
-    file_status = "error" if not invoice_number_norm else "healthy file"
-
-    _, status_value = pipeline_lifecycle_status(gemini_json, file_status=file_status)
-    final_path = finalize_invoice_file(
-        staging_path,
-        file_status=file_status,
-        status=status_value,
-        pipeline_failed=False,
-    )
-    if file_status == "error":
-        logger.warning(
-            "[HTTP API → POST /upload] No invoice number in extraction; file moved to ERROR: %s",
-            final_path,
-        )
-
-    logger.info(
-        "[HTTP API → POST /upload] Persisting result to MongoDB via store_invoice_result.",
-    )
-    try:
-        inserted_id = store_invoice_result(
-            file_path=str(final_path),
-            uploaded_file_path=str(final_path),
-            ocr_text=ocr_result.ocr_text,
-            gemini_model=ocr_result.gemini_model or (os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"),
-            gemini_json=gemini_json_norm,
-            gemini_raw_text=ocr_result.gemini_raw_text,
-            file_status=file_status,
-        )
-        link_gemini_metrics_run(run_id=run_id, file_id=inserted_id)
-    except Exception as e:
-        record_pipeline_telemetry(
-            {
-                "run_id": run_id,
-                "source": "api",
-                "file_id": None,
-                "file_name": final_path.name,
-                "file_size": file_size,
-                "file_type": file_type,
-                "file_received_time": file_received_time,
-                "preprocessing_start_time": ocr_result.preprocessing_start_time,
-                "preprocessing_end_time": ocr_result.preprocessing_end_time,
-                "ocr_start_time": ocr_result.ocr_start_time,
-                "ocr_end_time": ocr_result.ocr_end_time,
-                "gemini_start_time": ocr_result.gemini_start_time,
-                "gemini_end_time": ocr_result.gemini_end_time,
-                "db_insert_time": None,
-                "preprocessing_latency": ocr_result.preprocessing_latency,
-                "ocr_latency": ocr_result.ocr_latency,
-                "gemini_latency": ocr_result.gemini_latency,
-                "gemini_prompt_tokens": ocr_result.gemini_prompt_tokens,
-                "gemini_output_tokens": ocr_result.gemini_output_tokens,
-                "gemini_total_tokens": ocr_result.gemini_total_tokens,
-                "gemini_thoughts_tokens": ocr_result.gemini_thoughts_tokens,
-                "gemini_cached_content_tokens": ocr_result.gemini_cached_content_tokens,
-                "gemini_model": ocr_result.gemini_model,
-                "total_pipeline_latency": (datetime.utcnow() - file_received_time).total_seconds(),
-                "status": "error",
-                "error_stage": "db",
-                "error_message": str(e),
-            }
-        )
-        raise
-    # Immediately sync HITL lifecycle fields on new upload to avoid telemetry drift.
-    try:
-        coll = get_invoices_collection()
-        _sync_hitl_and_status(
-            coll,
-            ObjectId(inserted_id),
-            gemini_json_norm,
-            uploaded_file_path=str(final_path),
-        )
-        from backend.invoice_merge import merge_and_resync_after_insert
-
-        inserted_id = merge_and_resync_after_insert(coll, inserted_id)
-    except Exception as e:
-        logger.warning("Failed to sync HITL/status immediately after upload insert: %s", e)
-    from license_validator import increment_invoice_count
-
-    increment_invoice_count()
-    logger.info(
-        "[HTTP API → POST /upload] Completed. New invoice id=%s | file_status=%s",
-        inserted_id,
-        file_status,
-    )
-    db_insert_time = datetime.utcnow()
-    record_pipeline_telemetry(
-        {
-            "run_id": run_id,
-            "source": "api",
-            "file_id": inserted_id,
-            "file_name": final_path.name,
-            "file_size": file_size,
-            "file_type": file_type,
-            "file_received_time": file_received_time,
-            "preprocessing_start_time": ocr_result.preprocessing_start_time,
-            "preprocessing_end_time": ocr_result.preprocessing_end_time,
-            "ocr_start_time": ocr_result.ocr_start_time,
-            "ocr_end_time": ocr_result.ocr_end_time,
-            "gemini_start_time": ocr_result.gemini_start_time,
-            "gemini_end_time": ocr_result.gemini_end_time,
-            "db_insert_time": db_insert_time,
-            "preprocessing_latency": ocr_result.preprocessing_latency,
-            "ocr_latency": ocr_result.ocr_latency,
-            "gemini_latency": ocr_result.gemini_latency,
-            "gemini_prompt_tokens": ocr_result.gemini_prompt_tokens,
-            "gemini_output_tokens": ocr_result.gemini_output_tokens,
-            "gemini_total_tokens": ocr_result.gemini_total_tokens,
-            "gemini_thoughts_tokens": ocr_result.gemini_thoughts_tokens,
-            "gemini_cached_content_tokens": ocr_result.gemini_cached_content_tokens,
-            "gemini_model": ocr_result.gemini_model,
-            "total_pipeline_latency": (db_insert_time - file_received_time).total_seconds(),
-            "status": "success",
-            "error_stage": None,
-            "error_message": None,
-        }
-    )
-
-    status_value = status_value if file_status != "error" else None
-    payment_status_value = gemini_json.get("payment_status") or "not_paid"
-    total_amount = (
-        gemini_json.get("total_amount")
-        or gemini_json.get("grand_total")
-        or gemini_json.get("amount")
-    )
-    # Align HSN/service in the immediate upload response as well.
-    line_items = gemini_json.get("line_items") or []
-    first_item: dict[str, Any] = line_items[0] if line_items else {}
-    hsn_value = (
-        first_item.get("hsn_number")
-        or first_item.get("HSN_number")
-        or gemini_json.get("hsn_number")
-        or gemini_json.get("HSN_number")
-        or gemini_json.get("HSN")
-    )
-    service_value = (
-        gemini_json.get("service")
-        or first_item.get("service")
-    )
-    tax_rate_value = (
-        first_item.get("tax_rate")
-        or gemini_json.get("tax_rate")
-    )
-    tax_amount_value = (
-        first_item.get("tax_amount")
-        or gemini_json.get("tax_amount")
-    )
-    amount_after_tax_value = (
-        first_item.get("amount_after_tax")
-        or gemini_json.get("amount_after_tax")
-    )
-
-    response_doc = get_invoices_collection().find_one({"_id": ObjectId(inserted_id)})
-    if response_doc and not response_doc.get("merged_into"):
-        return _invoice_summary_row_from_doc(response_doc, line_item_index=0)
-
-    return InvoiceSummary(
-        id=inserted_id,
-        file_path=str(final_path),
-        uploaded_file_path=str(final_path),
-        file_status=file_status,
-        invoice_number=invoice_number,
-        total_amount=total_amount,
-        hsn_value=hsn_value,
-        service_category=service_value,
-        status=status_value,
-        payment_status=payment_status_value,
-        tax_rate=tax_rate_value,
-        tax_amount=tax_amount_value,
-        amount_after_tax=amount_after_tax_value,
+    return UploadQueuedResponse(
+        queue_file_name=target_path.name,
+        queue_path=str(target_path.resolve()),
     )
 
 

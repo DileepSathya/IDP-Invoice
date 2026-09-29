@@ -182,7 +182,8 @@ def _store_invoice_result(
     file_status: str,
     *,
     run_id: str | None = None,
-) -> None:
+    queue_path: str | None = None,
+) -> str | None:
     from backend.agents.database import (
         get_invoices_collection,
         link_gemini_metrics_run,
@@ -204,7 +205,7 @@ def _store_invoice_result(
             "another process likely finished it.",
             path,
         )
-        return
+        return None
 
     file_received_time = datetime.utcnow()
     try:
@@ -302,9 +303,20 @@ def _store_invoice_result(
     if logger.isEnabledFor(logging.DEBUG) and r.gemini_json is not None:
         logger.debug("Gemini JSON: %s", r.gemini_json)
 
+    if queue_path and inserted_id:
+        from backend.watcher_jobs import on_watcher_processing_completed
+
+        on_watcher_processing_completed(
+            queue_path,
+            inserted_id=inserted_id,
+            file_status=file_status,
+        )
+    return inserted_id
+
 
 def _process_invoice_path(path: Path) -> None:
     configure_logging()
+    queue_path = str(path.resolve())
     if not path.is_file():
         logger.info(
             "[Folder watcher → worker] Skipping %s — file no longer present "
@@ -324,6 +336,12 @@ def _process_invoice_path(path: Path) -> None:
             path,
         )
         return
+
+    from backend.watcher_jobs import find_job_for_queue_path, on_watcher_processing_started
+
+    on_watcher_processing_started(path)
+    job = find_job_for_queue_path(path)
+    job_run_id = str(job.get("job_id") or "") if job else ""
 
     try:
         from license_validator import (
@@ -349,13 +367,16 @@ def _process_invoice_path(path: Path) -> None:
                 )
             except Exception:
                 pass
+        from backend.watcher_jobs import on_watcher_processing_failed
+
+        on_watcher_processing_failed(queue_path, exc.message)
         return
 
     logger.info(
         "[Folder watcher → worker] Starting OCR + Gemini pipeline: %s",
         path,
     )
-    run_id = str(uuid4())
+    run_id = job_run_id or str(uuid4())
     r = _process_file_with_network_retries(path, run_id=run_id)
 
     gemini_json = r.gemini_json or {}
@@ -374,7 +395,14 @@ def _process_invoice_path(path: Path) -> None:
         return
 
     try:
-        _store_invoice_result(path, r, gemini_json, file_status, run_id=run_id)
+        _store_invoice_result(
+            path,
+            r,
+            gemini_json,
+            file_status,
+            run_id=run_id,
+            queue_path=queue_path,
+        )
     except Exception as e:
         logger.exception(
             "[Folder watcher → MongoDB] Failed to store invoice for %s: %s",
@@ -445,6 +473,9 @@ def _record_pipeline_error_telemetry(path: Path, exc: Exception, *, error_stage:
 
 
 def _handle_gemini_api_failure(path: Path, exc: Exception) -> None:
+    from backend.watcher_jobs import on_watcher_processing_failed
+
+    on_watcher_processing_failed(str(path.resolve()), str(exc))
     logger.error(
         "[Folder watcher] Gemini API error for %s: %s — moving to gemini_api_error folder.",
         path,
@@ -467,6 +498,9 @@ def _handle_gemini_api_failure(path: Path, exc: Exception) -> None:
 
 
 def _handle_network_failure(path: Path, exc: Exception) -> None:
+    from backend.watcher_jobs import on_watcher_processing_failed
+
+    on_watcher_processing_failed(str(path.resolve()), str(exc))
     logger.error(
         "[Folder watcher] Network error for %s: %s.",
         path,
@@ -476,6 +510,9 @@ def _handle_network_failure(path: Path, exc: Exception) -> None:
 
 
 def _handle_generic_failure(path: Path, exc: Exception) -> None:
+    from backend.watcher_jobs import on_watcher_processing_failed
+
+    on_watcher_processing_failed(str(path.resolve()), str(exc))
     logger.exception(
         "[Folder watcher] Pipeline failed for file %s: %s",
         path,
@@ -674,6 +711,18 @@ def main() -> None:
     observer = Observer()
     observer.schedule(handler, str(TO_BE_PROCESSED_DIR), recursive=False)
     observer.start()
+
+    pending = 0
+    if TO_BE_PROCESSED_DIR.is_dir():
+        for entry in sorted(TO_BE_PROCESSED_DIR.iterdir(), key=lambda p: p.name.lower()):
+            if entry.is_file() and entry.suffix.lower() in ALLOWED_EXTS:
+                q.put(entry)
+                pending += 1
+    if pending:
+        logger.info(
+            "[Folder watcher] Enqueued %s existing file(s) already in to_be_processed.",
+            pending,
+        )
 
     logger.info(
         "[Folder watcher] Watching to_be_processed: %s | Allowed types: %s | Sequential processing.",

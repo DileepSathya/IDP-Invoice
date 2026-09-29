@@ -103,10 +103,10 @@ export const AnalyticsDashboard: React.FC = () => {
               hint={
                 status.watcher_active
                   ? "Folder watcher is running OCR/Gemini"
-                  : status.api_staging > 0
-                    ? `${status.api_staging} UI upload(s) in staging`
+                  : status.queue_total > 0
+                    ? `${status.queue_total} file(s) waiting in to_be_processed`
                     : status.async_jobs > 0
-                      ? `${status.async_jobs} async API job(s)`
+                      ? `${status.async_jobs} v1 API job(s) queued/processing`
                       : "Nothing actively processing"
               }
               tone="active"

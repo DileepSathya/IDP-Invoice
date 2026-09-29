@@ -14,6 +14,7 @@ import {
   fetchPdfPageCount,
   pdfPageImageUrl,
   uploadInvoice,
+  waitForQueuedInvoice,
   updateInvoice,
   saveInvoiceJsonEditor,
   addInvoiceLineItem,
@@ -568,11 +569,15 @@ export const Dashboard: React.FC = () => {
     try {
       setUploading(true);
       setError(null);
-      setStatus("1) Uploading file and running OCR / Gemini extraction…");
-      await uploadInvoice(file);
+      setStatus("1) Uploading file to the processing queue (to_be_processed)…");
+      const queued = await uploadInvoice(file);
+      setStatus(
+        "2) Queued — the folder watcher is running OCR / Gemini extraction…",
+      );
+      await waitForQueuedInvoice(queued.queue_file_name);
       await loadInvoices({ silent: true });
       setStatus(
-        "2) Invoice processed and saved to MongoDB.\n3) Table below is refreshed with the new record.",
+        "3) Invoice processed and saved to MongoDB.\n4) Table below is refreshed with the new record.",
       );
       void refreshLicense();
     } catch (e) {
