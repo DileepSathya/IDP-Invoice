@@ -59,7 +59,7 @@ def main() -> None:
         sys.exit(0)
 
     print(f"Failed: {result.get('error_reason') or result.get('message')}", file=sys.stderr)
-        sys.exit(1)
+    sys.exit(1)
 
 
 if __name__ == "__main__":
