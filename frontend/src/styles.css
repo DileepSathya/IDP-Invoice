@@ -2039,6 +2039,12 @@ tbody tr:nth-child(even) {
   word-break: break-word;
 }
 
+.health-home-alert--warning {
+  background: rgba(234, 179, 8, 0.12);
+  border: 1px solid rgba(250, 204, 21, 0.45);
+  color: #fde68a;
+}
+
 .health-home-alert {
   display: flex;
   align-items: center;

@@ -121,11 +121,16 @@ export const Health: React.FC = () => {
             <HealthStatusBadge status={health.overall === "ok" ? "ok" : health.overall} />
           </div>
 
-          {health.critical_messages.length > 0 && (
+          {health.overall === "error" && health.critical_messages.length > 0 && (
             <div className="alert alert-error health-critical-list">
               {health.critical_messages.map((message) => (
                 <div key={message}>{message}</div>
               ))}
+            </div>
+          )}
+          {health.overall === "warning" && (
+            <div className="alert health-critical-list health-home-alert--warning">
+              Warnings only — no critical errors. Review pipeline and integration items below.
             </div>
           )}
 

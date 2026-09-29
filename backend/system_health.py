@@ -214,7 +214,7 @@ def _check_erp_master_data() -> dict[str, Any]:
     return _item(
         item_id="erp_master",
         label="ERP master data (Tally)",
-        status="warning" if reachable else "error",
+        status="warning",
         message=err or bridge_err or "Tally bridge is not reachable.",
         fix_route="/settings/tally-masters",
         fix_hint="Start tally-bridge and ensure Tally Prime is open on port 9000.",
@@ -431,7 +431,7 @@ def _check_integrations_section() -> dict[str, Any]:
                     _item(
                         item_id="hitl_email",
                         label="HITL email (SMTP)",
-                        status="error",
+                        status="warning",
                         message=f"Missing .env keys: {', '.join(missing_smtp)}.",
                         fix_route="/settings/notifications",
                         fix_hint="Set SMTP_* values in .env, then test from notification settings.",
@@ -590,12 +590,12 @@ def _compute_overall(sections: list[dict[str, Any]]) -> OverallLevel:
 
 
 def _critical_messages(sections: list[dict[str, Any]]) -> list[str]:
+    """Errors that require immediate user action (Home banner + critical list)."""
     critical_ids = {
         "gemini_api_key",
         "ai_model",
         "mongodb",
         "license",
-        "hitl_email",
     }
     messages: list[str] = []
     for section in sections:

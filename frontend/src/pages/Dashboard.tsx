@@ -958,12 +958,12 @@ export const Dashboard: React.FC = () => {
 
   return (
     <div className="panel">
-      {systemHealth && systemHealth.overall !== "ok" && (
+      {systemHealth && systemHealth.overall === "error" && (
         <div className="alert alert-error health-home-alert">
           <div>
             {systemHealth.critical_messages.length > 0
               ? systemHealth.critical_messages.map((message) => <div key={message}>{message}</div>)
-              : "One or more health checks need attention."}
+              : "Critical configuration issue — open Health for details."}
           </div>
           <Link to="/health" className="health-home-alert-link">
             View Health
