@@ -61,7 +61,8 @@ The Tally master refresh **scheduler runs inside `idp-api.exe`** (same process a
 
 ## First run (end user)
 
-1. Run **Start IDP Invoice.exe** and sign in at `http://127.0.0.1:8000/login` (`IDP_admin` / `idpadmin@123`)
+1. Run **Start IDP Invoice.exe**. It starts services in the background without showing a terminal, then opens `http://127.0.0.1:8000/login` (`IDP_admin` / `idpadmin@123`).
+   To stop the background services, open the Profile menu and choose **Shut IDP System**.
 2. **Settings → AI** — save Gemini API key (MongoDB)
 3. **Settings → Licensing** — paste license key (MongoDB)
 4. Configure `tally-bridge\.env` (`TALLY_URL`, `TALLY_COMPANY`)

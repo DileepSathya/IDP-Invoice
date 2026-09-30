@@ -1508,6 +1508,16 @@ def get_license_profile_route() -> LicenseProfileResponse:
     return LicenseProfileResponse(**_get_license_profile())
 
 
+@app.post("/system/shutdown")
+def shutdown_idp_system() -> dict[str, str]:
+    """Schedule a verified shutdown after this authenticated response is delivered."""
+    from backend.shutdown_service import start_shutdown_helper
+
+    start_shutdown_helper()
+    user_audit_logger.info("idp_system_shutdown_requested")
+    return {"status": "scheduled", "message": "IDP Invoice is shutting down."}
+
+
 @app.put("/license", response_model=LicenseProfileResponse)
 def put_license_profile_route(payload: LicenseKeyUpdate) -> LicenseProfileResponse:
     from license_validator import LicenseValidationError, save_license_key

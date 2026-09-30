@@ -7,6 +7,7 @@ Built as: dist/IDP-Invoice/Start IDP Invoice.exe
 from __future__ import annotations
 
 import os
+import json
 import re
 import shutil
 import socket
@@ -203,12 +204,38 @@ def _tally_enabled(root: Path) -> bool:
 def _popen_cmd(cmd: list[str], cwd: Path) -> subprocess.Popen:
     creationflags = 0
     if sys.platform == "win32":
-        creationflags = subprocess.CREATE_NEW_PROCESS_GROUP
+        # The launcher is a short-lived GUI process.  A new process group and
+        # CREATE_NO_WINDOW keep services running in the background without a
+        # visible console.  Do not use DETACHED_PROCESS: it clears standard
+        # handles and prevents the console-based API from initializing its
+        # Uvicorn logging correctly.
+        creationflags = (
+            subprocess.CREATE_NEW_PROCESS_GROUP
+            | subprocess.CREATE_NO_WINDOW
+        )
     return subprocess.Popen(
         cmd,
         cwd=str(cwd),
         creationflags=creationflags,
     )
+
+
+def _pid_record_path(root: Path) -> Path:
+    return root / "data" / "runtime" / "service-pids.json"
+
+
+def _write_pid_record(root: Path, services: dict[str, tuple[subprocess.Popen, Path]]) -> None:
+    path = _pid_record_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "services": [
+            {"name": name, "pid": process.pid, "executable": str(executable.resolve())}
+            for name, (process, executable) in services.items()
+        ]
+    }
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(payload), encoding="utf-8")
+    temporary.replace(path)
 
 
 def start_bundled_mongo(root: Path, port: int) -> subprocess.Popen | None:
@@ -257,10 +284,16 @@ def main() -> None:
 
     if not api_exe.is_file():
         print(f"[ERROR] API executable not found: {api_exe}")
-        input("Press Enter to exit.")
         sys.exit(1)
 
+    if _port_open("127.0.0.1", api_port):
+        webbrowser.open(f"http://127.0.0.1:{api_port}/login")
+        return
+
     processes: list[subprocess.Popen] = []
+    started_services: dict[str, tuple[subprocess.Popen, Path]] = {}
+    _pid_record_path(root).unlink(missing_ok=True)
+    keep_services_running = False
     mongo_proc: subprocess.Popen | None = None
     try:
         use_bundled, mongo_port = _use_bundled_mongo(root)
@@ -268,19 +301,24 @@ def main() -> None:
             mongo_proc = start_bundled_mongo(root, mongo_port)
             if mongo_proc is not None:
                 processes.append(mongo_proc)
+                started_services["mongo"] = (mongo_proc, root / "mongodb" / "bin" / "mongod.exe")
         else:
             print("Using external MongoDB from MONGO_URI (bundled MongoDB skipped).")
 
         if watcher_exe.is_file():
             print(f"Starting watcher: {watcher_exe}")
-            processes.append(_popen_cmd([str(watcher_exe)], root))
+            watcher_proc = _popen_cmd([str(watcher_exe)], root)
+            processes.append(watcher_proc)
+            started_services["watcher"] = (watcher_proc, watcher_exe)
         else:
             print(f"[WARN] Watcher not found (skipping): {watcher_exe}")
 
         if _tally_enabled(root):
             if tally_bridge_exe.is_file():
                 print(f"Starting Tally bridge: {tally_bridge_exe}")
-                processes.append(_popen_cmd([str(tally_bridge_exe)], root / "tally-bridge"))
+                tally_proc = _popen_cmd([str(tally_bridge_exe)], root / "tally-bridge")
+                processes.append(tally_proc)
+                started_services["tally_bridge"] = (tally_proc, tally_bridge_exe)
                 print(f"Waiting for Tally bridge on port {tally_bridge_port}...")
                 if wait_for_tally_bridge(tally_bridge_port):
                     print("Tally bridge is ready.")
@@ -292,7 +330,9 @@ def main() -> None:
             print("[WARN] TALLY_ENABLED is false — ERP matching and Tally push are disabled.")
 
         print(f"Starting API: {api_exe}")
-        processes.append(_popen_cmd([str(api_exe)], root))
+        api_proc = _popen_cmd([str(api_exe)], root)
+        processes.append(api_proc)
+        started_services["api"] = (api_proc, api_exe)
 
         print(f"Waiting for API on port {api_port}...")
         if wait_for_api(api_port):
@@ -317,22 +357,25 @@ def main() -> None:
                     api_port
                 )
             )
+
+            # The customer-facing executable exits now.  Its detached child
+            # services remain available while the user works in the browser.
+            _write_pid_record(root, started_services)
+            keep_services_running = True
+            return
         else:
             print("[WARN] API did not respond in time. Check logs/idp.log")
-
-        print()
-        print("IDP Invoice is running. Close this window or press Enter to stop all services.")
-        input()
     except KeyboardInterrupt:
         pass
     finally:
-        for proc in reversed(processes):
-            proc.terminate()
-        for proc in reversed(processes):
-            try:
-                proc.wait(timeout=15)
-            except subprocess.TimeoutExpired:
-                proc.kill()
+        if not keep_services_running:
+            for proc in reversed(processes):
+                proc.terminate()
+            for proc in reversed(processes):
+                try:
+                    proc.wait(timeout=15)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
 
 
 if __name__ == "__main__":

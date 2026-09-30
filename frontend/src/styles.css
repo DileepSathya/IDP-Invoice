@@ -2068,6 +2068,22 @@ tbody tr:nth-child(even) {
   color: #fca5a5;
 }
 
+.account-menu-shutdown {
+  color: #fecaca;
+  border: 1px solid rgba(248, 113, 113, 0.45);
+}
+
+.account-menu-shutdown:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.account-menu-stopped {
+  margin: 0;
+  color: #bbf7d0;
+  font-size: 0.8rem;
+}
+
 .chat-page {
   flex: 1 1 auto;
   min-height: 0;

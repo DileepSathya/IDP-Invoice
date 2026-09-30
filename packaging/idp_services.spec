@@ -90,6 +90,7 @@ api_a = Analysis(
         "backend.agent_settings",
         "backend.pipeline_status",
         "backend.run_api",
+        "backend.shutdown_service",
         "backend.agents.invoice_chat_pipeline",
         "backend.agents.rag_chatbot",
         "backend.agents.chat_engine",

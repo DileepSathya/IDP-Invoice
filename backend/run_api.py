@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import multiprocessing
 import os
+import sys
 
 from backend.app_paths import app_dir, load_app_dotenv
 
@@ -11,6 +12,12 @@ load_app_dotenv()
 
 
 def main() -> None:
+    if "--shutdown-services" in sys.argv:
+        from backend.shutdown_service import stop_registered_services
+
+        stop_registered_services(app_dir())
+        return
+
     import uvicorn
 
     from backend.api import app

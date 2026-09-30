@@ -79,6 +79,7 @@ API_PATH_PREFIXES: tuple[str, ...] = (
     "/raw",
     "/raw-pdf",
     "/health",
+    "/system",
     "/auth",
     "/v1",
 )
@@ -89,6 +90,10 @@ def is_api_path(path: str) -> bool:
 
 
 def requires_dashboard_auth(method: str, path: str) -> bool:
+    if path == "/api":
+        path = "/"
+    elif path.startswith("/api/"):
+        path = path[4:]
     if method == "OPTIONS":
         return False
     if not is_api_path(path):

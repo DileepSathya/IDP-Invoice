@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { fetchLicenseProfile, logoutDashboard, type LicenseProfile } from "../api";
+import { fetchLicenseProfile, logoutDashboard, shutdownIdpSystem, type LicenseProfile } from "../api";
 
 function formatPlanType(plan: string): string {
   const labels: Record<string, string> = {
@@ -15,6 +15,8 @@ export const AccountMenu: React.FC = () => {
   const [open, setOpen] = useState(false);
   const [profile, setProfile] = useState<LicenseProfile | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [shuttingDown, setShuttingDown] = useState(false);
+  const [stopped, setStopped] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
 
   const toggleOpen = () => {
@@ -58,6 +60,19 @@ export const AccountMenu: React.FC = () => {
     }
   };
 
+  const handleShutdown = async () => {
+    if (!window.confirm("Shut down IDP Invoice? Processing will stop until you start the app again.")) return;
+    setShuttingDown(true);
+    setError(null);
+    try {
+      await shutdownIdpSystem();
+      setStopped(true);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Failed to shut down IDP");
+      setShuttingDown(false);
+    }
+  };
+
   return (
     <div className="account-menu" ref={menuRef}>
       <button type="button" className="account-menu-trigger" onClick={toggleOpen} aria-haspopup="menu" aria-expanded={open} aria-label="Account menu">
@@ -81,11 +96,14 @@ export const AccountMenu: React.FC = () => {
             )}
           </div>
           <div className="account-menu-tabs account-menu-tabs-stacked account-menu-actions">
-
+            {stopped && <p className="account-menu-stopped">IDP system stopped. You may close this tab.</p>}
             <button type="button" className="account-menu-tab account-menu-tab-link" onClick={goToSettings}>
               Settings <span className="account-menu-tab-arrow" aria-hidden="true">→</span>
             </button>
             <button type="button" className="account-menu-tab account-menu-tab-link account-menu-logout" onClick={() => void handleLogout()}>Log out</button>
+            <button type="button" className="account-menu-tab account-menu-tab-link account-menu-shutdown" onClick={() => void handleShutdown()} disabled={shuttingDown || stopped}>
+              {shuttingDown ? "Shutting down…" : "Shut IDP System"}
+            </button>
           </div>
         </div>
       )}

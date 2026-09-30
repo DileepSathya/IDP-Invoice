@@ -225,6 +225,14 @@ export async function logoutDashboard(): Promise<void> {
   }
 }
 
+export async function shutdownIdpSystem(): Promise<void> {
+  const res = await apiFetch("/api/system/shutdown", { method: "POST" });
+  if (!res.ok) {
+    const message = await res.text();
+    throw new Error(message || `Failed to shut down IDP (${res.status})`);
+  }
+}
+
 export async function fetchInvoices(
   filters: InvoiceFilters = {},
 ): Promise<InvoiceListResponse> {
