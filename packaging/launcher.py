@@ -27,6 +27,63 @@ def portable_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+class StartupWindow:
+    """Small native status window shown while background services start."""
+
+    def __init__(self, root, status_label, detail_label=None, open_logs_button=None) -> None:
+        self.root = root
+        self.status_label = status_label
+        self.detail_label = detail_label
+        self.open_logs_button = open_logs_button
+
+    def status(self, message: str) -> None:
+        self.status_label.configure(text=message)
+        self.root.update_idletasks()
+        self.root.update()
+
+    def show_error(self, message: str, detail: str) -> None:
+        self.status(message)
+        if self.detail_label is not None:
+            self.detail_label.configure(text=detail)
+        if self.open_logs_button is not None:
+            self.open_logs_button.pack(pady=(12, 0))
+        self.root.mainloop()
+
+    def close(self) -> None:
+        self.root.destroy()
+
+
+def create_startup_window(root_path: Path) -> StartupWindow | None:
+    """Create the user-facing progress window; never prevent startup if Tk fails."""
+    try:
+        import tkinter as tk
+
+        window = tk.Tk()
+        window.title("IDP Invoice")
+        window.resizable(False, False)
+        window.attributes("-topmost", True)
+        frame = tk.Frame(window, padx=28, pady=24)
+        frame.pack()
+        tk.Label(frame, text="IDP Invoice", font=("Segoe UI", 15, "bold")).pack(anchor="w")
+        status = tk.Label(frame, text="Starting IDP Invoice…", font=("Segoe UI", 10), anchor="w")
+        status.pack(anchor="w", pady=(10, 0))
+        detail = tk.Label(frame, text="Please wait. The web interface will open automatically.", anchor="w")
+        detail.pack(anchor="w", pady=(5, 0))
+
+        def open_logs() -> None:
+            os.startfile(str(root_path / "logs"))
+
+        open_logs_button = tk.Button(frame, text="Open logs", command=open_logs)
+        window.update_idletasks()
+        width, height = window.winfo_width(), window.winfo_height()
+        x = (window.winfo_screenwidth() - width) // 2
+        y = (window.winfo_screenheight() - height) // 3
+        window.geometry(f"{width}x{height}+{x}+{y}")
+        return StartupWindow(window, status, detail, open_logs_button)
+    except Exception:
+        return None
+
+
 def _sync_env_from_example(env_path: Path, example_path: Path) -> list[str]:
     """Append keys from example that are missing in env. Returns added key names."""
     if not example_path.is_file():
@@ -273,6 +330,11 @@ def main() -> None:
     root = portable_root()
     os.chdir(root)
     ensure_layout(root)
+    splash = create_startup_window(root)
+
+    def update_status(message: str) -> None:
+        if splash is not None:
+            splash.status(message)
 
     api_port = int(os.environ.get("IDP_API_PORT", _read_env_value(root, "IDP_API_PORT", "8000")))
     tally_bridge_port = int(
@@ -284,10 +346,16 @@ def main() -> None:
 
     if not api_exe.is_file():
         print(f"[ERROR] API executable not found: {api_exe}")
+        if splash is not None:
+            splash.show_error("IDP Invoice could not start", "The API executable is missing. Open logs for details.")
         sys.exit(1)
 
     if _port_open("127.0.0.1", api_port):
+        update_status("IDP Invoice is already running — opening the web interface…")
         webbrowser.open(f"http://127.0.0.1:{api_port}/login")
+        time.sleep(0.7)
+        if splash is not None:
+            splash.close()
         return
 
     processes: list[subprocess.Popen] = []
@@ -298,6 +366,7 @@ def main() -> None:
     try:
         use_bundled, mongo_port = _use_bundled_mongo(root)
         if use_bundled:
+            update_status("Starting database…")
             mongo_proc = start_bundled_mongo(root, mongo_port)
             if mongo_proc is not None:
                 processes.append(mongo_proc)
@@ -306,6 +375,7 @@ def main() -> None:
             print("Using external MongoDB from MONGO_URI (bundled MongoDB skipped).")
 
         if watcher_exe.is_file():
+            update_status("Starting invoice watcher…")
             print(f"Starting watcher: {watcher_exe}")
             watcher_proc = _popen_cmd([str(watcher_exe)], root)
             processes.append(watcher_proc)
@@ -315,6 +385,7 @@ def main() -> None:
 
         if _tally_enabled(root):
             if tally_bridge_exe.is_file():
+                update_status("Starting Tally bridge…")
                 print(f"Starting Tally bridge: {tally_bridge_exe}")
                 tally_proc = _popen_cmd([str(tally_bridge_exe)], root / "tally-bridge")
                 processes.append(tally_proc)
@@ -329,11 +400,13 @@ def main() -> None:
         else:
             print("[WARN] TALLY_ENABLED is false — ERP matching and Tally push are disabled.")
 
+        update_status("Starting web server…")
         print(f"Starting API: {api_exe}")
         api_proc = _popen_cmd([str(api_exe)], root)
         processes.append(api_proc)
         started_services["api"] = (api_proc, api_exe)
 
+        update_status("Preparing the web interface…")
         print(f"Waiting for API on port {api_port}...")
         if wait_for_api(api_port):
             try:
@@ -345,6 +418,7 @@ def main() -> None:
             except Exception:
                 pass
             url = f"http://127.0.0.1:{api_port}/login"
+            update_status("Opening web interface…")
             print(f"Opening {url}")
             webbrowser.open(url)
             print(
@@ -362,11 +436,23 @@ def main() -> None:
             # services remain available while the user works in the browser.
             _write_pid_record(root, started_services)
             keep_services_running = True
+            time.sleep(0.7)
+            if splash is not None:
+                splash.close()
             return
         else:
             print("[WARN] API did not respond in time. Check logs/idp.log")
+            if splash is not None:
+                splash.show_error(
+                    "IDP Invoice could not start",
+                    "The web server did not respond. Open logs for details.",
+                )
     except KeyboardInterrupt:
         pass
+    except Exception as exc:
+        print(f"[ERROR] IDP Invoice startup failed: {exc}")
+        if splash is not None:
+            splash.show_error("IDP Invoice could not start", "Open logs for details.")
     finally:
         if not keep_services_running:
             for proc in reversed(processes):
@@ -376,6 +462,11 @@ def main() -> None:
                     proc.wait(timeout=15)
                 except subprocess.TimeoutExpired:
                     proc.kill()
+        if splash is not None and not keep_services_running:
+            try:
+                splash.close()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
