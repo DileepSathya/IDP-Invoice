@@ -6,7 +6,9 @@ export const SettingsLayout: React.FC = () => {
   const location = useLocation();
   const activeSection = settingsSectionForPath(location.pathname);
   const erpActive = ["company", "ledger", "tally-masters"].includes(activeSection);
+  const notificationsActive = ["notifications", "notification-sender-email"].includes(activeSection);
   const [erpExpanded, setErpExpanded] = useState(erpActive);
+  const [notificationsExpanded, setNotificationsExpanded] = useState(notificationsActive);
 
   return (
     <div className="panel settings-panel">
@@ -18,26 +20,15 @@ export const SettingsLayout: React.FC = () => {
         <aside className="settings-sidebar" aria-label="Settings navigation">
           {settingsNavigation.map((item) =>
             item.children ? (
-              <div key={item.id} className="settings-nav-group">
-                <button
-                  type="button"
-                  className={`settings-nav-link settings-nav-group-toggle${erpActive ? " is-active" : ""}`}
-                  aria-expanded={erpExpanded}
-                  onClick={() => setErpExpanded((expanded) => !expanded)}
-                >
-                  <span>{item.label}</span>
-                  <span aria-hidden="true">{erpExpanded ? "−" : "+"}</span>
-                </button>
-                {erpExpanded && (
-                  <div className="settings-nav-children">
-                    {item.children.map((child) => (
-                      <NavLink key={child.id} to={child.to ?? "/settings"} className="settings-nav-link">
-                        {child.label}
-                      </NavLink>
-                    ))}
-                  </div>
-                )}
-              </div>
+              <SettingsNavGroup
+                key={item.id}
+                item={item}
+                expanded={item.id === "erp" ? erpExpanded : notificationsExpanded}
+                onToggle={() => {
+                  if (item.id === "erp") setErpExpanded((expanded) => !expanded);
+                  else setNotificationsExpanded((expanded) => !expanded);
+                }}
+              />
             ) : (
               <NavLink key={item.id} to={item.to ?? "/settings"} end={item.to === "/settings"} className="settings-nav-link">
                 {item.label}
@@ -52,3 +43,32 @@ export const SettingsLayout: React.FC = () => {
     </div>
   );
 };
+
+type SettingsNavGroupProps = {
+  item: { id: string; label: string; children: { id: string; label: string; to?: string }[] };
+  expanded: boolean;
+  onToggle: () => void;
+};
+
+const SettingsNavGroup: React.FC<SettingsNavGroupProps> = ({ item, expanded, onToggle }) => (
+  <div className="settings-nav-group">
+    <button
+      type="button"
+      className="settings-nav-link settings-nav-group-toggle"
+      aria-expanded={expanded}
+      onClick={onToggle}
+    >
+      <span>{item.label}</span>
+      <span aria-hidden="true">{expanded ? "−" : "+"}</span>
+    </button>
+    {expanded && (
+      <div className="settings-nav-children">
+        {item.children.map((child) => (
+          <NavLink key={child.id} to={child.to ?? "/settings"} end className="settings-nav-link">
+            {child.label}
+          </NavLink>
+        ))}
+      </div>
+    )}
+  </div>
+);

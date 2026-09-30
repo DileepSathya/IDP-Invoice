@@ -7,7 +7,7 @@ Three trigger modes (chosen from Settings → Notifications page):
 - "threshold_only": send once when pending count crosses upward through
   `pending_threshold`; reset when count drops below threshold again.
 
-Recipient addresses are stored here; SMTP credentials live in `.env`.
+Recipient addresses and SMTP sender credentials are stored in MongoDB.
 """
 
 from __future__ import annotations
@@ -29,6 +29,7 @@ MIN_DIGEST_FREQUENCY_MINUTES = 1
 MAX_DIGEST_FREQUENCY_MINUTES = 1440  # 24h
 MIN_PENDING_THRESHOLD = 1
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+DEFAULT_SMTP_PORT = 587
 
 
 def _collection():
@@ -57,6 +58,84 @@ def _parse_recipient_emails(value: Any) -> list[str]:
             emails.append(part)
             seen.add(part)
     return emails
+
+
+def _smtp_port(value: Any) -> int:
+    try:
+        port = int(value)
+    except (TypeError, ValueError) as e:
+        raise ValueError("SMTP port must be a whole number") from e
+    if port < 1 or port > 65535:
+        raise ValueError("SMTP port must be between 1 and 65535")
+    return port
+
+
+def get_hitl_smtp_settings() -> dict[str, Any]:
+    """Return sender settings safe to expose to the frontend."""
+    try:
+        doc = _collection().find_one({"_id": _SETTINGS_DOC_ID}) or {}
+    except Exception as e:
+        logger.warning("[hitl_notification_settings] Could not read SMTP settings: %s", e)
+        doc = {}
+
+    host = str(doc.get("smtp_host") or "").strip()
+    from_addr = str(doc.get("smtp_from") or "").strip()
+    return {
+        "use_tls": bool(doc.get("smtp_use_tls", True)),
+        "host": host,
+        "port": _smtp_port(doc.get("smtp_port", DEFAULT_SMTP_PORT)),
+        "user": str(doc.get("smtp_user") or "").strip(),
+        "from_addr": from_addr,
+        "configured": bool(host and from_addr),
+    }
+
+
+def get_hitl_smtp_credentials() -> dict[str, Any]:
+    """Return SMTP settings for delivery, including the stored password."""
+    public = get_hitl_smtp_settings()
+    if not public["configured"]:
+        raise RuntimeError("SMTP sender email is not configured")
+    try:
+        doc = _collection().find_one({"_id": _SETTINGS_DOC_ID}) or {}
+    except Exception as e:
+        raise RuntimeError("Could not read SMTP sender email settings") from e
+    return {**public, "password": str(doc.get("smtp_password") or "")}
+
+
+def save_hitl_smtp_settings(
+    *,
+    use_tls: bool,
+    host: str,
+    port: int,
+    user: str,
+    password: str,
+    from_addr: str,
+) -> dict[str, Any]:
+    host = str(host or "").strip()
+    user = str(user or "").strip()
+    from_addr = str(from_addr or "").strip().lower()
+    password = str(password or "")
+    if not host:
+        raise ValueError("SMTP host is required")
+    if not from_addr or not _EMAIL_RE.match(from_addr):
+        raise ValueError("A valid sender email address is required")
+    port = _smtp_port(port)
+
+    fields: dict[str, Any] = {
+        "smtp_use_tls": bool(use_tls),
+        "smtp_host": host,
+        "smtp_port": port,
+        "smtp_user": user,
+        "smtp_from": from_addr,
+        "smtp_settings_updated_at": datetime.utcnow(),
+    }
+    # A blank password means "leave the stored credential unchanged" so the UI
+    # never needs to return a secret merely to update another field.
+    if password:
+        fields["smtp_password"] = password
+
+    _collection().update_one({"_id": _SETTINGS_DOC_ID}, {"$set": fields}, upsert=True)
+    return get_hitl_smtp_settings()
 
 
 def get_hitl_notification_settings() -> dict[str, Any]:

@@ -16,10 +16,23 @@ test("settings navigation groups the three ERP child settings", () => {
   );
 });
 
+test("settings navigation groups sender and receiver notification settings", () => {
+  const notifications = settingsNavigation.find((item) => item.label === "Notification Service");
+
+  assert.deepEqual(
+    notifications.children.map(({ label, to }) => ({ label, to })),
+    [
+      { label: "Configure Sender Email", to: "/settings/notifications/sender-email" },
+      { label: "Configure Receiver Service", to: "/settings/notifications" },
+    ],
+  );
+});
+
 test("settings paths resolve to the correct active section", () => {
   assert.equal(settingsSectionForPath("/settings"), "ai");
   assert.equal(settingsSectionForPath("/settings/licensing"), "licensing");
   assert.equal(settingsSectionForPath("/settings/notifications"), "notifications");
+  assert.equal(settingsSectionForPath("/settings/notifications/sender-email"), "notification-sender-email");
   assert.equal(settingsSectionForPath("/settings/company"), "company");
   assert.equal(settingsSectionForPath("/settings/ledger"), "ledger");
   assert.equal(settingsSectionForPath("/settings/tally-masters"), "tally-masters");

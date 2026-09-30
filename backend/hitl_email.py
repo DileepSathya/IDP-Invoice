@@ -1,13 +1,8 @@
-"""SMTP email delivery for HITL notifications.
-
-Credentials and server settings are read from environment variables so secrets
-stay out of MongoDB. Recipient addresses come from notification settings.
-"""
+"""SMTP email delivery for HITL notifications backed by MongoDB settings."""
 
 from __future__ import annotations
 
 import logging
-import os
 import smtplib
 from email.message import EmailMessage
 from typing import Iterable
@@ -16,39 +11,15 @@ logger = logging.getLogger(__name__)
 
 
 def is_smtp_configured() -> bool:
-    host = (os.getenv("SMTP_HOST") or "").strip()
-    from_addr = (os.getenv("SMTP_FROM") or os.getenv("SMTP_USER") or "").strip()
-    return bool(host and from_addr)
+    from backend.hitl_notification_settings import get_hitl_smtp_settings
+
+    return bool(get_hitl_smtp_settings()["configured"])
 
 
 def _smtp_settings() -> dict[str, object]:
-    host = (os.getenv("SMTP_HOST") or "").strip()
-    if not host:
-        raise RuntimeError("SMTP_HOST is not set in .env")
+    from backend.hitl_notification_settings import get_hitl_smtp_credentials
 
-    port_raw = (os.getenv("SMTP_PORT") or "587").strip()
-    try:
-        port = int(port_raw)
-    except ValueError as e:
-        raise RuntimeError("SMTP_PORT must be a whole number") from e
-
-    user = (os.getenv("SMTP_USER") or "").strip()
-    password = os.getenv("SMTP_PASSWORD") or ""
-    from_addr = (os.getenv("SMTP_FROM") or user or "").strip()
-    if not from_addr:
-        raise RuntimeError("SMTP_FROM or SMTP_USER must be set in .env")
-
-    use_tls_raw = (os.getenv("SMTP_USE_TLS") or "true").strip().lower()
-    use_tls = use_tls_raw not in ("0", "false", "no")
-
-    return {
-        "host": host,
-        "port": port,
-        "user": user,
-        "password": password,
-        "from_addr": from_addr,
-        "use_tls": use_tls,
-    }
+    return get_hitl_smtp_credentials()
 
 
 def send_email(*, to_addresses: Iterable[str], subject: str, body: str) -> None:

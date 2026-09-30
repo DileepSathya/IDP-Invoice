@@ -1,7 +1,14 @@
 export const settingsNavigation = [
   { id: "ai", label: "AI", to: "/settings" },
   { id: "licensing", label: "Licensing", to: "/settings/licensing" },
-  { id: "notifications", label: "Notification Service", to: "/settings/notifications" },
+  {
+    id: "notifications",
+    label: "Notification Service",
+    children: [
+      { id: "notification-sender-email", label: "Configure Sender Email", to: "/settings/notifications/sender-email" },
+      { id: "notifications", label: "Configure Receiver Service", to: "/settings/notifications" },
+    ],
+  },
   {
     id: "erp",
     label: "ERP Settings",

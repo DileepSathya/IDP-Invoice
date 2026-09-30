@@ -151,8 +151,7 @@ export const NotificationSettings: React.FC = () => {
         <div className="panel-section-main">
           {settings && !settings.smtp_configured && (
             <div className="alert">
-              SMTP is not configured yet — set SMTP_HOST and SMTP_FROM in your <code>.env</code>{" "}
-              file before emails can be sent.
+              SMTP sender email is not configured yet — open Configure Sender Email to save it.
             </div>
           )}
           {settingsError && <div className="alert alert-error">{settingsError}</div>}

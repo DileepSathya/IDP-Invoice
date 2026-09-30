@@ -864,6 +864,19 @@ export type HitlNotificationSettings = {
   hitl_pending_count: number;
 };
 
+export type HitlSmtpSettings = {
+  use_tls: boolean;
+  host: string;
+  port: number;
+  user: string;
+  from_addr: string;
+  configured: boolean;
+};
+
+export type HitlSmtpSettingsPayload = Omit<HitlSmtpSettings, "configured"> & {
+  password: string;
+};
+
 export async function fetchHitlNotificationSettings(): Promise<HitlNotificationSettings> {
   const res = await apiFetch("/api/notifications/hitl-settings");
   if (!res.ok) {
@@ -887,6 +900,29 @@ export async function saveHitlNotificationSettings(payload: {
   if (!res.ok) {
     const msg = await res.text();
     throw new Error(msg || `Failed to save HITL notification settings (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function fetchHitlSmtpSettings(): Promise<HitlSmtpSettings> {
+  const res = await apiFetch("/api/notifications/smtp-settings");
+  if (!res.ok) {
+    throw new Error(`Failed to load SMTP sender settings (${res.status})`);
+  }
+  return res.json();
+}
+
+export async function saveHitlSmtpSettings(
+  payload: HitlSmtpSettingsPayload,
+): Promise<HitlSmtpSettings> {
+  const res = await apiFetch("/api/notifications/smtp-settings", {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const msg = await res.text();
+    throw new Error(msg || `Failed to save SMTP sender settings (${res.status})`);
   }
   return res.json();
 }

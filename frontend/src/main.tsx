@@ -5,6 +5,7 @@ import { Home } from "./pages/Dashboard";
 import { AnalyticsDashboard } from "./pages/AnalyticsDashboard";
 import { Erp } from "./pages/Erp";
 import { NotificationSettings } from "./pages/NotificationSettings";
+import { SenderEmailSettings } from "./pages/SenderEmailSettings";
 import { Chat } from "./pages/Chat";
 import { Settings } from "./pages/Settings";
 import { LedgerSettings } from "./pages/LedgerSettings";
@@ -70,6 +71,7 @@ const AppLayout: React.FC = () => {
           <Route path="/settings" element={<SettingsLayout />}>
             <Route index element={<Settings />} />
             <Route path="notifications" element={<NotificationSettings />} />
+            <Route path="notifications/sender-email" element={<SenderEmailSettings />} />
             <Route path="licensing" element={<LicensingSettings />} />
             <Route path="company" element={<CompanySettings />} />
             <Route path="ledger" element={<LedgerSettings />} />

@@ -1803,6 +1803,24 @@ class HitlNotificationSettingsUpdate(BaseModel):
     pending_threshold: int
 
 
+class HitlSmtpSettingsResponse(BaseModel):
+    use_tls: bool
+    host: str
+    port: int
+    user: str
+    from_addr: str
+    configured: bool
+
+
+class HitlSmtpSettingsUpdate(BaseModel):
+    use_tls: bool = True
+    host: str
+    port: int
+    user: str = ""
+    password: str = ""
+    from_addr: str
+
+
 class HitlNotificationTestResponse(BaseModel):
     success: bool
     message: str
@@ -1861,6 +1879,31 @@ def put_hitl_notification_settings_route(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     return _hitl_notification_settings_response()
+
+
+@app.get("/notifications/smtp-settings", response_model=HitlSmtpSettingsResponse)
+def get_hitl_smtp_settings_route() -> HitlSmtpSettingsResponse:
+    from backend.hitl_notification_settings import get_hitl_smtp_settings
+
+    return HitlSmtpSettingsResponse(**get_hitl_smtp_settings())
+
+
+@app.put("/notifications/smtp-settings", response_model=HitlSmtpSettingsResponse)
+def put_hitl_smtp_settings_route(payload: HitlSmtpSettingsUpdate) -> HitlSmtpSettingsResponse:
+    from backend.hitl_notification_settings import save_hitl_smtp_settings
+
+    try:
+        settings = save_hitl_smtp_settings(
+            use_tls=payload.use_tls,
+            host=payload.host,
+            port=payload.port,
+            user=payload.user,
+            password=payload.password,
+            from_addr=payload.from_addr,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return HitlSmtpSettingsResponse(**settings)
 
 
 @app.post("/notifications/hitl-settings/test", response_model=HitlNotificationTestResponse)

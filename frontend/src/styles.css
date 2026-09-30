@@ -3272,6 +3272,72 @@ tbody tr:nth-child(even) {
   padding: 0.35rem 0.5rem;
 }
 
+.sender-email-form {
+  max-width: 32rem;
+}
+
+.sender-email-form .notification-settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.sender-email-form input {
+  width: 100%;
+  padding: 0.45rem 0.55rem;
+}
+
+.smtp-tls-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  margin: 0.25rem 0 0.75rem;
+  color: #e2e8f0;
+  cursor: pointer;
+}
+
+.smtp-tls-toggle input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.smtp-tls-toggle-track {
+  position: relative;
+  width: 2.75rem;
+  height: 1.5rem;
+  border-radius: 999px;
+  background: #475569;
+  transition: background 160ms ease;
+}
+
+.smtp-tls-toggle-track::after {
+  content: "";
+  position: absolute;
+  top: 0.2rem;
+  left: 0.2rem;
+  width: 1.1rem;
+  height: 1.1rem;
+  border-radius: 50%;
+  background: #f8fafc;
+  transition: transform 160ms ease;
+}
+
+.smtp-tls-toggle input:checked + .smtp-tls-toggle-track {
+  background: #7c3aed;
+}
+
+.smtp-tls-toggle input:checked + .smtp-tls-toggle-track::after {
+  transform: translateX(1.25rem);
+}
+
+.smtp-tls-toggle input:focus-visible + .smtp-tls-toggle-track {
+  outline: 2px solid #c4b5fd;
+  outline-offset: 3px;
+}
+
 .json-editor-live-total {
   margin-top: 0.5rem;
   padding: 0.6rem 0.8rem;
