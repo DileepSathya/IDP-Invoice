@@ -109,3 +109,15 @@ test("application build fails fast and pins PyInstaller", () => {
   assert.match(build, /"pyinstaller==\$PyInstallerVersion"/);
   assert.doesNotMatch(build, /pip install --upgrade pyinstaller(?:\s|$)/i);
 });
+
+test("fingerprint tool packages the CPU and system-disk identity module", () => {
+  const spec = read("packaging/fingerprint_tool.spec");
+  const fingerprint = read("licensing/hardware_fingerprint.py");
+
+  assert.match(spec, /"licensing\.hardware_fingerprint"/);
+  assert.match(fingerprint, /Get-CimInstance Win32_Processor/);
+  assert.match(fingerprint, /Win32_LogicalDiskToPartition/);
+  assert.match(fingerprint, /Win32_DiskDriveToDiskPartition/);
+  assert.doesNotMatch(fingerprint, /\bwmic\b/i);
+  assert.doesNotMatch(fingerprint, /uuid\.getnode|\bmac\b/i);
+});

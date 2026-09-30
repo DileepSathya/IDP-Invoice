@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import sys
 
-from licensing.hardware_fingerprint import collect_hardware_parts, machine_fingerprint
+from licensing.hardware_fingerprint import HardwareIdentityError, machine_fingerprint
 
 
 def _wait_for_exit() -> None:
@@ -21,15 +21,18 @@ def main() -> None:
         _wait_for_exit()
         sys.exit(1)
 
-    parts = collect_hardware_parts()
-    fp = machine_fingerprint()
     print("IDP Invoice — Machine Fingerprint")
     print("=" * 40)
+    try:
+        fp = machine_fingerprint()
+    except HardwareIdentityError as exc:
+        print("Unable to create a machine fingerprint.")
+        print(str(exc))
+        print("CPU Processor ID and the Windows system-disk serial number are required.")
+        _wait_for_exit()
+        sys.exit(1)
     print(f"Fingerprint (send this to your vendor):\n{fp}\n")
-    print("Hardware summary (for support):")
-    print(f"  MAC hash seed : {parts['mac']}")
-    print(f"  CPU           : {parts['cpu'][:80]}")
-    print(f"  Disk serial   : {parts['disk'][:80]}")
+    print("Hardware identity: CPU ID and Windows system disk detected.")
     print("\nCopy the fingerprint line above and email it to receive a license key.")
     print("Paste the key under Settings → Licensing after you log in to the dashboard.")
     _wait_for_exit()

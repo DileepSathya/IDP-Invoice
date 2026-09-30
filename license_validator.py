@@ -13,6 +13,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import sys
 from datetime import date, datetime
 from pathlib import Path
@@ -23,7 +24,7 @@ from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
-from licensing.hardware_fingerprint import machine_fingerprint
+from licensing.hardware_fingerprint import HardwareIdentityError, machine_fingerprint
 from licensing.timestamps import parse_license_timestamp, utc_now_iso
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,7 @@ TIME_BASED_PLANS = frozenset({"monthly", "yearly"})
 COUNT_BASED_PLANS = frozenset({"quota"})
 UNLIMITED_PLANS = frozenset({"onetime"})
 VALID_PLANS = TIME_BASED_PLANS | COUNT_BASED_PLANS | UNLIMITED_PLANS
+FINGERPRINT_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 _cached_payload: dict | None = None
 _cache_initialized = False
@@ -238,9 +240,17 @@ def _validate_payload(payload: dict, payload_bytes: bytes, signature: bytes) -> 
     except Exception as exc:
         raise LicenseValidationError("License invalid.") from exc
 
-    current_fp = machine_fingerprint()
     licensed_fp = str(payload.get("machineId", "")).strip().lower()
-    if not licensed_fp or licensed_fp != current_fp.lower():
+    if not FINGERPRINT_PATTERN.fullmatch(licensed_fp):
+        raise LicenseValidationError("License machine fingerprint format is invalid.")
+    try:
+        current_fp = machine_fingerprint()
+    except HardwareIdentityError as exc:
+        raise LicenseValidationError(
+            "This machine's CPU or Windows system-disk identity is unavailable. "
+            "License validation cannot continue."
+        ) from exc
+    if licensed_fp != current_fp.lower():
         raise LicenseValidationError("License not valid for this machine.")
 
     plan = _plan_name(payload)
@@ -578,6 +588,13 @@ PLAN_LABELS = {
 }
 
 
+def _machine_fingerprint_for_profile() -> str:
+    try:
+        return machine_fingerprint()
+    except HardwareIdentityError:
+        return ""
+
+
 def _inactive_profile(message: str) -> dict:
     return {
         "plan": "none",
@@ -592,7 +609,7 @@ def _inactive_profile(message: str) -> dict:
         "isUnlimited": False,
         "licensed": False,
         "validationError": message,
-        "machineFingerprint": machine_fingerprint(),
+        "machineFingerprint": _machine_fingerprint_for_profile(),
         "statusMessage": message,
     }
 
@@ -615,7 +632,7 @@ def get_license_profile() -> dict:
             "isUnlimited": True,
             "licensed": True,
             "validationError": None,
-            "machineFingerprint": machine_fingerprint(),
+            "machineFingerprint": _machine_fingerprint_for_profile(),
             "statusMessage": "Development mode — license checks disabled.",
         }
 
@@ -644,7 +661,7 @@ def get_license_profile() -> dict:
         "isUnlimited": plan in UNLIMITED_PLANS or plan in TIME_BASED_PLANS,
         "licensed": True,
         "validationError": None,
-        "machineFingerprint": machine_fingerprint(),
+        "machineFingerprint": _machine_fingerprint_for_profile(),
         "statusMessage": "License active.",
     }
 

@@ -189,3 +189,9 @@ node --test packaging\tests\test_release_packaging.cjs
 ```
 
 See `licensing/README.md` for offline licensing.
+
+The packaged fingerprint tool queries the CPU Processor ID and the physical
+serial number of the Windows system disk through PowerShell CIM. Build and
+distribute a new `fingerprint_tool.exe` with this release; fingerprints and
+licenses made with the former MAC/WMIC algorithm must be replaced through
+`IDP-lic_website` before licensed processing can resume.
