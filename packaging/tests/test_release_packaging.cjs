@@ -7,6 +7,16 @@ const root = path.resolve(__dirname, "..", "..");
 const read = (relativePath) =>
   fs.readFileSync(path.join(root, relativePath), "utf8");
 
+test("PowerShell build scripts avoid UTF-8 characters without a BOM", () => {
+  const build = read("packaging/build.ps1");
+
+  assert.doesNotMatch(
+    build,
+    /[^\x00-\x7F]/,
+    "Windows PowerShell 5.1 decodes BOM-less scripts with the legacy code page",
+  );
+});
+
 test("MongoDB bundle copies only the runtime payload", () => {
   const script = read("packaging/bundle_mongodb.ps1");
   const build = read("packaging/build.ps1");
